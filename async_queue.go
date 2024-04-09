@@ -2,6 +2,7 @@ package mydumper
 
 import (
 	"sync/atomic"
+	"time"
 )
 
 type asyncQueue struct {
@@ -29,6 +30,18 @@ func (a *asyncQueue) try_pop() any {
 	atomic.AddInt64(&a.length, -1)
 	task := <-a.queue
 	return task
+}
+func (a *asyncQueue) timeout_pop(timeout uint64) any {
+	for {
+		select {
+		case task := <-a.queue:
+			return task
+		case <-time.After(time.Duration(timeout) * time.Microsecond):
+			return nil
+		}
+
+	}
+
 }
 
 func (a *asyncQueue) unref() {

@@ -5,6 +5,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/pflag"
 	"os"
 	"os/signal"
 	"slices"
@@ -296,10 +297,6 @@ func initialize_start_dump(o *OptionEntries) {
 	/*if o.Stream.Stream && o.Exec.Exec_command != "" {
 		log.Fatalf("Stream and execute a command is not supported")
 	}*/
-}
-
-func wait_pid() {
-	// TODO
 }
 
 func (o *OptionEntries) set_disk_limits(p_at, r_at uint) {
@@ -843,7 +840,40 @@ func send_lock_all_tables(o *OptionEntries, conn *client.Conn) {
 	}
 }
 
-func start_dump(o *OptionEntries) error {
+func (o *OptionEntries) StartDump() error {
+	if o.Daemon.DaemonMode {
+		run_daemon(os.DevNull, true)
+	}
+	if o.CommonOptionEntries.Help {
+		pflag.PrintDefaults()
+		os.Exit(EXIT_SUCCESS)
+	}
+	if o.Common.ProgramVersion {
+		print_version(MYDUMPER)
+		os.Exit(EXIT_SUCCESS)
+	}
+	if o.Common.Debug {
+		set_debug(o)
+		o.set_verbose()
+	} else {
+		o.set_verbose()
+	}
+	log.Infof("MyDumper backup version: %s", VERSION)
+	initialize_common_options(o, MYDUMPER)
+	hide_password(o)
+	ask_password(o)
+	if o.CommonOptionEntries.Output_directory_param == "" {
+		datetimestr := time.Now().Format("20060102-150405")
+		o.global.output_directory = fmt.Sprintf("%s-%s", DIRECTORY, datetimestr)
+	} else {
+		o.global.output_directory = o.CommonOptionEntries.Output_directory_param
+	}
+	create_backup_dir(o.global.output_directory)
+	if o.CommonOptionEntries.DiskLimits != "" {
+		parse_disk_limits(o)
+	}
+
+	o.global.dump_directory = o.global.output_directory
 	initialize_start_dump(o)
 	initialize_common(o)
 
@@ -1005,7 +1035,7 @@ func start_dump(o *OptionEntries) error {
 	log.Infof("Started dump at: %s", datetimestr)
 
 	if o.Stream.Stream {
-		initialize_stream()
+		initialize_stream(o)
 	}
 
 	/*if o.Exec.Exec_command != "" {
@@ -1210,18 +1240,23 @@ func start_dump(o *OptionEntries) error {
 	}
 	log.Infof("Finished dump at: %s", datetimestr)
 	if o.Stream.Stream {
-		/*if o.Exec.Exec_command != "" {
-			wait_exec_command_to_finish(o)
-		} else {
-			stream_queue_push(o, nil, "")
-			wait_stream_to_finish(o)
-		}*/
+		stream_queue_push(o, nil, "")
+		wait_stream_to_finish(o)
 		if o.global.no_delete == false && o.CommonOptionEntries.Output_directory_param == "" {
 			err = os.RemoveAll(o.global.output_directory)
 			if err != nil {
 				log.Errorf("Backup directory not removed: %s", o.global.output_directory)
 			}
 		}
+	}
+
+	if o.Stream.Stream {
+		/*if o.Exec.Exec_command != "" {
+			wait_exec_command_to_finish(o)
+		} else {
+			stream_queue_push(o, nil, "")
+			wait_stream_to_finish(o)
+		}*/
 
 	}
 	free_databases(o)

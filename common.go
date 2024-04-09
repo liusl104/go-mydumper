@@ -53,6 +53,7 @@ const (
 	UNLOCK_TABLES              = "UNLOCK TABLES"
 	INSERT_IGNORE              = "INSERT IGNORE"
 	INSERT                     = "INSERT"
+	BINARY                     = "binary"
 	REPLACE                    = "REPLACE"
 	EMPTY_STRING               = ""
 	BACKTICK                   = "`"
@@ -62,33 +63,12 @@ const (
 	mydumper_session_variables = "mydumper_session_variables"
 )
 
-var zstd_paths = [2]string{"/usr/bin/zstd", "/bin/zstd"}
-var gzip_paths = [2]string{"/usr/bin/gzip", "/bin/gzip"}
-
 func g_file_test(filename string) bool {
 	_, err := os.Stat(filename)
 	if err == nil {
 		return true
 	}
 	return false
-}
-
-func get_zstd_cmd() string {
-	for _, p := range zstd_paths {
-		if g_file_test(p) {
-			return p
-		}
-	}
-	return ""
-}
-
-func get_gzip_cmd() string {
-	for _, p := range gzip_paths {
-		if g_file_test(p) {
-			return p
-		}
-	}
-	return ""
 }
 
 func (o *OptionEntries) initialize_hash_of_session_variables() map[string]string {
@@ -101,10 +81,10 @@ func (o *OptionEntries) initialize_hash_of_session_variables() map[string]string
 }
 
 func initialize_set_names(o *OptionEntries) {
-	if strings.ToLower(o.Statement.SetNamesStr) != "binary" {
+	if strings.ToLower(o.Statement.SetNamesStr) != BINARY {
 		o.global.set_names_statement = fmt.Sprintf("/*!40101 SET NAMES %s*/", o.Statement.SetNamesStr)
 	} else {
-		o.global.set_names_statement = "/*!40101 SET NAMES binary*/"
+		o.global.set_names_statement = fmt.Sprintf("/*!40101 SET NAMES %s*/", BINARY)
 	}
 }
 
@@ -349,7 +329,7 @@ func write_file(file *file_write, buff string) (int, error) {
 	return file.write([]byte(buff))
 }
 
-func MysqlRealEscapeString(value string) string {
+func mysqlRealEscapeString(value string) string {
 	var sb strings.Builder
 	for i := 0; i < len(value); i++ {
 		c := value[i]
@@ -584,7 +564,7 @@ func print_version(program string) {
 
 func stream_arguments_callback(o *OptionEntries) bool {
 	if o.Stream.Stream {
-		if strings.ToUpper(o.Stream.StreamOpt) == "TRADITIONAL" {
+		if strings.ToUpper(o.Stream.StreamOpt) == "TRADITIONAL" || o.Stream.StreamOpt == "" {
 			return true
 		}
 		if strings.ToUpper(o.Stream.StreamOpt) == "NO_DELETE" {

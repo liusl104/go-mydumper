@@ -22,6 +22,9 @@ func initialize_connection(o *OptionEntries, app string) {
 }
 
 func connection_arguments_callback(o *OptionEntries) error {
+	if o.Connection.Protocol == "" {
+		o.Connection.Protocol = "tcp"
+	}
 	if o.Connection.Protocol != "" {
 		if strings.ToLower(o.Connection.Protocol) == "tcp" {
 			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
@@ -34,6 +37,7 @@ func connection_arguments_callback(o *OptionEntries) error {
 		log.Errorf("option --protocol value error")
 		return fmt.Errorf("option --protocol value error")
 	}
+
 	return nil
 
 }

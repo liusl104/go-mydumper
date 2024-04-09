@@ -36,13 +36,15 @@ func NewDefaultEntries() *OptionEntries {
 	o.Extra.CompressMethod = GZIP
 	o.QueryRunning.LongqueryRetryInterval = 60
 	o.QueryRunning.Longquery = 60
-	o.Daemon.SnapshotCount = 2
-	o.Daemon.SnapshotInterval = 60
+	// o.Daemon.SnapshotCount = 2
+	// o.Daemon.SnapshotInterval = 60
 	o.Chunks.MaxRows = 100000
 	o.Statement.StatementSize = 1000000
+	o.Common.DefaultsFile = DEFAULTS_FILE
 	o.Connection.Port = 3306
 	o.Common.NumThreads = 4
 	o.Common.Verbose = 2
+	o.Statement.SetNamesStr = BINARY
 	o.global.insert_statement = INSERT
 	arguments_callback(o)
 	identifier_quote_character_arguments_callback(o)
@@ -99,6 +101,10 @@ type globalEntries struct {
 	print_connection_details                    int64
 	available_pids                              *asyncQueue
 	stream_queue                                *asyncQueue
+	metadata_partial_queue                      *asyncQueue
+	initial_metadata_queue                      *asyncQueue
+	initial_metadata_lock_queue                 *asyncQueue
+	metadata_partial_writer_alive               bool
 	ref_table_mutex                             *sync.Mutex
 	ref_table                                   map[string]string
 	table_number                                int
@@ -156,6 +162,7 @@ type globalEntries struct {
 	sthread                                     *sync.WaitGroup
 	pmmthread                                   *sync.WaitGroup
 	stream_thread                               *sync.WaitGroup
+	metadata_partial_writer_thread              *sync.WaitGroup
 	chunk_builder                               *sync.WaitGroup
 	threads                                     *sync.WaitGroup
 	set_session_hash                            map[string]string
@@ -224,9 +231,9 @@ type PmmEntries struct {
 }
 
 type DaemonEntries struct {
-	DaemonMode       bool `json:"daemon_mode,omitempty" ini:"daemon_mode"`             // Enable daemon mode
-	SnapshotInterval int  `json:"snapshot_interval,omitempty" ini:"snapshot_interval"` // Interval between each dump snapshot (in minutes), requires --daemon,default 60
-	SnapshotCount    int  `json:"snapshot_count,omitempty" ini:"snapshot_count"`       // number of snapshots, default 2
+	DaemonMode bool `json:"daemon_mode,omitempty" ini:"daemon_mode"` // Enable daemon mode
+	// SnapshotInterval int  `json:"snapshot_interval,omitempty" ini:"snapshot_interval"` // Interval between each dump snapshot (in minutes), requires --daemon,default 60
+	// 	SnapshotCount    int  `json:"snapshot_count,omitempty" ini:"snapshot_count"`       // number of snapshots, default 2
 }
 
 type ChunksEntries struct {
@@ -291,6 +298,7 @@ type CommonEntries struct {
 	DefaultsFile             string `json:"defaults_file,omitempty" ini:"defaults_file"`                           // Use a specific defaults file. Default: /etc/mydumper.cnf
 	DefaultsExtraFile        string `json:"defaults_extra_file,omitempty" ini:"defaults_extra_file"`               // Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values
 	// Fifo_directory             string // Directory where the FIFO files will be created when needed. Default: Same as backup
+	Logger *os.File `json:"logger"`
 }
 
 type CommonFilterEntries struct {
@@ -344,7 +352,7 @@ func newEntries() *OptionEntries {
 	return o
 }
 
-func CommandEntries(o *OptionEntries) {
+func commandEntries(o *OptionEntries) {
 	// option
 
 	pflag.BoolVarP(&o.CommonOptionEntries.Help, "help", "?", false, "Show help options")
@@ -355,7 +363,7 @@ func CommandEntries(o *OptionEntries) {
 	pflag.StringVar(&o.CommonOptionEntries.DiskLimits, "disk-limits", "", "Set the limit to pause and resume if determines there is no enough disk space.\nAccepts values like: '<resume>:<pause>' in MB.\nFor instance: 100:500 will pause when there is only 100MB free and will\nresume if 500MB are available")
 	// Stream
 	pflag.BoolVar(&o.Stream.Stream, "stream", false, "It will stream over STDOUT once the files has been written")
-	pflag.StringVar(&o.Stream.StreamOpt, "stream-opt", "", "It will stream over STDOUT once the files has been written")
+	pflag.StringVar(&o.Stream.StreamOpt, "stream-opt", "", "NO_DELETE, NO_STREAM_AND_NO_DELETE and TRADITIONAL which is the default value and used if no parameter is given")
 	// extra
 	pflag.IntVarP(&o.Extra.ChunkFilesize, "chunk-filesize", "F", 0, "Split tables into chunks of this output file size. This value is in MB")
 	pflag.BoolVar(&o.Extra.ExitIfBrokenTableFound, "exit-if-broken-table-found", false, "Exits if a broken table has been found")
@@ -377,8 +385,8 @@ func CommandEntries(o *OptionEntries) {
 	// query running
 
 	pflag.IntVar(&o.QueryRunning.LongqueryRetries, "long-query-retries", 0, "Retry checking for long queries, default 0 (do not retry)")
-	pflag.IntVar(&o.QueryRunning.LongqueryRetryInterval, "long-query-retry-interval", 60, "Time to wait before retrying the long query check in seconds, default 60")
-	pflag.Uint64VarP(&o.QueryRunning.Longquery, "long-query-guard", "l", 60, "Set long query timer in seconds, default 60")
+	pflag.IntVar(&o.QueryRunning.LongqueryRetryInterval, "long-query-retry-interval", 60, "Time to wait before retrying the long query check in seconds")
+	pflag.Uint64VarP(&o.QueryRunning.Longquery, "long-query-guard", "l", 60, "Set long query timer in seconds")
 	pflag.BoolVarP(&o.QueryRunning.Killqueries, "kill-long-queries", "K", false, "Kill long running queries (instead of aborting)")
 
 	// exec
@@ -391,10 +399,10 @@ func CommandEntries(o *OptionEntries) {
 	pflag.StringVar(&o.Pmm.PmmResolution, "pmm-resolution", "", "which default will be high")
 	// daemon
 	pflag.BoolVarP(&o.Daemon.DaemonMode, "daemon", "D", false, "Enable daemon mode")
-	pflag.IntVarP(&o.Daemon.SnapshotInterval, "snapshot-interval", "I", 60, "Interval between each dump snapshot (in minutes), requires --daemon,default 60")
-	pflag.IntVarP(&o.Daemon.SnapshotCount, "snapshot-count", "X", 2, "number of snapshots, default 2")
+	// pflag.IntVarP(&o.Daemon.SnapshotInterval, "snapshot-interval", "I", 60, "Interval between each dump snapshot (in minutes), requires --daemon,default 60")
+	// 	pflag.IntVarP(&o.Daemon.SnapshotCount, "snapshot-count", "X", 2, "number of snapshots, default 2")
 	// chunks
-	pflag.IntVar(&o.Chunks.MaxRows, "max-rows", 100000, "Limit the number of rows per block after the table is estimated, default 1000000. It has been deprecated, use --rows instead. Removed in future releases")
+	pflag.IntVar(&o.Chunks.MaxRows, "max-rows", 100000, "Limit the number of rows per block after the table is estimated, It has been deprecated, use --rows instead. Removed in future releases")
 	pflag.UintVar(&o.Chunks.CharDeep, "char-deep", 0, "Defines the amount of characters to use when the primary key is a string")
 	pflag.UintVar(&o.Chunks.CharChunk, "char-chunk", 0, "Defines in how many pieces should split the table. By default we use the amount of threads")
 	pflag.StringVarP(&o.Chunks.RowsPerChunk, "rows", "r", "", "Spliting tables into chunks of this many rows. It can be MIN:START_AT:MAX. MAX can be 0 which means that there is no limit. It will double the chunk size if query takes less than 1 second and half of the size if it is more than 2 seconds")
@@ -434,10 +442,10 @@ func CommandEntries(o *OptionEntries) {
 	pflag.BoolVar(&o.Statement.CompleteInsert, "complete-insert", false, "Use complete INSERT statements that include column names")
 	pflag.BoolVar(&o.Statement.HexBlob, "hex-blob", false, "Dump binary columns using hexadecimal notation")
 	pflag.BoolVar(&o.Statement.SkipDefiner, "skip-definer", false, "Removes DEFINER from the CREATE statement. By default, statements are not modified")
-	pflag.IntVarP(&o.Statement.StatementSize, "statement-size", "s", 1000000, "Attempted size of INSERT statement in bytes, default 1000000")
+	pflag.IntVarP(&o.Statement.StatementSize, "statement-size", "s", 1000000, "Attempted size of INSERT statement in bytes")
 	pflag.BoolVar(&o.Statement.SkipTz, "tz-utc", false, "SET TIME_ZONE='+00:00' at top of dump to allow dumping of TIMESTAMP data when a server has data in different time zones or data is being moved between servers with different time zones, defaults to on use --skip-tz-utc to disable. ")
 	pflag.BoolVar(&o.Statement.SkipTz, "skip-tz-utc", false, "Doesn't add SET TIMEZONE on the backup files")
-	pflag.StringVar(&o.Statement.SetNamesStr, "set-names", "binary", "Sets the names, use it at your own risk, default binary")
+	pflag.StringVar(&o.Statement.SetNamesStr, "set-names", "binary", "Sets the names, use it at your own risk")
 	// connection
 	pflag.StringVarP(&o.Connection.Hostname, "host", "h", "", "The host to connect to")
 	pflag.StringVarP(&o.Connection.Username, "user", "u", "", "Username with the necessary privileges")
@@ -447,10 +455,10 @@ func CommandEntries(o *OptionEntries) {
 	pflag.StringVarP(&o.Connection.Socket, "socket", "S", "", "UNIX domain socket file to use for connection")
 	pflag.StringVar(&o.Connection.Protocol, "protocol", "tcp", "The protocol to use for connection (tcp, socket)")
 	// Common module
-	pflag.UintVarP(&o.Common.NumThreads, "threads", "t", 4, "Number of threads to use, default 4")
+	pflag.UintVarP(&o.Common.NumThreads, "threads", "t", 4, "Number of threads to use")
 	pflag.BoolVarP(&o.Common.ProgramVersion, "version", "V", false, "Show the program version and exit")
 	pflag.StringVar(&o.Common.IdentifierQuoteCharacter, "identifier-quote-character", "", "This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK")
-	pflag.IntVarP(&o.Common.Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info,default 2")
+	pflag.IntVarP(&o.Common.Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info")
 	pflag.BoolVar(&o.Common.Debug, "debug", false, "(automatically sets verbosity to 3),print more info")
 	pflag.StringVar(&o.Common.DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/mydumper.cnf")
 	pflag.StringVar(&o.Common.DefaultsExtraFile, "defaults-extra-file", "", "Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values")

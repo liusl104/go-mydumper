@@ -36,15 +36,20 @@ func set_format(isJson bool) {
 
 func (o *OptionEntries) set_verbose() error {
 	var err error
-	if o.CommonOptionEntries.LogFile != "" {
-		o.global.log_output, err = os.OpenFile(o.CommonOptionEntries.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-		if err != nil {
-			log.Errorf("Could not open log file '%s' for writing: %v", o.CommonOptionEntries.LogFile, err)
-			return err
+	if o.Common.Logger == nil {
+		if o.CommonOptionEntries.LogFile != "" {
+			o.global.log_output, err = os.OpenFile(o.CommonOptionEntries.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				log.Errorf("Could not open log file '%s' for writing: %v", o.CommonOptionEntries.LogFile, err)
+				return err
+			}
+		} else {
+			o.global.log_output = os.Stdout
 		}
 	} else {
-		o.global.log_output = os.Stdout
+		o.global.log_output = o.Common.Logger
 	}
+
 	log.SetOutput(o.global.log_output)
 	switch o.Common.Verbose {
 	case 0:
