@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"fmt"
 	"github.com/go-ini/ini"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/spf13/pflag"
@@ -295,7 +296,7 @@ type CommonEntries struct {
 	IdentifierQuoteCharacter string `json:"identifier_quote_character,omitempty" ini:"identifier_quote_character"` // This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK
 	Verbose                  int    `json:"verbose,omitempty" ini:"verbose"`                                       // Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info,default 2
 	Debug                    bool   `json:"debug,omitempty" ini:"debug"`                                           // (automatically sets verbosity to 3),print more info
-	DefaultsFile             string `json:"defaults_file,omitempty" ini:"defaults_file"`                           // Use a specific defaults file. Default: /etc/mydumper.cnf
+	DefaultsFile             string `json:"defaults_file,omitempty" ini:"defaults_file"`                           // Use a specific defaults file. Default: /etc/cnf
 	DefaultsExtraFile        string `json:"defaults_extra_file,omitempty" ini:"defaults_extra_file"`               // Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values
 	// Fifo_directory             string // Directory where the FIFO files will be created when needed. Default: Same as backup
 	Logger *os.File `json:"logger"`
@@ -460,7 +461,7 @@ func commandEntries(o *OptionEntries) {
 	pflag.StringVar(&o.Common.IdentifierQuoteCharacter, "identifier-quote-character", "", "This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK")
 	pflag.IntVarP(&o.Common.Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info")
 	pflag.BoolVar(&o.Common.Debug, "debug", false, "(automatically sets verbosity to 3),print more info")
-	pflag.StringVar(&o.Common.DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/mydumper.cnf")
+	pflag.StringVar(&o.Common.DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/cnf")
 	pflag.StringVar(&o.Common.DefaultsExtraFile, "defaults-extra-file", "", "Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values")
 	// pflag.StringVar(&o.Common.Fifo_directory, "fifodir", "", "Directory where the FIFO files will be created when needed. Default: Same as backup")
 
@@ -501,4 +502,12 @@ func identifier_quote_character_arguments_callback(o *OptionEntries) bool {
 		return true
 	}
 	return false
+}
+
+func pring_help() {
+	fmt.Printf("Usage:\n")
+	fmt.Printf("  %s [OPTION…] multi-threaded MySQL dumping\n", MYDUMPER)
+	pflag.PrintDefaults()
+
+	os.Exit(EXIT_SUCCESS)
 }

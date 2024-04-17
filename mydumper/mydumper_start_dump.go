@@ -5,7 +5,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
-	"github.com/spf13/pflag"
 	"os"
 	"os/signal"
 	"slices"
@@ -845,8 +844,7 @@ func (o *OptionEntries) StartDump() error {
 		run_daemon(os.DevNull, true)
 	}
 	if o.CommonOptionEntries.Help {
-		pflag.PrintDefaults()
-		os.Exit(EXIT_SUCCESS)
+		pring_help()
 	}
 	if o.Common.ProgramVersion {
 		print_version(MYDUMPER)
@@ -926,7 +924,7 @@ func (o *OptionEntries) StartDump() error {
 	}
 	if o.global.pmm {
 		log.Infof("Using PMM resolution %s at %s", o.Pmm.PmmResolution, o.Pmm.PmmPath)
-		go pmm_thread(o, conf)
+		// go pmm_thread(o, conf)
 		if o.global.pmmthread == nil {
 			log.Fatalf("Could not create pmm thread")
 		}

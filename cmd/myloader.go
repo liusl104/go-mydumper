@@ -1,5 +1,7 @@
 package main
 
-func main() {
+import "go-mydumper/myloader"
 
+func main() {
+	myloader.StartLoad()
 }

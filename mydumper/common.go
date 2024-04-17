@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"github.com/go-ini/ini"
@@ -598,14 +597,6 @@ func filter_sequence_schemas(create_table string) string {
 
 func g_rec_mutex_new() *sync.Mutex {
 	return new(sync.Mutex)
-}
-
-func read_data(file *os.File) (data []string) {
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		data = append(data, strings.Trim(scanner.Text(), "\n"))
-	}
-	return
 }
 
 func m_date_time_new_now_local() string {

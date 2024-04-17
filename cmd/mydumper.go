@@ -1,6 +1,6 @@
 package main
 
-import "go-mydumper"
+import mydumper "go-mydumper/mydumper"
 
 func main() {
 	mydumper.CommandDump()
