@@ -163,7 +163,7 @@ func myl_open(o *OptionEntries, filename string, mode int) (*os.File, error) {
 			o.global.fifo_table_mutex.Unlock()
 		}
 	} else {
-		fileInfo, _ := os.Lstat(fifoname)
+		/*fileInfo, _ := os.Lstat(filename)
 		if fileInfo.Mode()&os.ModeSymlink == 0 {
 			log.Warnf("FIFO file found %s. Skipping", filename)
 			file = nil
@@ -173,6 +173,11 @@ func myl_open(o *OptionEntries, filename string, mode int) (*os.File, error) {
 				log.Errorf("open file %s fail:%v", filename, err)
 				return nil, err
 			}
+		}*/
+		file, err = os.OpenFile(filename, mode, 0660)
+		if err != nil {
+			log.Errorf("open file %s fail:%v", filename, err)
+			return nil, err
 		}
 
 	}
@@ -287,7 +292,7 @@ func load_schema(o *OptionEntries, dbt *db_table, filename string) *control_job 
 
 func get_database_table_name_from_filename(filename string, suffix string, database *string, table *string) {
 	var split_file = strings.SplitN(filename, suffix, 2)
-	var split_db_tbl = strings.SplitN(split_file[0], ".", 2)
+	var split_db_tbl = strings.Split(split_file[0], ".")
 	if len(split_db_tbl) == 2 {
 		*database = split_db_tbl[0]
 		*table = split_db_tbl[1]
@@ -389,7 +394,7 @@ func process_database_filename(o *OptionEntries, filename string) {
 		log.Fatalf("It was not possible to process db file: %s", filename)
 	}
 
-	log.Debugf("Adding database: %s . %s", db_kname, db_vname)
+	log.Debugf("Adding database: %s -> %s", db_kname, db_vname)
 	var real_db_name = get_db_hash(o, db_kname, db_vname)
 	if o.Common.DB == "" {
 		real_db_name.schema_state = NOT_CREATED
@@ -451,8 +456,9 @@ func process_metadata_global(o *OptionEntries, file string) bool {
 		if strings.HasPrefix(groups[j], "`") {
 			database_table = strings.SplitN(groups[j], delimiter, 2)
 			if database_table[1] != "" {
-				database_table[1] = database_table[1][:len(database_table[1])-1]
-				dbt = append_new_db_table(o, "", database_table[0], database_table[1], 0, "")
+				db_name := strings.ReplaceAll(database_table[0], o.Common.IdentifierQuoteCharacter, "")
+				table_name := strings.ReplaceAll(database_table[1], o.Common.IdentifierQuoteCharacter, "")
+				dbt = append_new_db_table(o, "", db_name, table_name, 0, "")
 				err = nil
 				var keys = kf.Section(groups[j]).Keys()
 				dbt.data_checksum = get_value(kf, groups[j], "data_checksum")
@@ -464,7 +470,7 @@ func process_metadata_global(o *OptionEntries, file string) bool {
 					dbt.is_view = true
 				}
 				var v int
-				v, err = strconv.Atoi(get_value(kf, groups[j], "Rows"))
+				v, err = strconv.Atoi(get_value(kf, groups[j], "rows"))
 				_ = err
 				if v != 0 {
 					dbt.rows = uint64(v)

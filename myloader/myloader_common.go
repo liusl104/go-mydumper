@@ -100,9 +100,12 @@ func change_master(kf *ini.File, group string, output_statement *string) {
 func m_filename_has_suffix(o *OptionEntries, str string, suffix string) bool {
 	if has_exec_per_thread_extension(o, str) {
 		return strings.ToLower(path.Ext(str)) == o.Threads.ExecPerThreadExtension
-	} else {
-		return strings.HasSuffix(str, GZIP_EXTENSION) || strings.HasSuffix(str, ZSTD_EXTENSION)
+	} else if strings.HasSuffix(str, GZIP_EXTENSION) {
+		return strings.HasSuffix(path.Ext(str[:len(str)-len(GZIP_EXTENSION)]), suffix)
+	} else if strings.HasSuffix(str, ZSTD_EXTENSION) {
+		strings.HasSuffix(path.Ext(str[:len(str)-len(ZSTD_EXTENSION)]), suffix)
 	}
+	return strings.HasSuffix(str, suffix)
 }
 
 func new_database(o *OptionEntries, db_name string) *database {
@@ -162,12 +165,12 @@ func execute_use(td *thread_data) bool {
 }
 
 func execute_use_if_needs_to(o *OptionEntries, td *thread_data, database string, msg string) {
-	if database == "" && o.Common.DB == "" {
+	if database != "" && o.Common.DB == "" {
 		if td.current_database == "" || strings.Compare(database, td.current_database) != 0 {
 			td.current_database = database
-		}
-		if execute_use(td) {
-			log.Fatalf("Thread %d: Error switching to database `%s` %s", td.thread_id, td.current_database, msg)
+			if execute_use(td) {
+				log.Fatalf(fmt.Sprintf("Thread %d: Error switching to database `%s` %s", td.thread_id, td.current_database, msg))
+			}
 		}
 	}
 	return
@@ -246,6 +249,10 @@ func get_database_table_from_file(filename string, sufix string, database *strin
 	count := len(split)
 	if count > 2 {
 		log.Warnf("We need to get the db and table name from the create table statement")
+		return
+	}
+	if count == 1 {
+		*database = split[0]
 		return
 	}
 	*table = split[1]

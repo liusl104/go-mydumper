@@ -260,26 +260,31 @@ func m_remove(o *OptionEntries, directory, filename string) bool {
 
 func read_data(reader *bufio.Reader, data *string, eof *bool, line *uint) bool {
 	var err error
-	*data, err = reader.ReadString('\n')
-	if err != nil {
-		if err == io.EOF {
-			*eof = true
-			// If there's any content collected before EOF, return it as the last line.
-			if len(*data) > 0 {
-				*line++
-				return true
+	var buffer string
+	for {
+		buffer, err = reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				*eof = true
+				buffer = ""
+				// If there's any content collected before EOF, return it as the last line.
+			} else {
+				return false // An error occurred during reading
 			}
-			return true // End of file with no more data
 		}
-		return false // An error occurred during reading
+		*data += buffer
+		if *data == "" {
+			break
+		}
+		if (*data)[len(*data)-1] == '\n' {
+			// Successfully read a line
+			*line++
+		}
+		if buffer == "\n" || buffer == "" || strings.HasSuffix(buffer, ";\n") {
+			break
+		}
 	}
 
-	// Successfully read a line
-	*line++
-	// Remove the newline character from the end if it exists
-	if (*data)[len(*data)-1] == '\n' {
-		*data = (*data)[:len(*data)-1]
-	}
 	return true
 }
 
