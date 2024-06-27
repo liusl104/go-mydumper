@@ -10,24 +10,22 @@ import (
 func initialize_loader_threads(o *OptionEntries, conf *configuration) {
 	o.global.init_mutex = g_mutex_new()
 	var n uint
-	o.global.threads = make([]*sync.WaitGroup, o.Common.NumThreads)
+	o.global.threads = new(sync.WaitGroup)
 	o.global.loader_td = make([]*thread_data, o.Common.NumThreads)
 	for n = 0; n < o.Common.NumThreads; n++ {
 		th := new(thread_data)
-		wg := new(sync.WaitGroup)
-		o.global.threads[n] = wg
+		o.global.threads.Add(1)
 		o.global.loader_td[n] = th
 		o.global.loader_td[n].conf = conf
 		o.global.loader_td[n].thread_id = n + 1
-		go loader_thread(o, o.global.loader_td[n], o.global.threads[n])
+		go loader_thread(o, o.global.loader_td[n])
 		conf.ready.pop()
 	}
 
 }
 
-func loader_thread(o *OptionEntries, td *thread_data, thread *sync.WaitGroup) {
-	thread.Add(1)
-	defer thread.Done()
+func loader_thread(o *OptionEntries, td *thread_data) {
+	defer o.global.threads.Done()
 	var err error
 	var conf = td.conf
 	o.global.init_mutex.Lock()
@@ -56,10 +54,7 @@ func loader_thread(o *OptionEntries, td *thread_data, thread *sync.WaitGroup) {
 }
 
 func wait_loader_threads_to_finish(o *OptionEntries) {
-	var n uint
-	for n = 0; n < o.Common.NumThreads; n++ {
-		o.global.threads[n].Wait()
-	}
+	o.global.threads.Wait()
 	restore_job_finish(o)
 }
 

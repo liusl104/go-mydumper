@@ -2,6 +2,7 @@ package myloader
 
 import (
 	log "github.com/sirupsen/logrus"
+	"slices"
 	"sync"
 	"time"
 )
@@ -37,6 +38,8 @@ func initialize_control_job(o *OptionEntries, conf *configuration) {
 
 func new_job(job_type control_job_type, job_data any, use_database string) *control_job {
 	var j = new(control_job)
+	j.data = new(control_job_data)
+	j.data.restore_job = new(restore_job)
 	j.job_type = job_type
 	j.use_database = use_database
 	switch job_type {
@@ -52,6 +55,12 @@ func new_job(job_type control_job_type, job_data any, use_database string) *cont
 func process_job(o *OptionEntries, td *thread_data, job *control_job) bool {
 	switch job.job_type {
 	case JOB_RESTORE:
+		if job.data.restore_job.job_type == JOB_RESTORE_FILENAME {
+			if slices.Contains(o.global.done_filename, job.data.restore_job.filename) {
+				return false
+			}
+			o.global.done_filename = append(o.global.done_filename, job.data.restore_job.filename)
+		}
 		process_restore_job(o, td, job.data.restore_job)
 	case JOB_WAIT:
 		td.conf.ready.push(1)
@@ -173,6 +182,8 @@ func give_me_next_data_job_conf(o *OptionEntries, conf *configuration, test_cond
 				}
 				if len(dbt.restore_job_list) > 0 {
 					job = dbt.restore_job_list[0]
+
+					// dbt.restore_job_list = dbt.restore_job_list[1:]
 					// dbt->restore_job_list=g_list_remove_link(dbt->restore_job_list,dbt->restore_job_list);
 					dbt.current_threads++
 					dbt.mutex.Unlock()
@@ -374,4 +385,8 @@ func process_stream_queue(o *OptionEntries, td *thread_data) {
 			return
 		}
 	}
+	enqueue_indexes_if_possible(td.conf)
+	log.Infof("Thread %d: Data import ended", td.thread_id)
+	last_wait_control_job_to_shutdown(o)
+	return
 }

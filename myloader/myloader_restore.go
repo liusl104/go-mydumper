@@ -13,11 +13,18 @@ import (
 
 func restore_data_in_gstring_by_statement(o *OptionEntries, td *thread_data, data string, is_schema bool, query_counter *uint) int {
 	_, err := td.thrconn.Execute(data)
+	td.err = err
 	if err != nil {
-		if is_schema {
-			log.Warnf("Thread %d: Error restoring %s: %v", td.thread_id, data, err)
+		var length int
+		if len(data) > 100 {
+			length = 100
 		} else {
-			log.Warnf("Thread %d: Error restoring %s: %v", td.thread_id, data, err)
+			length = len(data)
+		}
+		if is_schema {
+			log.Warnf("Thread %d: Error restoring %s ... : %v", td.thread_id, data[:length], err)
+		} else {
+			log.Warnf("Thread %d: Error restoring %s ... : %v", td.thread_id, data[:length], err)
 		}
 		err = td.thrconn.Ping()
 		if err != nil {
@@ -33,7 +40,7 @@ func restore_data_in_gstring_by_statement(o *OptionEntries, td *thread_data, dat
 		atomic.AddUint64(&o.global.detailed_errors.retries, 1)
 		_, err = td.thrconn.Execute(data)
 		if err != nil {
-			log.Errorf("Thread %d: Error restoring: %v", td.thread_id, err)
+			log.Fatalf("Thread %d: Error restoring: %v", td.thread_id, err)
 			return 1
 		}
 
@@ -81,16 +88,21 @@ func split_and_restore_data_in_gstring_by_statement(o *OptionEntries, td *thread
 	next_line = current_line[:strings.Index(current_line, "\n")]
 	var new_insert string
 
-	for next_line != "" {
+	for {
 		current_rows = 0
 		new_insert = insert_statement_prefix
-		for current_rows < o.Statement.Rows && next_line != "" {
+		for {
 			var line = current_line[strings.Index(current_line, "\n"):]
 			new_insert += line
 			current_rows++
 			current_line = next_line[1:]
 			next_line = current_line[strings.Index(current_line, "\n"):]
 			current_offset_line++
+			if current_rows < o.Statement.Rows && next_line != "" {
+				continue
+			} else {
+				break
+			}
 		}
 		if len(new_insert) > insert_statement_prefix_len {
 			tr = restore_data_in_gstring_by_statement(o, td, new_insert, is_schema, query_counter)
@@ -103,6 +115,11 @@ func split_and_restore_data_in_gstring_by_statement(o *OptionEntries, td *thread
 		}
 		offset_line = current_offset_line + 1
 		current_line = current_line[1:]
+		if next_line != "" {
+			continue
+		} else {
+			break
+		}
 	}
 	insert_statement_prefix = ""
 	data = ""
@@ -166,8 +183,8 @@ func restore_data_from_file(o *OptionEntries, td *thread_data, database string, 
 	var load_data_filename string
 	var load_data_fifo_filename string
 	var new_load_data_fifo_filename string
+	reader := bufio.NewReader(infile)
 	for eof == false {
-		reader := bufio.NewReader(infile)
 		if read_data(reader, &data, &eof, &line) {
 			var length int
 			if len(data) >= 5 {
@@ -219,6 +236,7 @@ func restore_data_from_file(o *OptionEntries, td *thread_data, database string, 
 				r += int(tr)
 				if tr > 0 {
 					log.Fatalf("Error occurs between lines: %d and %d on file %s", preline, line, filename)
+
 				}
 				preline = line + 1
 			}
@@ -226,6 +244,7 @@ func restore_data_from_file(o *OptionEntries, td *thread_data, database string, 
 			log.Errorf("error reading file %s", filename)
 			return r
 		}
+		data = ""
 	}
 	if !is_schema && (o.Statement.CommitCount > 1) && !m_query(td.thrconn, "COMMIT", m_warning, "COMMIT failed") {
 		log.Fatalf("Error committing data for %s.%s from file %s", database, table, filename)

@@ -175,7 +175,7 @@ func intermediate_thread(o *OptionEntries) {
 	defer o.global.stream_intermediate_thread.Done()
 	var iflnm *intermediate_filename
 	o.global.start_intermediate_thread.Lock()
-	for iflnm != nil {
+	for {
 		iflnm = o.global.intermediate_queue.pop().(*intermediate_filename)
 		if strings.Compare(iflnm.filename, "END") == 0 {
 			if o.global.intermediate_queue.length > 0 {
@@ -186,6 +186,9 @@ func intermediate_thread(o *OptionEntries) {
 			break
 		}
 		process_stream_filename(o, iflnm)
+		if iflnm == nil {
+			break
+		}
 	}
 	var n uint
 	for n = 0; n < o.Common.NumThreads; n++ {

@@ -22,7 +22,7 @@ func set_db_schema_state_to_created(o *OptionEntries, database *database, object
 }
 
 func set_table_schema_state_to_created(conf *configuration) {
-	conf.table_hash_mutex.Lock()
+	conf.table_list_mutex.Lock()
 	var dbt *db_table
 	for _, dbt = range conf.table_list {
 		dbt.mutex.Lock()
@@ -84,9 +84,8 @@ func process_schema(o *OptionEntries, td *thread_data) bool {
 	return ret
 }
 
-func worker_schema_thread(o *OptionEntries, td *thread_data, wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
+func worker_schema_thread(o *OptionEntries, td *thread_data) {
+	defer o.global.schema_threads.Done()
 	var conf = td.conf
 	var err error
 	o.global.init_connection_mutex.Lock()
@@ -124,7 +123,7 @@ func initialize_worker_schema(o *OptionEntries, conf *configuration) {
 	var n uint
 	o.global.init_connection_mutex = g_mutex_new()
 	o.global.refresh_db_queue2 = g_async_queue_new(o.Common.BufferSize)
-	o.global.schema_threads = make([]*sync.WaitGroup, o.Threads.MaxThreadsForSchemaCreation)
+	o.global.schema_threads = new(sync.WaitGroup)
 	o.global.schema_td = make([]*thread_data, o.Threads.MaxThreadsForSchemaCreation)
 	log.Infof("Initializing initialize_worker_schema")
 	for n = 0; n < o.Threads.MaxThreadsForSchemaCreation; n++ {
@@ -133,17 +132,14 @@ func initialize_worker_schema(o *OptionEntries, conf *configuration) {
 		o.global.schema_td[n].conf = conf
 		o.global.schema_td[n].thread_id = n + 1 + o.Common.NumThreads
 		o.global.schema_td[n].status = WAITING
-		o.global.schema_threads[n] = new(sync.WaitGroup)
-		go worker_schema_thread(o, o.global.schema_td[n], o.global.schema_threads[n])
+		o.global.schema_threads.Add(1)
+		go worker_schema_thread(o, o.global.schema_td[n])
 	}
 
 }
 
 func wait_schema_worker_to_finish(o *OptionEntries) {
-	var n uint
-	for n = 0; n < o.Threads.MaxThreadsForSchemaCreation; n++ {
-		o.global.schema_threads[n].Wait()
-	}
+	o.global.schema_threads.Wait()
 }
 
 func free_schema_worker_threads(o *OptionEntries) {

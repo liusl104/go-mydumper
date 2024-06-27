@@ -89,9 +89,10 @@ type loadGlobal struct {
 	purge_mode                            purge_mode
 	shutdown_triggered                    bool
 	pause_mutex_per_thread                []*sync.Mutex
-	threads                               []*sync.WaitGroup
+	threads                               *sync.WaitGroup
 	detailed_errors                       *restore_errors
 	loader_td                             []*thread_data
+	done_filename                         []string
 	init_mutex                            *sync.Mutex
 	progress                              int
 	total_data_sql_files                  int
@@ -117,9 +118,9 @@ type loadGlobal struct {
 	change_master_statement               string
 	fifo_hash                             map[*os.File]*fifo
 	fifo_table_mutex                      *sync.Mutex
-	post_threads                          []*sync.WaitGroup
-	schema_threads                        []*sync.WaitGroup
-	index_threads                         []*sync.WaitGroup
+	post_threads                          *sync.WaitGroup
+	schema_threads                        *sync.WaitGroup
+	index_threads                         *sync.WaitGroup
 	schema_td                             []*thread_data
 	post_td                               []*thread_data
 	index_td                              []*thread_data
@@ -264,12 +265,14 @@ func newOptionEntries() *OptionEntries {
 	o.Statement = new(StatementEntries)
 	o.Execution = new(ExecutionEntries)
 	o.Regex = new(RegexEntries)
+	o.CommonConnection = new(CommonConnectionEntries)
 	return o
 }
 
 func loadOptionContext(o *OptionEntries) {
 	// Common
 	pflag.BoolVar(&o.Common.Help, "help", false, "Show help options")
+	pflag.UintVarP(&o.Common.BufferSize, "buffer-size", "b", 200000, "Queue buffer size")
 	pflag.StringVarP(&o.Common.InputDirectory, "directory", "d", "", "Directory of the dump to import")
 	pflag.StringVarP(&o.Common.LogFile, "logfile", "L", "", "Log file name to use, by default stdout is used")
 	pflag.StringVarP(&o.Common.DB, "database", "B", "", "An alternative database to restore into")
@@ -278,7 +281,7 @@ func loadOptionContext(o *OptionEntries) {
 	pflag.StringVar(&o.Common.DefaultsExtraFile, "defaults-extra-file", "", "Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values")
 	pflag.UintVarP(&o.Common.NumThreads, "threads", "t", 4, "Number of threads to use")
 	pflag.BoolVarP(&o.Common.ProgramVersion, "version", "V", false, "Show the program version and exit")
-	pflag.StringVar(&o.Common.IdentifierQuoteCharacter, "identifier-quote-character", "", "This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK")
+	pflag.StringVar(&o.Common.IdentifierQuoteCharacter, "identifier-quote-character", "`", "This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK")
 	pflag.IntVarP(&o.Common.Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info")
 	pflag.BoolVar(&o.Common.Debug, "debug", false, "(automatically sets verbosity to 4),Print more info")
 	// Threads
@@ -292,7 +295,7 @@ func loadOptionContext(o *OptionEntries) {
 	// Execution
 	pflag.BoolVarP(&o.Execution.EnableBinlog, "enable-binlog", "e", false, "Enable binary logging of the restore data")
 	pflag.StringVar(&o.Execution.InnodbOptimizeKeys, "innodb-optimize-keys", AFTER_IMPORT_PER_TABLE, "Creates the table without the indexes and it adds them at the end. Options: AFTER_IMPORT_PER_TABLE and AFTER_IMPORT_ALL_TABLES")
-	pflag.StringVar(&o.Execution.PurgeModeStr, "purge-mode", "FAIL", "This specify the truncate mode which can be: FAIL, NONE, DROP, TRUNCATE and DELETE")
+	pflag.StringVar(&o.Execution.PurgeModeStr, "purge-mode", "", "This specify the truncate mode which can be: FAIL, NONE, DROP, TRUNCATE and DELETE")
 	pflag.BoolVar(&o.Execution.DisableRedoLog, "disable-redo-log", false, "Disables the REDO_LOG and enables it after, doesn't check initial status")
 	pflag.BoolVarP(&o.Execution.OverwriteTables, "overwrite-tables", "o", false, "Drop tables if they already exist")
 	pflag.BoolVar(&o.Execution.SerialTblCreation, "serialized-table-creation", false, "Table recreation will be executed in series, one thread at a time. This means --max-threads-for-schema-creation=1. This option will be removed in future releases")

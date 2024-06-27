@@ -506,6 +506,9 @@ func initialize_common_options(o *OptionEntries, group string) {
 		set_connection_defaults_file_and_group(o, o.Common.DefaultsExtraFile, "")
 	}
 	log.Infof("Merging config files user: ")
+	if o.Connection.Socket != "" {
+		o.Connection.Protocol = "socket"
+	}
 	m_key_file_merge(o.global.key_file, extra_key_file)
 }
 

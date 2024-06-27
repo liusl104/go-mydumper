@@ -71,22 +71,24 @@ func create_database(o *OptionEntries, td *thread_data, database string) {
 }
 
 func print_errors(o *OptionEntries) {
+	o.global.post_threads.Wait()
+
 	log.Infof("Errors found:")
-	log.Infof("- Tablespace:\t%d", o.global.detailed_errors.tablespace_errors)
-	log.Infof("- Schema:    \t%d", o.global.detailed_errors.schema_errors)
-	log.Infof("- Data:      \t%d", o.global.detailed_errors.data_errors)
-	log.Infof("- View:      \t%d", o.global.detailed_errors.view_errors)
-	log.Infof("- Sequence:  \t%d", o.global.detailed_errors.sequence_errors)
-	log.Infof("- Index:     \t%d", o.global.detailed_errors.index_errors)
-	log.Infof("- Trigger:   \t%d", o.global.detailed_errors.trigger_errors)
-	log.Infof("- Post:      \t%d", o.global.detailed_errors.post_errors)
-	log.Infof("Retries:\t%d", o.global.detailed_errors.retries)
+	log.Infof("- Tablespace: %d", o.global.detailed_errors.tablespace_errors)
+	log.Infof("- Schema:     %d", o.global.detailed_errors.schema_errors)
+	log.Infof("- Data:       %d", o.global.detailed_errors.data_errors)
+	log.Infof("- View:       %d", o.global.detailed_errors.view_errors)
+	log.Infof("- Sequence:   %d", o.global.detailed_errors.sequence_errors)
+	log.Infof("- Index:      %d", o.global.detailed_errors.index_errors)
+	log.Infof("- Trigger:    %d", o.global.detailed_errors.trigger_errors)
+	log.Infof("- Post:       %d", o.global.detailed_errors.post_errors)
+	log.Infof("Retries: %d", o.global.detailed_errors.retries)
 }
 
 func StartLoad() {
-	var conf = new(configuration)
 	var err error
 	context := newOptionEntries()
+	context.global.conf = new(configuration)
 	loadOptionContext(context)
 	if context.Common.DB == "" && context.Filter.SourceDb != "" {
 		context.Common.DB = context.Filter.SourceDb
@@ -165,11 +167,11 @@ func StartLoad() {
 	if context.Filter.TablesSkiplistFile != "" {
 		err = read_tables_skiplist(context, context.Filter.TablesSkiplistFile)
 	}
-	initialize_process(context, conf)
+	initialize_process(context, context.global.conf)
 	initialize_common(context)
 	initialize_connection(context, MYLOADER)
 	err = initialize_regex(context, "")
-	go signal_thread(context, conf)
+	go signal_thread(context, context.global.conf)
 	var conn *client.Conn
 	conn, err = m_connect(context)
 	context.global.set_session = ""
@@ -196,19 +198,19 @@ func StartLoad() {
 			log.Errorf("Disabling redologs is not supported for version %d.%d.%d", context.get_major(), context.get_secondary(), context.get_revision())
 		}
 	}
-	conf.database_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.table_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.data_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.post_table_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.post_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.index_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.view_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.ready = g_async_queue_new(context.Common.BufferSize)
-	conf.pause_resume = g_async_queue_new(context.Common.BufferSize)
-	conf.table_list_mutex = g_mutex_new()
-	conf.stream_queue = g_async_queue_new(context.Common.BufferSize)
-	conf.table_hash = make(map[string]*db_table)
-	conf.table_hash_mutex = g_mutex_new()
+	context.global.conf.database_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.table_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.data_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.post_table_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.post_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.index_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.view_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.ready = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.pause_resume = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.table_list_mutex = g_mutex_new()
+	context.global.conf.stream_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.table_hash = make(map[string]*db_table)
+	context.global.conf.table_hash_mutex = g_mutex_new()
 	context.global.db_hash = make(map[string]*database)
 	if g_file_test("resume") {
 		if !context.Common.Resume {
@@ -221,7 +223,7 @@ func StartLoad() {
 	}
 	var t *thread_data = new(thread_data)
 	t.thread_id = 0
-	t.conf = conf
+	t.conf = context.global.conf
 	t.thrconn = conn
 	t.current_database = ""
 	t.status = WAITING
@@ -238,27 +240,35 @@ func StartLoad() {
 		context.Threads.MaxThreadsForSchemaCreation = 1
 	}
 
-	initialize_worker_schema(context, conf)
-	initialize_worker_index(context, conf)
-	initialize_intermediate_queue(context, conf)
+	initialize_worker_schema(context, context.global.conf)
+	initialize_worker_index(context, context.global.conf)
+	initialize_intermediate_queue(context, context.global.conf)
+	if context.Execution.Stream {
+		if context.Common.Resume {
+			log.Fatalf("We don't expect to find resume files in a stream scenario")
+		}
+		initialize_stream(context, context.global.conf)
+		wait_until_first_metadata(context)
+	}
+	initialize_loader_threads(context, context.global.conf)
 	if context.Execution.Stream {
 		wait_stream_to_finish(context)
 	} else {
-		process_directory(context, conf)
+		process_directory(context, context.global.conf)
 	}
 	wait_schema_worker_to_finish(context)
 	wait_loader_threads_to_finish(context)
-	create_index_shutdown_job(context, conf)
+	create_index_shutdown_job(context, context.global.conf)
 	wait_index_worker_to_finish(context)
-	initialize_post_loding_threads(context, conf)
-	create_post_shutdown_job(context, conf)
+	initialize_post_loding_threads(context, context.global.conf)
+	create_post_shutdown_job(context, context.global.conf)
 	wait_post_worker_to_finish(context)
-	conf.ready.unref()
+	context.global.conf.ready.unref()
 	if context.Execution.DisableRedoLog {
 		m_query(conn, "ALTER INSTANCE ENABLE INNODB REDO_LOG", m_critical, "ENABLE INNODB REDO LOG failed")
 	}
-	conf.data_queue.unref()
-	var tl = conf.table_list
+	context.global.conf.data_queue.unref()
+	var tl = context.global.conf.table_list
 	for _, dbt := range tl {
 		checksum_dbt(dbt, conn)
 	}
@@ -292,11 +302,11 @@ func StartLoad() {
 			}
 		}
 	}
-	conf.database_queue.unref()
-	conf.table_queue.unref()
-	conf.pause_resume.unref()
-	conf.post_table_queue.unref()
-	conf.post_queue.unref()
+	context.global.conf.database_queue.unref()
+	context.global.conf.table_queue.unref()
+	context.global.conf.pause_resume.unref()
+	context.global.conf.post_table_queue.unref()
+	context.global.conf.post_queue.unref()
 	execute_gstring(conn, context.global.set_global_back)
 	err = conn.Close()
 	free_loader_threads(context)

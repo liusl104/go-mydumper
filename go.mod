@@ -8,6 +8,7 @@ require (
 	github.com/klauspost/compress v1.17.7
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/pflag v1.0.5
+	golang.org/x/term v0.19.0
 )
 
 require (
@@ -16,5 +17,5 @@ require (
 	github.com/siddontang/go v0.0.0-20180604090527-bdc77568d726 // indirect
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
+	golang.org/x/sys v0.19.0 // indirect
 )

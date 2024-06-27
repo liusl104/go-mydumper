@@ -10,7 +10,7 @@ func initialize_worker_index(o *OptionEntries, conf *configuration) {
 	var n uint = 0
 	//  index_mutex = g_mutex_new();
 	o.global.init_connection_mutex = g_mutex_new()
-	o.global.index_threads = make([]*sync.WaitGroup, o.Threads.MaxThreadsForIndexCreation)
+	o.global.index_threads = new(sync.WaitGroup)
 	o.global.index_td = make([]*thread_data, o.Threads.MaxThreadsForIndexCreation)
 	o.global.innodb_optimize_keys_all_tables_queue = g_async_queue_new(o.Common.BufferSize)
 	for n = 0; n < o.Threads.MaxThreadsForIndexCreation; n++ {
@@ -18,8 +18,8 @@ func initialize_worker_index(o *OptionEntries, conf *configuration) {
 		o.global.index_td[n].conf = conf
 		o.global.index_td[n].thread_id = n + 1 + o.Common.NumThreads + o.Threads.MaxThreadsForSchemaCreation
 		o.global.index_td[n].status = WAITING
-		o.global.index_threads[n] = new(sync.WaitGroup)
-		go worker_index_thread(o, o.global.index_td[n], o.global.index_threads[n])
+		o.global.index_threads.Add(1)
+		go worker_index_thread(o, o.global.index_td[n])
 	}
 }
 
@@ -40,9 +40,8 @@ func process_index(o *OptionEntries, td *thread_data) bool {
 	return true
 }
 
-func worker_index_thread(o *OptionEntries, td *thread_data, wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
+func worker_index_thread(o *OptionEntries, td *thread_data) {
+	defer o.global.index_threads.Done()
 	var err error
 	var conf = td.conf
 	o.global.init_connection_mutex.Lock()

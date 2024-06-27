@@ -5,6 +5,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	_ "github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
+	"golang.org/x/term"
 	"os"
 	"strings"
 	"unsafe"
@@ -111,6 +112,7 @@ func print_connection_details_once(o *OptionEntries) {
 func m_connect(o *OptionEntries) (*client.Conn, error) {
 	conn, err := configure_connection(o)
 	if err != nil {
+		log.Fatalf("Error connection to database server: %v", err)
 		return conn, err
 	}
 	err = conn.Ping()
@@ -141,10 +143,26 @@ func hide_password(o *OptionEntries) {
 }
 
 func passwordPrompt() string {
-	var p string
 	fmt.Printf("Enter MySQL Password: ")
-	fmt.Scanln(&p)
-	return p
+	return terminalInput()
+}
+
+func terminalInput() string {
+	// 将标准输入的文件描述符传给 term.MakeRaw，它会返回一个恢复终端状态的函数
+	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer term.Restore(int(os.Stdin.Fd()), oldState) // 恢复终端状态
+
+	// 创建一个新的终端，用于读取密码
+	terminal := term.NewTerminal(os.Stdin, "")
+
+	password, err := terminal.ReadPassword("")
+	if err != nil {
+		log.Fatal(err)
+	}
+	return password
 }
 
 func ask_password(o *OptionEntries) {

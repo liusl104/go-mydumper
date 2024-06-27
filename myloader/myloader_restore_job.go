@@ -58,6 +58,7 @@ func initialize_restore_job(o *OptionEntries, pm_str string) {
 	o.global.single_threaded_create_table = g_mutex_new()
 	o.global.progress_mutex = g_mutex_new()
 	o.global.shutdown_triggered_mutex = g_mutex_new()
+	o.global.detailed_errors = new(restore_errors)
 	if pm_str != "" {
 		switch strings.ToUpper(pm_str) {
 		case "TRUNCATE":
@@ -98,6 +99,9 @@ func new_schema_restore_job_internal(database *database, statement string, objec
 
 func new_restore_job(filename string, dbt *db_table, job_type restore_job_type) *restore_job {
 	var rj = new(restore_job)
+	rj.data = new(restore_job_data)
+	rj.data.srj = new(schema_restore_job)
+	rj.data.drj = new(data_restore_job)
 	rj.filename = filename
 	rj.dbt = dbt
 	rj.job_type = job_type
