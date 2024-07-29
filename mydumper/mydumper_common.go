@@ -3,15 +3,16 @@ package mydumper
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path"
+	"strings"
+	"sync"
+
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
-	"os"
-	"path"
-	"strings"
-	"sync"
 )
 
 var m_close func(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error

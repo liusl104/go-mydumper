@@ -31,6 +31,7 @@ func arguments_callback(o *OptionEntries) bool {
 
 	return false
 }
+
 func NewDefaultEntries() *OptionEntries {
 	o := newEntries()
 	o.CommonOptionEntries.BufferSize = 200000
@@ -57,31 +58,33 @@ func NewDefaultEntries() *OptionEntries {
 type OptionEntries struct {
 	global              *globalEntries           // run internal variables
 	CommonOptionEntries *CommonOptionEntries     `json:"commonOptionEntries" ini:"mydumper"`
-	Extra               *ExtraEntries            `json:"extra,omitempty" ini:"mydumper"`             // Extra module
-	Lock                *LockEntries             `json:"lock,omitempty" ini:"mydumper"`              // Lock module
-	QueryRunning        *QueryRunningEntries     `json:"query_running,omitempty" ini:"mydumper"`     // QueryRunning module
-	Exec                *ExecEntries             `json:"exec,omitempty" ini:"mydumper"`              // Exec module
-	Pmm                 *PmmEntries              `json:"pmm,omitempty" ini:"mydumper"`               // Pmm module
-	Daemon              *DaemonEntries           `json:"daemon,omitempty" ini:"mydumper"`            // Daemon module
-	Chunks              *ChunksEntries           `json:"chunks,omitempty" ini:"mydumper"`            // Chunks module
-	Checksum            *ChecksumEntries         `json:"checksum,omitempty" ini:"mydumper"`          // Checksum module
-	Filter              *FilterEntries           `json:"filter,omitempty" ini:"mydumper"`            // Filter module
-	Objects             *ObjectsEntries          `json:"objects,omitempty" ini:"mydumper"`           // Objects module
-	Statement           *StatementEntries        `json:"statement,omitempty" ini:"mydumper"`         // Statement module
-	Common              *CommonEntries           `json:"common,omitempty" ini:"mydumper"`            // Common module
-	CommonFilter        *CommonFilterEntries     `json:"common_filter,omitempty" ini:"mydumper"`     // CommonFilter module
-	CommonConnection    *CommonConnectionEntries `json:"common_connection,omitempty" ini:"mydumper"` // CommonConnection module
-	Connection          *ConnectionEntries       `json:"connection,omitempty" ini:"mydumper"`        // Connection module
-	Regex               *RegexEntries            `json:"regex,omitempty" ini:"mydumper"`             // Regex module
-	Stream              *StreamEntries           `json:"stream,omitempty" ini:"mydumper"`            // Stream module
+	Extra               *ExtraEntries            `json:"extra" ini:"mydumper"`             // Extra module
+	Lock                *LockEntries             `json:"lock" ini:"mydumper"`              // Lock module
+	QueryRunning        *QueryRunningEntries     `json:"query_running" ini:"mydumper"`     // QueryRunning module
+	Exec                *ExecEntries             `json:"exec" ini:"mydumper"`              // Exec module
+	Pmm                 *PmmEntries              `json:"pmm" ini:"mydumper"`               // Pmm module
+	Daemon              *DaemonEntries           `json:"daemon" ini:"mydumper"`            // Daemon module
+	Chunks              *ChunksEntries           `json:"chunks" ini:"mydumper"`            // Chunks module
+	Checksum            *ChecksumEntries         `json:"checksum" ini:"mydumper"`          // Checksum module
+	Filter              *FilterEntries           `json:"filter" ini:"mydumper"`            // Filter module
+	Objects             *ObjectsEntries          `json:"objects" ini:"mydumper"`           // Objects module
+	Statement           *StatementEntries        `json:"statement" ini:"mydumper"`         // Statement module
+	Common              *CommonEntries           `json:"common" ini:"mydumper"`            // Common module
+	CommonFilter        *CommonFilterEntries     `json:"common_filter" ini:"mydumper"`     // CommonFilter module
+	CommonConnection    *CommonConnectionEntries `json:"common_connection" ini:"mydumper"` // CommonConnection module
+	Connection          *ConnectionEntries       `json:"connection" ini:"mydumper"`        // Connection module
+	Regex               *RegexEntries            `json:"regex" ini:"mydumper"`             // Regex module
+	Stream              *StreamEntries           `json:"stream" ini:"mydumper"`            // Stream module
 }
+
 type CommonOptionEntries struct {
-	BufferSize             int    `json:"buffer_size,omitempty" ini:"buffer_size"`       // queue buffer size
+	BufferSize             int    `json:"buffer_size" ini:"buffer_size"`                 // queue buffer size
 	Output_directory_param string `json:"output_Directory_Param" ini:"output_directory"` // Directory to output files to
-	Help                   bool   `json:"help,omitempty" ini:"help"`                     // Show help options
-	LogFile                string `json:"log_file,omitempty" ini:"log_file"`             // Log file name to use, by default stdout is used
-	DiskLimits             string `json:"disk_limits,omitempty" ini:"disk_limits"`       // Set the limit to pause and resume if determines there is no enough disk space. Accepts values like: '<resume>:<pause>' in MB. For instance: 100:500 will pause when there is only 100MB free and will resume if 500MB are available
+	Help                   bool   `json:"help" ini:"help"`                               // Show help options
+	LogFile                string `json:"log_file" ini:"log_file"`                       // Log file name to use, by default stdout is used
+	DiskLimits             string `json:"disk_limits" ini:"disk_limits"`                 // Set the limit to pause and resume if determines there is no enough disk space. Accepts values like: '<resume>:<pause>' in MB. For instance: 100:500 will pause when there is only 100MB free and will resume if 500MB are available
 }
+
 type globalEntries struct {
 	major                                       int
 	secondary                                   int
@@ -183,150 +186,150 @@ type globalEntries struct {
 }
 
 type StreamEntries struct {
-	Stream    bool   `json:"stream,omitempty" ini:"stream"` // It will stream over STDOUT once the files has been written
-	StreamOpt string `json:"stream_opt,omitempty" ini:"stream_opt"`
+	Stream    bool   `json:"stream" ini:"stream"` // It will stream over STDOUT once the files has been written
+	StreamOpt string `json:"stream_opt" ini:"stream_opt"`
 }
 
 type RegexEntries struct {
-	Regex string `json:"regex,omitempty" ini:"regex"` // Regular expression for 'db.table' matching
+	Regex string `json:"regex" ini:"regex"` // Regular expression for 'db.table' matching
 }
 
 type ExtraEntries struct {
-	ChunkFilesize          int    `json:"chunk_filesize,omitempty" ini:"chunk_filesize"`                         // Split tables into chunks of this output file size. This value is in MB
-	ExitIfBrokenTableFound bool   `json:"exit_if_broken_table_found,omitempty" ini:"exit_if_broken_table_found"` // Exits if a broken table has been found
-	SuccessOn1146          bool   `json:"success_on_1146,omitempty" ini:"success_on_1146"`                       // Not increment error count and Warning instead of Critical in case of table doesn't exist
-	BuildEmptyFiles        bool   `json:"build_empty_files,omitempty" ini:"build_empty_files"`                   // Build dump files even if no data available from table
-	IgnoreGeneratedFields  bool   `json:"ignore_generated_fields,omitempty" ini:"ignore_generated_fields"`       // Queries related to generated fields are not going to be executed.It will lead to restoration issues if you have generated columns
-	OrderByPrimaryKey      bool   `json:"order_by_primary_key,omitempty" ini:"order_by_primary_key"`             // Sort the data by Primary Key or Unique key if no primary key exists
-	Compress               bool   `json:"compress,omitempty" ini:"compress"`                                     // Compress output files
-	CompressMethod         string `json:"compress_method,omitempty" ini:"compress_method"`                       // CompressMethod Options: GZIP and ZSTD. Default: GZIP
+	ChunkFilesize          int    `json:"chunk_filesize" ini:"chunk_filesize"`                         // Split tables into chunks of this output file size. This value is in MB
+	ExitIfBrokenTableFound bool   `json:"exit_if_broken_table_found" ini:"exit_if_broken_table_found"` // Exits if a broken table has been found
+	SuccessOn1146          bool   `json:"success_on_1146" ini:"success_on_1146"`                       // Not increment error count and Warning instead of Critical in case of table doesn't exist
+	BuildEmptyFiles        bool   `json:"build_empty_files" ini:"build_empty_files"`                   // Build dump files even if no data available from table
+	IgnoreGeneratedFields  bool   `json:"ignore_generated_fields" ini:"ignore_generated_fields"`       // Queries related to generated fields are not going to be executed.It will lead to restoration issues if you have generated columns
+	OrderByPrimaryKey      bool   `json:"order_by_primary_key" ini:"order_by_primary_key"`             // Sort the data by Primary Key or Unique key if no primary key exists
+	Compress               bool   `json:"compress" ini:"compress"`                                     // Compress output files
+	CompressMethod         string `json:"compress_method" ini:"compress_method"`                       // CompressMethod Options: GZIP and ZSTD. Default: GZIP
 }
 
 type LockEntries struct {
-	TidbSnapshot       string `json:"tidb_snapshot,omitempty" ini:"tidb_snapshot"`               // Snapshot to use for TiDB
-	NoLocks            bool   `json:"no_locks,omitempty" ini:"no_locks"`                         // Do not execute the temporary shared read lock.  WARNING: This will cause inconsistent backups
-	UseSavepoints      bool   `json:"use_savepoints,omitempty" ini:"use_savepoints"`             // Use savepoints to reduce metadata locking issues, needs SUPER privilege
-	NoBackupLocks      bool   `json:"no_backup_locks,omitempty" ini:"no_backup_locks"`           // Do not use Percona backup locks
-	LockAllTables      bool   `json:"lock_all_tables,omitempty" ini:"lock_all_tables"`           // Use LOCK TABLE for all, instead of FTWRL
-	LessLocking        bool   `json:"less_locking,omitempty" ini:"less_locking"`                 // Minimize locking time on InnoDB tables.
-	TrxConsistencyOnly bool   `json:"trx_consistency_only,omitempty" ini:"trx_consistency_only"` // Transactional consistency only
+	TidbSnapshot       string `json:"tidb_snapshot" ini:"tidb_snapshot"`               // Snapshot to use for TiDB
+	NoLocks            bool   `json:"no_locks" ini:"no_locks"`                         // Do not execute the temporary shared read lock.  WARNING: This will cause inconsistent backups
+	UseSavepoints      bool   `json:"use_savepoints" ini:"use_savepoints"`             // Use savepoints to reduce metadata locking issues, needs SUPER privilege
+	NoBackupLocks      bool   `json:"no_backup_locks" ini:"no_backup_locks"`           // Do not use Percona backup locks
+	LockAllTables      bool   `json:"lock_all_tables" ini:"lock_all_tables"`           // Use LOCK TABLE for all, instead of FTWRL
+	LessLocking        bool   `json:"less_locking" ini:"less_locking"`                 // Minimize locking time on InnoDB tables.
+	TrxConsistencyOnly bool   `json:"trx_consistency_only" ini:"trx_consistency_only"` // Transactional consistency only
 }
 
 type QueryRunningEntries struct {
-	LongqueryRetries       int    `json:"longquery_retries,omitempty" ini:"longquery_retries"`               // Retry checking for long queries, default 0 (do not retry)
-	LongqueryRetryInterval int    `json:"longquery_retry_interval,omitempty" ini:"longquery_retry_interval"` // Time to wait before retrying the long query check in seconds, default 60
-	Longquery              uint64 `json:"longquery,omitempty" ini:"longquery"`                               // Set long query timer in seconds, default 60
-	Killqueries            bool   `json:"killqueries,omitempty" ini:"killqueries"`                           // Kill long running queries (instead of aborting)
+	LongqueryRetries       int    `json:"longquery_retries" ini:"longquery_retries"`               // Retry checking for long queries, default 0 (do not retry)
+	LongqueryRetryInterval int    `json:"longquery_retry_interval" ini:"longquery_retry_interval"` // Time to wait before retrying the long query check in seconds, default 60
+	Longquery              uint64 `json:"longquery" ini:"longquery"`                               // Set long query timer in seconds, default 60
+	Killqueries            bool   `json:"killqueries" ini:"killqueries"`                           // Kill long running queries (instead of aborting)
 }
 
 type ExecEntries struct {
 	// Num_exec_threads int    // Amount of threads to use with --exec
 	// Exec_command     string // Command to execute using the file as parameter
 	// Exec_per_thread           string // Set the command that will receive by STDIN and write in the STDOUT into the output file
-	ExecPerThreadExtension string `json:"exec_per_thread_extension,omitempty" ini:"exec_per_thread_extension" ` // Set the extension for the STDOUT file when --exec-per-thread is used
+	ExecPerThreadExtension string `json:"exec_per_thread_extension" ini:"exec_per_thread_extension" ` // Set the extension for the STDOUT file when --exec-per-thread is used
 }
 
 type PmmEntries struct {
-	PmmPath       string `json:"pmm_path,omitempty"  ini:"pmm_path"`            // which default value will be /usr/local/percona/pmm2/collectors/textfile-collector/high-resolution
-	PmmResolution string `json:"pmm_Resolution,omitempty" ini:"pmm_resolution"` // which default will be high
+	PmmPath       string `json:"pmm_path"  ini:"pmm_path"`            // which default value will be /usr/local/percona/pmm2/collectors/textfile-collector/high-resolution
+	PmmResolution string `json:"pmm_Resolution" ini:"pmm_resolution"` // which default will be high
 }
 
 type DaemonEntries struct {
-	DaemonMode bool `json:"daemon_mode,omitempty" ini:"daemon_mode"` // Enable daemon mode
-	// SnapshotInterval int  `json:"snapshot_interval,omitempty" ini:"snapshot_interval"` // Interval between each dump snapshot (in minutes), requires --daemon,default 60
-	// 	SnapshotCount    int  `json:"snapshot_count,omitempty" ini:"snapshot_count"`       // number of snapshots, default 2
+	DaemonMode bool `json:"daemon_mode" ini:"daemon_mode"` // Enable daemon mode
+	// SnapshotInterval int  `json:"snapshot_interval" ini:"snapshot_interval"` // Interval between each dump snapshot (in minutes), requires --daemon,default 60
+	// 	SnapshotCount    int  `json:"snapshot_count" ini:"snapshot_count"`       // number of snapshots, default 2
 }
 
 type ChunksEntries struct {
-	MaxRows         int    `json:"max_rows,omitempty" ini:"max_rows"`                 // Limit the number of rows per block after the table is estimated, default 1000000. It has been deprecated, use --rows instead. Removed in future releases
-	CharDeep        uint   `json:"char_deep,omitempty" ini:"char_deep"`               // Defines the amount of characters to use when the primary key is a string
-	CharChunk       uint   `json:"char_chunk,omitempty" ini:"char_chunk"`             // Defines in how many pieces should split the table. By default we use the amount of threads
-	RowsPerChunk    string `json:"rows_per_chunk,omitempty" ini:"rows_per_chunk"`     // Spliting tables into chunks of this many rows. It can be MIN:START_AT:MAX. MAX can be 0 which means that there is no limit. It will double the chunk size if query takes less than 1 second and half of the size if it is more than 2 seconds
-	SplitPartitions bool   `json:"split_partitions,omitempty" ini:"split_partitions"` // Dump partitions into separate files. This options overrides the --rows option for partitioned tables.
+	MaxRows         int    `json:"max_rows" ini:"max_rows"`                 // Limit the number of rows per block after the table is estimated, default 1000000. It has been deprecated, use --rows instead. Removed in future releases
+	CharDeep        uint   `json:"char_deep" ini:"char_deep"`               // Defines the amount of characters to use when the primary key is a string
+	CharChunk       uint   `json:"char_chunk" ini:"char_chunk"`             // Defines in how many pieces should split the table. By default we use the amount of threads
+	RowsPerChunk    string `json:"rows_per_chunk" ini:"rows_per_chunk"`     // Spliting tables into chunks of this many rows. It can be MIN:START_AT:MAX. MAX can be 0 which means that there is no limit. It will double the chunk size if query takes less than 1 second and half of the size if it is more than 2 seconds
+	SplitPartitions bool   `json:"split_partitions" ini:"split_partitions"` // Dump partitions into separate files. This options overrides the --rows option for partitioned tables.
 }
 
 type ChecksumEntries struct {
-	DumpChecksums    bool `json:"dump_checksums,omitempty" ini:"dump_checksums"`       // Dump checksums for all elements
-	DataChecksums    bool `json:"data_checksums,omitempty" ini:"data_checksums"`       // Dump table checksums with the data
-	SchemaChecksums  bool `json:"schema_checksums,omitempty" ini:"schema_checksums"`   // Dump schema table and view creation checksums
-	RoutineChecksums bool `json:"routine_checksums,omitempty" ini:"routine_checksums"` // Dump triggers, functions and routines checksums
+	DumpChecksums    bool `json:"dump_checksums" ini:"dump_checksums"`       // Dump checksums for all elements
+	DataChecksums    bool `json:"data_checksums" ini:"data_checksums"`       // Dump table checksums with the data
+	SchemaChecksums  bool `json:"schema_checksums" ini:"schema_checksums"`   // Dump schema table and view creation checksums
+	RoutineChecksums bool `json:"routine_checksums" ini:"routine_checksums"` // Dump triggers, functions and routines checksums
 }
 
 type FilterEntries struct {
-	DB             string `json:"database,omitempty" ini:"database"`               // Log file name to use, by default stdout is used
-	IgnoreEngines  string `json:"ignore_engines,omitempty" ini:"ignore_engines"`   // Comma delimited list of storage engines to ignore
-	WhereOption    string `json:"where_option,omitempty" ini:"where_option"`       // Dump only selected records.
-	UpdatedSince   int    `json:"updated_since,omitempty" ini:"updated_since"`     // Use Update_time to dump only tables updated in the last U days
-	PartitionRegex string `json:"partition_regex,omitempty" ini:"partition_regex"` // Regex to filter by partition name.
+	DB             string `json:"database" ini:"database"`               // Log file name to use, by default stdout is used
+	IgnoreEngines  string `json:"ignore_engines" ini:"ignore_engines"`   // Comma delimited list of storage engines to ignore
+	WhereOption    string `json:"where_option" ini:"where_option"`       // Dump only selected records.
+	UpdatedSince   int    `json:"updated_since" ini:"updated_since"`     // Use Update_time to dump only tables updated in the last U days
+	PartitionRegex string `json:"partition_regex" ini:"partition_regex"` // Regex to filter by partition name.
 }
 
 type ObjectsEntries struct {
-	NoSchemas       bool `json:"no_schemas,omitempty" ini:"no_schemas"`             // Do not dump table schemas with the data and triggers
-	DumpTablespaces bool `json:"dump_tablespaces,omitempty" ini:"dump_tablespaces"` // Dump all the tablespaces.
-	NoData          bool `json:"no_data,omitempty" ini:"no_data"`                   // Do not dump table data
-	DumpTriggers    bool `json:"dump_triggers,omitempty" ini:"dump_triggers"`       // Dump triggers. By default, it do not dump triggers
-	DumpEvents      bool `json:"dump_events,omitempty" ini:"dump_events"`           // Dump events. By default, it do not dump events
-	DumpRoutines    bool `json:"dump_routines,omitempty" ini:"dump_routines"`       // Dump stored procedures and functions. By default, it do not dump stored procedures nor functions
-	ViewsAsTables   bool `json:"views_as_tables,omitempty" ini:"views_as_tables"`   // Export VIEWs as they were tables
-	NoDumpViews     bool `json:"no_dump_views,omitempty" ini:"no_dump_views"`       // Do not dump VIEWs
+	NoSchemas       bool `json:"no_schemas" ini:"no_schemas"`             // Do not dump table schemas with the data and triggers
+	DumpTablespaces bool `json:"dump_tablespaces" ini:"dump_tablespaces"` // Dump all the tablespaces.
+	NoData          bool `json:"no_data" ini:"no_data"`                   // Do not dump table data
+	DumpTriggers    bool `json:"dump_triggers" ini:"dump_triggers"`       // Dump triggers. By default, it do not dump triggers
+	DumpEvents      bool `json:"dump_events" ini:"dump_events"`           // Dump events. By default, it do not dump events
+	DumpRoutines    bool `json:"dump_routines" ini:"dump_routines"`       // Dump stored procedures and functions. By default, it do not dump stored procedures nor functions
+	ViewsAsTables   bool `json:"views_as_tables" ini:"views_as_tables"`   // Export VIEWs as they were tables
+	NoDumpViews     bool `json:"no_dump_views" ini:"no_dump_views"`       // Do not dump VIEWs
 }
 
 type StatementEntries struct {
-	LoadData                bool   `json:"load_data,omitempty" ini:"load_data"`                                   // Instead of creating INSERT INTO statements, it creates LOAD DATA statements and .dat files
-	Csv                     bool   `json:"csv,omitempty" ini:"csv"`                                               // Automatically enables --load-data and set variables to export in CSV format.
-	FieldsTerminatedByLd    string `json:"fields_terminated_by_ld,omitempty" ini:"fields_terminated_by_ld"`       // Defines the character that is written between fields
-	FieldsEnclosedByLd      string `json:"fields_enclosed_by_ld,omitempty" ini:"fields_enclosed_by_ld"`           // Defines the character to enclose fields. Default: \"
-	FieldsEscapedBy         string `json:"fields_escaped_by,omitempty" ini:"fields_escaped_by"`                   // Single character that is going to be used to escape characters in the LOAD DATA stament, default: '\\'
-	LinesStartingByLd       string `json:"lines_starting_by_ld,omitempty" json:"lines_starting_by_ld"`            // Adds the string at the begining of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.
-	LinesTerminatedByLd     string `json:"lines_terminated_by_ld,omitempty" ini:"lines_terminated_by_ld"`         // Adds the string at the end of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.
-	StatementTerminatedByLd string `json:"statement_terminated_by_ld,omitempty" ini:"statement_terminated_by_ld"` // This might never be used, unless you know what are you doing
-	InsertIgnore            bool   `json:"insert_ignore,omitempty" ini:"insert_ignore"`                           // Dump rows with INSERT IGNORE
-	Replace                 bool   `json:"replace,omitempty" ini:"replace"`                                       // Dump rows with REPLACE
-	CompleteInsert          bool   `json:"complete_insert,omitempty" ini:"complete_insert"`                       // Use complete INSERT statements that include column names
-	HexBlob                 bool   `json:"hex_blob,omitempty" ini:"hex_blob"`                                     // Dump binary columns using hexadecimal notation
-	SkipDefiner             bool   `json:"skip_definer,omitempty" ini:"skip_definer"`                             // Removes DEFINER from the CREATE statement. By default, statements are not modified
-	StatementSize           int    `json:"statement_size,omitempty" ini:"statement_size"`                         // Attempted size of INSERT statement in bytes, default 1000000
-	SkipTz                  bool   `json:"skip_tz,omitempty" ini:"skip_tz"`                                       // SET TIME_ZONE='+00:00' at top of dump to allow dumping of TIMESTAMP data when a server has data in different time zones or data is being moved between servers with different time zones, defaults to on use --skip-tz-utc to disable.
-	SetNamesStr             string `json:"set_names_str,omitempty" ini:"set_names_str"`                           // Sets the names, use it at your own risk, default binary
+	LoadData                bool   `json:"load_data" ini:"load_data"`                                   // Instead of creating INSERT INTO statements, it creates LOAD DATA statements and .dat files
+	Csv                     bool   `json:"csv" ini:"csv"`                                               // Automatically enables --load-data and set variables to export in CSV format.
+	FieldsTerminatedByLd    string `json:"fields_terminated_by_ld" ini:"fields_terminated_by_ld"`       // Defines the character that is written between fields
+	FieldsEnclosedByLd      string `json:"fields_enclosed_by_ld" ini:"fields_enclosed_by_ld"`           // Defines the character to enclose fields. Default: \"
+	FieldsEscapedBy         string `json:"fields_escaped_by" ini:"fields_escaped_by"`                   // Single character that is going to be used to escape characters in the LOAD DATA stament, default: '\\'
+	LinesStartingByLd       string `json:"lines_starting_by_ld" json:"lines_starting_by_ld"`            // Adds the string at the begining of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.
+	LinesTerminatedByLd     string `json:"lines_terminated_by_ld" ini:"lines_terminated_by_ld"`         // Adds the string at the end of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.
+	StatementTerminatedByLd string `json:"statement_terminated_by_ld" ini:"statement_terminated_by_ld"` // This might never be used, unless you know what are you doing
+	InsertIgnore            bool   `json:"insert_ignore" ini:"insert_ignore"`                           // Dump rows with INSERT IGNORE
+	Replace                 bool   `json:"replace" ini:"replace"`                                       // Dump rows with REPLACE
+	CompleteInsert          bool   `json:"complete_insert" ini:"complete_insert"`                       // Use complete INSERT statements that include column names
+	HexBlob                 bool   `json:"hex_blob" ini:"hex_blob"`                                     // Dump binary columns using hexadecimal notation
+	SkipDefiner             bool   `json:"skip_definer" ini:"skip_definer"`                             // Removes DEFINER from the CREATE statement. By default, statements are not modified
+	StatementSize           int    `json:"statement_size" ini:"statement_size"`                         // Attempted size of INSERT statement in bytes, default 1000000
+	SkipTz                  bool   `json:"skip_tz" ini:"skip_tz"`                                       // SET TIME_ZONE='+00:00' at top of dump to allow dumping of TIMESTAMP data when a server has data in different time zones or data is being moved between servers with different time zones, defaults to on use --skip-tz-utc to disable.
+	SetNamesStr             string `json:"set_names_str" ini:"set_names_str"`                           // Sets the names, use it at your own risk, default binary
 }
 
 type CommonEntries struct {
-	NumThreads               uint   `json:"num_threads,omitempty" ini:"num_threads"`                               // "Number of threads to use, default 4
-	ProgramVersion           bool   `json:"program_version,omitempty" ini:"program_version"`                       // Show the program version and exit
-	IdentifierQuoteCharacter string `json:"identifier_quote_character,omitempty" ini:"identifier_quote_character"` // This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK
-	Verbose                  int    `json:"verbose,omitempty" ini:"verbose"`                                       // Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info,default 2
-	Debug                    bool   `json:"debug,omitempty" ini:"debug"`                                           // (automatically sets verbosity to 3),print more info
-	DefaultsFile             string `json:"defaults_file,omitempty" ini:"defaults_file"`                           // Use a specific defaults file. Default: /etc/cnf
-	DefaultsExtraFile        string `json:"defaults_extra_file,omitempty" ini:"defaults_extra_file"`               // Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values
+	NumThreads               uint   `json:"num_threads" ini:"num_threads"`                               // "Number of threads to use, default 4
+	ProgramVersion           bool   `json:"program_version" ini:"program_version"`                       // Show the program version and exit
+	IdentifierQuoteCharacter string `json:"identifier_quote_character" ini:"identifier_quote_character"` // This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK
+	Verbose                  int    `json:"verbose" ini:"verbose"`                                       // Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info,default 2
+	Debug                    bool   `json:"debug" ini:"debug"`                                           // (automatically sets verbosity to 3),print more info
+	DefaultsFile             string `json:"defaults_file" ini:"defaults_file"`                           // Use a specific defaults file. Default: /etc/cnf
+	DefaultsExtraFile        string `json:"defaults_extra_file" ini:"defaults_extra_file"`               // Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values
 	// Fifo_directory             string // Directory where the FIFO files will be created when needed. Default: Same as backup
 	Logger *os.File `json:"logger"`
 }
 
 type CommonFilterEntries struct {
-	TablesSkiplistFile string `json:"tables_skiplist_file,omitempty" ini:"tables_skiplist_file"` // File containing a list of database.table entries to skip, one per line (skips before applying regex option)
-	TablesList         string `json:"tables_list,omitempty" ini:"tables_list"`                   // Comma delimited table list to dump (does not exclude regex option). Table name must include database name. For instance: test.t1,test.t2
+	TablesSkiplistFile string `json:"tables_skiplist_file" ini:"tables_skiplist_file"` // File containing a list of database.table entries to skip, one per line (skips before applying regex option)
+	TablesList         string `json:"tables_list" ini:"tables_list"`                   // Comma delimited table list to dump (does not exclude regex option). Table name must include database name. For instance: test.t1,test.t2
 }
 
 type CommonConnectionEntries struct {
 	// Compress_protocol bool   // Use compression on the MySQL connection
-	Ssl bool `json:"ssl,omitempty" ini:"ssl"` // Connect using SSL
+	Ssl bool `json:"ssl" ini:"ssl"` // Connect using SSL
 	//	Ssl_mode    string // Desired security state of the connection to the server: DISABLED, PREFERRED, REQUIRED, VERIFY_CA, VERIFY_IDENTITY
-	Key  string `json:"key,omitempty" ini:"key"`   // The path name to the key file
-	Cert string `json:"cert,omitempty" ini:"cert"` // The path name to the certificate file
-	Ca   string `json:"ca,omitempty" ini:"ca"`     // The path name to the certificate authority file
+	Key  string `json:"key" ini:"key"`   // The path name to the key file
+	Cert string `json:"cert" ini:"cert"` // The path name to the certificate file
+	Ca   string `json:"ca" ini:"ca"`     // The path name to the certificate authority file
 	//	Capath      string // The path name to a directory that contains trusted SSL CA certificates in PEM format
 	//	Cipher      string // A list of permissible ciphers to use for SSL encryption
 	//	Tls_version string // Which protocols the server permits for encrypted connections
 }
 
 type ConnectionEntries struct {
-	Hostname    string `json:"hostname,omitempty" ini:"host"`             // The host to connect to
-	Username    string `json:"username,omitempty" ini:"user"`             // Username with the necessary privileges
-	Password    string `json:"password,omitempty" ini:"password"`         // User password
-	AskPassword bool   `json:"ask_password,omitempty" ini:"ask_password"` // Prompt For User password
-	Port        int    `json:"port,omitempty" ini:"port"`                 // TCP/IP port to connect to
-	Socket      string `json:"socket,omitempty" ini:"socket"`             // UNIX domain socket file to use for connection
-	Protocol    string `json:"protocol,omitempty" ini:"protocol"`         // The protocol to use for connection (tcp, socket)
+	Hostname    string `json:"hostname" ini:"host"`             // The host to connect to
+	Username    string `json:"username" ini:"user"`             // Username with the necessary privileges
+	Password    string `json:"password" ini:"password"`         // User password
+	AskPassword bool   `json:"ask_password" ini:"ask_password"` // Prompt For User password
+	Port        int    `json:"port" ini:"port"`                 // TCP/IP port to connect to
+	Socket      string `json:"socket" ini:"socket"`             // UNIX domain socket file to use for connection
+	Protocol    string `json:"protocol" ini:"protocol"`         // The protocol to use for connection (tcp, socket)
 }
 
 func newEntries() *OptionEntries {

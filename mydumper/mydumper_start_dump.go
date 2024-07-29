@@ -349,7 +349,7 @@ func monitor_disk_space_thread(o *OptionEntries, queue *asyncQueue) {
 		}
 		time.Sleep(10 * time.Second)
 	}
-	return
+	// return
 }
 
 func sig_triggered(o *OptionEntries, user_data any, signal os.Signal) bool {
@@ -486,7 +486,7 @@ func get_not_updated(o *OptionEntries, conn *client.Conn, file *os.File) {
 	var res *mysql.Result
 	// var err error
 	var query string
-	query = fmt.Sprintf("SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND UPDATE_TIME < NOW() - INTERVAL %d DAY", o.Filter.UpdatedSince)
+	query = fmt.Sprintf("SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND UPDATE_TIME < NOW() - INTERVAL '%d' DAY", o.Filter.UpdatedSince)
 	res, _ = conn.Execute(query)
 	for _, row := range res.Values {
 		o.global.no_updated_tables = append(o.global.no_updated_tables, string(row[0].AsString()))
@@ -756,7 +756,7 @@ func send_lock_all_tables(o *OptionEntries, conn *client.Conn) {
 				db_quoted_list += fmt.Sprintf(",'%s'", o.global.db_items[i])
 				i++
 			}
-			query = fmt.Sprintf("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES  WHERE TABLE_SCHEMA in (%s) AND TABLE_TYPE ='BASE TABLE' AND NOT  (TABLE_SCHEMA = 'mysql' AND (TABLE_NAME = 'slow_log' OR  TABLE_NAME = 'general_log'))", db_quoted_list)
+			query = fmt.Sprintf("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES  WHERE TABLE_SCHEMA in ('%s') AND TABLE_TYPE ='BASE TABLE' AND NOT  (TABLE_SCHEMA = 'mysql' AND (TABLE_NAME = 'slow_log' OR  TABLE_NAME = 'general_log'))", db_quoted_list)
 		} else {
 
 			query = fmt.Sprintf("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES  WHERE TABLE_TYPE ='BASE TABLE' AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'data_dictionary') AND NOT (TABLE_SCHEMA = 'mysql' AND (TABLE_NAME = 'slow_log' OR TABLE_NAME = 'general_log'))")
