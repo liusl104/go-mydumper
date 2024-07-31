@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/shirou/gopsutil/disk"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -304,13 +306,32 @@ func (o *OptionEntries) set_disk_limits(p_at, r_at uint) {
 }
 
 func (o *OptionEntries) is_disk_space_ok(val uint) bool {
-	fs := syscall.Statfs_t{}
-	err := syscall.Statfs(o.global.dump_directory, &fs)
-	if err != nil {
-		log.Errorf("Disk space check failed: %v", err)
-		return true
+	if !path.IsAbs(o.global.dump_directory) {
+		pwd, _ := os.Getwd()
+		o.global.dump_directory = path.Join(pwd, o.global.dump_directory)
 	}
-	return fs.Bavail*uint64(fs.Bsize)/1024/1024 > uint64(val)
+	partitions, err := disk.Partitions(true)
+	if err != nil {
+		log.Errorf("Error getting partitions: %s", err.Error())
+	}
+	// 找到指定路径的挂载分区
+	var mountPoint string
+	for _, partition := range partitions {
+		if o.global.dump_directory == partition.Mountpoint || (len(o.global.dump_directory) > len(partition.Mountpoint) && o.global.dump_directory[:len(partition.Mountpoint)] == partition.Mountpoint) {
+			mountPoint = partition.Mountpoint
+			break
+		}
+	}
+
+	if mountPoint == "" {
+		log.Fatalf("No partition found for path: %s", o.global.dump_directory)
+	}
+	// 获取分区使用情况
+	usage, err := disk.Usage(mountPoint)
+	if err != nil {
+		log.Fatalf("Error getting disk usage: %v", err)
+	}
+	return usage.Free/1024/1024 > uint64(val)
 }
 
 func monitor_disk_space_thread(o *OptionEntries, queue *asyncQueue) {
@@ -841,7 +862,8 @@ func send_lock_all_tables(o *OptionEntries, conn *client.Conn) {
 
 func (o *OptionEntries) StartDump() error {
 	if o.Daemon.DaemonMode {
-		run_daemon(os.DevNull, true)
+		d := runDaemon(o)
+		defer d.Release()
 	}
 	if o.CommonOptionEntries.Help {
 		pring_help()

@@ -235,7 +235,8 @@ type PmmEntries struct {
 }
 
 type DaemonEntries struct {
-	DaemonMode bool `json:"daemon_mode" ini:"daemon_mode"` // Enable daemon mode
+	DaemonMode bool   `json:"daemon_mode" ini:"daemon_mode"` // Enable daemon mode
+	PidFile    string `json:"pid_file" ini:"pid_file"`
 	// SnapshotInterval int  `json:"snapshot_interval" ini:"snapshot_interval"` // Interval between each dump snapshot (in minutes), requires --daemon,default 60
 	// 	SnapshotCount    int  `json:"snapshot_count" ini:"snapshot_count"`       // number of snapshots, default 2
 }
@@ -403,6 +404,7 @@ func commandEntries(o *OptionEntries) {
 	pflag.StringVar(&o.Pmm.PmmResolution, "pmm-resolution", "", "which default will be high")
 	// daemon
 	pflag.BoolVarP(&o.Daemon.DaemonMode, "daemon", "D", false, "Enable daemon mode")
+	pflag.StringVar(&o.Daemon.PidFile, "pid-file", fmt.Sprintf("/tmp/%s.pid", MYDUMPER), "Pid file used by Daemon mode.")
 	// pflag.IntVarP(&o.Daemon.SnapshotInterval, "snapshot-interval", "I", 60, "Interval between each dump snapshot (in minutes), requires --daemon,default 60")
 	// 	pflag.IntVarP(&o.Daemon.SnapshotCount, "snapshot-count", "X", 2, "number of snapshots, default 2")
 	// chunks
