@@ -3,38 +3,61 @@ GOCMD=go
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOGET=$(GOCMD) mod
-BINARY_NAME=./bin/redis_agent
-BINARY_UNIX=$(BINARY_NAME)_x86_64
-REDIS_PKG=RedisAgent
+MYDUMPER_BUILD=cmd/mydumper.go
+MYLOADER_BUILD=cmd/myloader.go
+MYDUMPER=mydumper
+MYLOADER=myloader
+OUTPUT=cmd
+MYDUMPER_BINARY_NAME=$(OUTPUT)/$(MYDUMPER)_darwin_for_x86_64
+MYLOADER_BINARY_NAME=$(OUTPUT)/$(MYLOADER)_darwin_for_x86_64
+MYDUMPER_BINARY_UNIX=$(OUTPUT)/$(MYDUMPER)_linux_for_x86_64
+MYLOADER_BINARY_UNIX=$(OUTPUT)/$(MYLOADER)_linux_for_x86_64
+MYDUMPER_BINARY_WIN=$(OUTPUT)/$(MYDUMPER)_windows_for_x86_64.exe
+MYLOADER_BINARY_WIN=$(OUTPUT)/$(MYLOADER)_windows_for_x86_64.exe
+PKG_NAME=go-mydumper
 BUILDTS := $(shell date '+%Y-%m-%d %H:%M:%S')
 GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
-LDFLAGS += -X "$(REDIS_PKG)/api.BuildTS=$(BUILDTS)"
-LDFLAGS += -X "$(REDIS_PKG)/api.GitHash=$(GITHASH)"
-LDFLAGS += -X "$(REDIS_PKG)/api.GitBranch=$(GITBRANCH)"
-LDFLAGS += -X "$(REDIS_PKG)/api.GoVersion=$(GOVERSION)"
+LDFLAGS = -X "$(PKG_NAME)/src.BuildTS=$(BUILDTS)"
+LDFLAGS += -X "$(PKG_NAME)/src.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(PKG_NAME)/src.GitBranch=$(GITBRANCH)"
+LDFLAGS += -X "$(PKG_NAME)/src.GoVersion=$(GOVERSION)"
 
-all: myloader mydumper
+all: build
+
 build:
-	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w'  -o $(BINARY_NAME)
+	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w'  -o $(MYDUMPER_BINARY_NAME) $(MYDUMPER_BUILD)
+	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w'  -o $(MYLOADER_BINARY_NAME) $(MYLOADER_BUILD)
+
 mod:
 	$(GOCMD) mod tidy
+
 clean:
 	$(GOCLEAN)
-	rm -f $(BINARY_UNIX)
-	rm -f $(BINARY_NAME)
-run:
-	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(BINARY_NAME)
-	./$(BINARY_NAME)
-myloader:
+	rm -f $(OUTPUT)/*x86_64*
 
+run:
+	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYDUMPER_BINARY_NAME) $(MYDUMPER_BUILD)
+	./$(MYDUMPER_BINARY_NAME) --version
+
+.PHONY: myloader
+myloader:
+	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYLOADER_BINARY_NAME) $(MYLOADER_BUILD)
+
+.PHONY: mydumper
 mydumper:
+	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYDUMPER_BINARY_NAME) $(MYDUMPER_BUILD)
 
 # Cross compilation
 linux:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(BINARY_UNIX)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYDUMPER_BINARY_UNIX) $(MYDUMPER_BUILD)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYLOADER_BINARY_UNIX) $(MYLOADER_BUILD)
 
 windows:
+	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYDUMPER_BINARY_WIN) $(MYDUMPER_BUILD)
+	CGO_ENABLED=1 GOOS=windows GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYLOADER_BINARY_WIN) $(MYLOADER_BUILD)
 
-mac:
+darwin:
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYDUMPER_BINARY_NAME) $(MYDUMPER_BUILD)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GOBUILD)  -ldflags '$(LDFLAGS) -s -w' -o $(MYLOADER_BINARY_NAME) $(MYLOADER_BUILD)

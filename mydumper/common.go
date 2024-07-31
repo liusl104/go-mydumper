@@ -7,6 +7,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
+	"go-mydumper/src"
 	"os"
 	"path"
 	"path/filepath"
@@ -562,6 +563,10 @@ func remove_definer(data string) string {
 
 func print_version(program string) {
 	fmt.Printf("%s v%s, built against %s %s  with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+	fmt.Printf("Git Commit Hash: %s\n", src.GitHash)
+	fmt.Printf("Git Branch: %s\n", src.GitBranch)
+	fmt.Printf("Build Time: %s\n", src.BuildTS)
+	fmt.Printf("Go Version: %s\n", src.GoVersion)
 }
 
 func stream_arguments_callback(o *OptionEntries) bool {
