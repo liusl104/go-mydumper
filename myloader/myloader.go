@@ -103,12 +103,12 @@ func StartLoad() {
 		err = context.set_verbose()
 	}
 	initialize_common_options(context, MYLOADER)
-	hide_password(context)
-	ask_password(context)
 	if context.Common.ProgramVersion {
 		print_version(MYLOADER)
 		os.Exit(EXIT_SUCCESS)
 	}
+	hide_password(context)
+	ask_password(context)
 	initialize_set_names(context)
 	context.global.load_data_list_mutex = g_mutex_new()
 	context.global.load_data_list = make(map[string]*sync.Mutex)

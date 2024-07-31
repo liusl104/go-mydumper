@@ -8,6 +8,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
+	"go-mydumper/src"
 	"io"
 	"os"
 	"path"
@@ -437,6 +438,10 @@ func m_key_file_merge(b *ini.File, a *ini.File) {
 
 func print_version(program string) {
 	fmt.Printf("%s v%s, built against %s %s  with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+	fmt.Printf("Git Commit Hash: %s\n", src.GitHash)
+	fmt.Printf("Git Branch: %s\n", src.GitBranch)
+	fmt.Printf("Build Time: %s\n", src.BuildTS)
+	fmt.Printf("Go Version: %s\n", src.GoVersion)
 }
 
 func initialize_set_names(o *OptionEntries) {
