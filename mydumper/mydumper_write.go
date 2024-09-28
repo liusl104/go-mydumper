@@ -130,22 +130,22 @@ func finalize_write(o *OptionEntries) {
 	o.global.lines_terminated_by = ""
 }
 
-func append_load_data_columns(statement *string, fields []*mysql.Field, num_fields uint) string {
+func append_load_data_columns(statement *strings.Builder, fields []*mysql.Field, num_fields uint) string {
 	var i uint
 	var str = "SET "
 	for i = 0; i < num_fields; i++ {
 		if i > 0 {
-			*statement += ","
+			statement.WriteString(",")
 		}
 		if fields[i].Type == mysql.MYSQL_TYPE_JSON {
-			*statement += "@"
-			*statement += string(fields[i].Name)
+			statement.WriteString("@")
+			statement.WriteString(string(fields[i].Name))
 			if len(str) > 4 {
 				str += ","
 			}
 			str += fmt.Sprintf("`%s`=CONVERT(@%s USING UTF8MB4)", fields[i].Name, fields[i].Name)
 		} else {
-			*statement += fmt.Sprintf("`%s`", fields[i].Name)
+			statement.WriteString(fmt.Sprintf("`%s`", fields[i].Name))
 		}
 	}
 	if len(str) > 4 {
@@ -195,60 +195,60 @@ func write_data(file *file_write, data string) bool {
 	return real_write_data(file, &f, data)
 }
 
-func initialize_load_data_statement(o *OptionEntries, statement *string, dbt *db_table, basename string, fields []*mysql.Field, num_fields uint) {
+func initialize_load_data_statement(o *OptionEntries, statement *strings.Builder, dbt *db_table, basename string, fields []*mysql.Field, num_fields uint) {
 	var character_set string
 	if o.Statement.SetNamesStr != "" {
 		character_set = o.Statement.SetNamesStr
 	} else {
 		character_set = dbt.character_set
 	}
-	*statement += fmt.Sprintf("LOAD DATA LOCAL INFILE '%s%s' REPLACE INTO TABLE `%s` ", basename, o.Exec.ExecPerThreadExtension, dbt.table)
+	statement.WriteString(fmt.Sprintf("LOAD DATA LOCAL INFILE '%s%s' REPLACE INTO TABLE `%s` ", basename, o.Exec.ExecPerThreadExtension, dbt.table))
 	if character_set != "" {
-		*statement += fmt.Sprintf("CHARACTER SET %s ", character_set)
+		statement.WriteString(fmt.Sprintf("CHARACTER SET %s ", character_set))
 	}
 	if o.Statement.FieldsTerminatedByLd != "" {
-		*statement += fmt.Sprintf("FIELDS TERMINATED BY '%s' ", o.Statement.FieldsTerminatedByLd)
+		statement.WriteString(fmt.Sprintf("FIELDS TERMINATED BY '%s' ", o.Statement.FieldsTerminatedByLd))
 	}
 	if o.Statement.FieldsEnclosedByLd != "" {
-		*statement += fmt.Sprintf("ENCLOSED BY '%s' ", o.Statement.FieldsEnclosedByLd)
+		statement.WriteString(fmt.Sprintf("ENCLOSED BY '%s' ", o.Statement.FieldsEnclosedByLd))
 	}
 	if o.Statement.FieldsEscapedBy != "" {
-		*statement += fmt.Sprintf("ESCAPED BY '%s' ", o.Statement.FieldsEscapedBy)
+		statement.WriteString(fmt.Sprintf("ESCAPED BY '%s' ", o.Statement.FieldsEscapedBy))
 	}
-	*statement += "LINES "
+	statement.WriteString("LINES ")
 	//if o.Statement.Lines_starting_by_ld != "" {
-	*statement += fmt.Sprintf("STARTING BY '%s' ", o.Statement.LinesStartingByLd)
+	statement.WriteString(fmt.Sprintf("STARTING BY '%s' ", o.Statement.LinesStartingByLd))
 	//}
-	*statement += fmt.Sprintf("TERMINATED BY '%s' (", o.Statement.LinesTerminatedByLd)
+	statement.WriteString(fmt.Sprintf("TERMINATED BY '%s' (", o.Statement.LinesTerminatedByLd))
 	if dbt.columns_on_insert != "" {
-		*statement += dbt.columns_on_insert
-		*statement += ")"
+		statement.WriteString(dbt.columns_on_insert)
+		statement.WriteString(")")
 	} else {
 		var set_statement = append_load_data_columns(statement, fields, num_fields)
-		*statement += ")"
+		statement.WriteString(")")
 		if set_statement != "" {
-			*statement += set_statement
+			statement.WriteString(set_statement)
 		}
 	}
-	*statement += ";\n"
+	statement.WriteString(";\n")
 
 }
 
-func write_statement(load_data_file *file_write, filessize *float64, statement *string, dbt *db_table) bool {
-	if !real_write_data(load_data_file, filessize, *statement) {
+func write_statement(load_data_file *file_write, filessize *float64, statement *strings.Builder, dbt *db_table) bool {
+	if !real_write_data(load_data_file, filessize, statement.String()) {
 		log.Errorf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 		return false
 	}
-	*statement = ""
+	statement.Reset()
 	return true
 }
 
 func write_load_data_statement(o *OptionEntries, tj *table_job, fields []*mysql.Field, num_fields uint) bool {
-	var statement string
+	var statement *strings.Builder
 	var basename = path.Base(tj.dat_filename)
-	initialize_sql_statement(o, &statement)
-	initialize_load_data_statement(o, &statement, tj.dbt, basename, fields, num_fields)
-	if !write_data(tj.sql_file, statement) {
+	initialize_sql_statement(o, statement)
+	initialize_load_data_statement(o, statement, tj.dbt, basename, fields, num_fields)
+	if !write_data(tj.sql_file, statement.String()) {
 		log.Errorf("Could not write out data for %s.%s", tj.dbt.database.name, tj.dbt.table)
 		return false
 	}
@@ -307,58 +307,58 @@ func message_dumping_data(o *OptionEntries, td *thread_data, tj *table_job) {
 		order_by, tj.order_by, tj.sql_filename, tj.dbt.estimated_remaining_steps, get_estimated_remaining_of_all_chunks(o))
 }
 
-func write_load_data_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *string, fun_ptr_i *function_pointer) {
+func write_load_data_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer) {
 	_ = conn
 	if &column != nil {
 		fun_ptr_i = nil
 		// TODO
 	}
 	if column.Value() == nil {
-		*statement_row += "\\N"
+		statement_row.WriteString("\\N")
 	} else if field.Type != mysql.MYSQL_TYPE_LONG && field.Type != mysql.MYSQL_TYPE_LONGLONG && field.Type != mysql.MYSQL_TYPE_INT24 && field.Type != mysql.MYSQL_TYPE_SHORT {
-		*statement_row += o.global.fields_enclosed_by
+		statement_row.WriteString(o.global.fields_enclosed_by)
 		*escaped = mysql.Escape(string(column.AsString()))
 		// *escaped = strings.ReplaceAll(*escaped, "\\", o.Statement.Fields_escaped_by)
 		*escaped = m_replace_char_with_char('\\', []rune(o.Statement.FieldsEscapedBy)[0], []rune(*escaped))
 		*escaped = string(m_escape_char_with_char([]byte(o.global.fields_terminated_by), []byte(o.Statement.FieldsEscapedBy), []byte(*escaped)))
-		*statement_row += *escaped
-		*statement_row += o.global.fields_enclosed_by
+		statement_row.WriteString(*escaped)
+		statement_row.WriteString(o.global.fields_enclosed_by)
 	} else {
-		*statement_row += fmt.Sprintf("%d", column.AsInt64())
+		statement_row.WriteString(fmt.Sprintf("%d", column.AsInt64()))
 	}
 }
 
-func write_sql_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *string, fun_ptr_i *function_pointer) {
+func write_sql_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer) {
 	if &column != nil {
 		fun_ptr_i = nil
 	}
 	_ = conn
 	if column.Value() == nil {
-		*statement_row += "NULL"
+		statement_row.WriteString("NULL")
 	} else if field.Type <= mysql.MYSQL_TYPE_INT24 {
-		*statement_row += fmt.Sprintf("%d", column.AsInt64())
+		statement_row.WriteString(fmt.Sprintf("%d", column.AsInt64()))
 	} else if length.ColumnLength == 0 {
-		*statement_row += o.global.fields_enclosed_by
-		*statement_row += o.global.fields_enclosed_by
+		statement_row.WriteString(o.global.fields_enclosed_by)
+		statement_row.WriteString(o.global.fields_enclosed_by)
 	} else if field.Type == mysql.MYSQL_TYPE_BLOB || o.Statement.HexBlob {
-		*statement_row += "0x"
+		statement_row.WriteString("0x")
 		*escaped = hex.EncodeToString(column.AsString())
-		*statement_row += *escaped
+		statement_row.WriteString(*escaped)
 	} else {
 		*escaped = mysql.Escape(string(column.AsString()))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
-			*statement_row += "CONVERT("
+			statement_row.WriteString("CONVERT(")
 		}
-		*statement_row += fmt.Sprintf("%s%s%s", o.global.fields_enclosed_by, *escaped, o.global.fields_enclosed_by)
+		statement_row.WriteString(fmt.Sprintf("%s%s%s", o.global.fields_enclosed_by, *escaped, o.global.fields_enclosed_by))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
-			*statement_row += " USING UTF8MB4)"
+			statement_row.WriteString(" USING UTF8MB4)")
 		}
 	}
 }
 
-func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *string, statement_row *string, write_column_into_string func(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *string, fun_ptr_i *function_pointer)) {
+func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *string, statement_row *strings.Builder, write_column_into_string func(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer)) {
 	var i uint
-	*statement_row += o.global.lines_starting_by
+	statement_row.WriteString(o.global.lines_starting_by)
 	_ = dbt
 	var f = dbt.anonymized_function
 	var p *function_pointer
@@ -370,11 +370,11 @@ func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, r
 			p = f[i]
 		}
 		write_column_into_string(o, conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
-		*statement_row += o.global.fields_terminated_by
+		statement_row.WriteString(o.global.fields_terminated_by)
 
 	}
 	write_column_into_string(o, conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
-	*statement_row += o.global.lines_terminated_by
+	statement_row.WriteString(o.global.lines_terminated_by)
 }
 
 func update_dbt_rows(dbt *db_table, num_rows uint64) {
@@ -388,8 +388,8 @@ func write_row_into_file_in_load_data_mode(o *OptionEntries, conn *client.Conn, 
 	var result mysql.Result
 	var dbt = tj.dbt
 	var num_rows uint64
-	var statement string
-	var statement_row string
+	var statement strings.Builder
+	var statement_row strings.Builder
 	var fields []*mysql.Field
 	var lengths []*mysql.Field
 	var escaped string
@@ -420,12 +420,12 @@ func write_row_into_file_in_load_data_mode(o *OptionEntries, conn *client.Conn, 
 			tj.filesize = 0
 			num_rows = 0
 		}
-		statement_row = ""
+		statement_row.Reset()
 		write_row_into_string(o, conn, dbt, row, fields, lengths, num_fields, &escaped, &statement_row, write_load_data_column_into_string)
-		tj.filesize += float64(len(statement_row) + 1)
-		statement += statement_row
+		tj.filesize += float64(statement_row.Len() + 1)
+		statement.WriteString(statement_row.String())
 		/* INSERT statement is closed before over limit but this is load data, so we only need to flush the data to disk*/
-		if len(statement) > o.Statement.StatementSize {
+		if statement.Len() > o.Statement.StatementSize {
 			if !write_statement(tj.dat_file, &(tj.filesize), &statement, dbt) {
 				update_dbt_rows(dbt, num_rows)
 				num_rows = 0
@@ -457,8 +457,8 @@ func write_row_into_file_in_load_data_mode(o *OptionEntries, conn *client.Conn, 
 		}
 	}
 	update_dbt_rows(dbt, num_rows)
-	if len(statement) > 0 {
-		if !real_write_data(tj.dat_file, &(tj.filesize), statement) {
+	if statement.Len() > 0 {
+		if !real_write_data(tj.dat_file, &(tj.filesize), statement.String()) {
 			log.Fatalf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 			return
 		}
@@ -472,8 +472,8 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 	var dbt = tj.dbt
 	var num_rows uint64
 	var num_rows_st uint64
-	var statement string
-	var statement_row string
+	var statement strings.Builder
+	var statement_row strings.Builder
 	var fields []*mysql.Field
 	var lengths []*mysql.Field
 	var escaped string
@@ -481,35 +481,35 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 	err = conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
 		num_rows++
 		// 后执行
-		if statement == "" {
+		if statement.Len() == 0 {
 			if !intToBool(int(tj.st_in_file)) {
 				initialize_sql_statement(o, &statement)
-				if !real_write_data(tj.sql_file, &tj.filesize, statement) {
+				if !real_write_data(tj.sql_file, &tj.filesize, statement.String()) {
 					log.Fatalf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 					return err
 				}
-				statement = ""
+				statement.Reset()
 			}
 			dbt.chunks_mutex.Lock()
-			statement += dbt.insert_statement
+			statement.WriteString(dbt.insert_statement)
 			dbt.chunks_mutex.Unlock()
 			num_rows_st = 0
 		}
-		if statement_row != "" {
-			statement += statement_row
-			statement_row = ""
+		if statement_row.Len() != 0 {
+			statement.WriteString(statement_row.String())
+			statement_row.Reset()
 			num_rows_st++
 		}
 		write_row_into_string(o, conn, dbt, row, fields, lengths, num_fields, &escaped, &statement_row, write_sql_column_into_string)
-		if len(statement)+len(statement_row)+1 > o.Statement.StatementSize || (dbt.chunk_filesize > 0 && uint(math.Ceil(tj.filesize)/1024/1024) > dbt.chunk_filesize) {
+		if statement.Len()+statement_row.Len()+1 > o.Statement.StatementSize || (dbt.chunk_filesize > 0 && uint(math.Ceil(tj.filesize)/1024/1024) > dbt.chunk_filesize) {
 			update_dbt_rows(dbt, num_rows)
 			if num_rows_st == 0 {
-				statement += statement_row
-				statement_row = ""
+				statement.WriteString(statement_row.String())
+				statement_row.Reset()
 				log.Warnf("Row bigger than statement_size for %s.%s", dbt.database.name, dbt.table)
 			}
-			statement += o.global.statement_terminated_by
-			if !real_write_data(tj.sql_file, &tj.filesize, statement) {
+			statement.WriteString(o.global.statement_terminated_by)
+			if !real_write_data(tj.sql_file, &tj.filesize, statement.String()) {
 				log.Fatalf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 			}
 			tj.st_in_file++
@@ -526,15 +526,15 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 			if o.global.shutdown_triggered {
 				return nil
 			}
-			statement = ""
+			statement.Reset()
 
 		} else {
 			if intToBool(int(num_rows_st)) {
-				statement += ","
+				statement.WriteString(",")
 			}
-			statement += statement_row
+			statement.WriteString(statement_row.String())
 			num_rows_st++
-			statement_row = ""
+			statement_row.Reset()
 		}
 		return nil
 	}, func(result *mysql.Result) error {
@@ -553,16 +553,16 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 		}
 		return nil
 	})
-	if statement_row != "" {
-		if statement == "" {
-			statement += dbt.insert_statement
+	if statement_row.Len() != 0 {
+		if statement.Len() == 0 {
+			statement.WriteString(dbt.insert_statement)
 		}
-		statement += statement_row
+		statement.WriteString(statement_row.String())
 	}
 	update_dbt_rows(dbt, num_rows)
-	if statement != "" {
-		statement += o.global.statement_terminated_by
-		if !real_write_data(tj.sql_file, &tj.filesize, statement) {
+	if statement.Len() != 0 {
+		statement.WriteString(o.global.statement_terminated_by)
+		if !real_write_data(tj.sql_file, &tj.filesize, statement.String()) {
 			log.Fatalf("Could not write out closing newline for %s.%s, now this is sad!", dbt.database.name, dbt.table)
 			return
 		}
@@ -612,9 +612,12 @@ func write_table_job_into_file(o *OptionEntries, conn *client.Conn, tj *table_jo
 	if tj.dbt.limit != "" {
 		limit = "LIMIT"
 	}
-	query = fmt.Sprintf("SELECT %s %s FROM `%s`.`%s` %s %s %s %s %s %s %s %s %s %s %s", cache, fields,
-		tj.dbt.database.name, tj.dbt.table, tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, tj.order_by, limit, tj.dbt.limit)
-
+	err := conn.UseDB(tj.dbt.database.name)
+	if err != nil {
+		log.Errorf("Could not use DB '%s': %v", tj.dbt.database.name, err)
+		return
+	}
+	query = fmt.Sprintf("SELECT %s %s FROM `%s` %s %s %s %s %s %s %s %s %s %s %s", cache, fields, tj.dbt.table, tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, tj.order_by, limit, tj.dbt.limit)
 	if o.Statement.LoadData {
 		write_row_into_file_in_load_data_mode(o, conn, query, tj)
 	} else {

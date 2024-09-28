@@ -24,7 +24,7 @@ LDFLAGS += -X "$(PKG_NAME)/src.GitHash=$(GITHASH)"
 LDFLAGS += -X "$(PKG_NAME)/src.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(PKG_NAME)/src.GoVersion=$(GOVERSION)"
 
-all: build
+all: linux windows darwin
 
 build:
 	$(GOBUILD)  -ldflags '$(LDFLAGS) -s -w'  -o $(MYDUMPER_BINARY_NAME) $(MYDUMPER_BUILD)

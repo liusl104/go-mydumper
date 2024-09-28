@@ -368,21 +368,24 @@ func determine_show_table_status_columns(result []*mysql.Field, ecol *int, ccol 
 	}
 }
 
-func initialize_sql_statement(o *OptionEntries, statement *string) {
+func initialize_sql_statement(o *OptionEntries, statement *strings.Builder) {
 	if o.is_mysql_like() {
 		if o.global.set_names_statement != "" {
-			*statement = fmt.Sprintf("%s;\n", o.global.set_names_statement)
+			statement.Reset()
+			statement.WriteString(fmt.Sprintf("%s;\n", o.global.set_names_statement))
 		}
-		*statement += "/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n"
+		statement.WriteString("/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
 		if !o.Statement.SkipTz {
-			*statement += fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n")
+			statement.WriteString(fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n"))
 		}
 	} else if o.global.detected_server == SERVER_TYPE_TIDB {
 		if !o.Statement.SkipTz {
-			*statement = fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n")
+			statement.Reset()
+			statement.WriteString(fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n"))
 		}
 	} else {
-		*statement = "SET FOREIGN_KEY_CHECKS=0;\n"
+		statement.Reset()
+		statement.WriteString("SET FOREIGN_KEY_CHECKS=0;\n")
 	}
 }
 

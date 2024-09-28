@@ -168,9 +168,9 @@ func write_table_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
 	}
-	var statement string
-	initialize_sql_statement(o, &statement)
-	if !write_data(outfile, statement) {
+	var statement *strings.Builder = new(strings.Builder)
+	initialize_sql_statement(o, statement)
+	if !write_data(outfile, statement.String()) {
 		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
 	}
 	query = fmt.Sprintf("SHOW CREATE TABLE `%s`.`%s`", dbt.database.name, dbt.table)
@@ -182,7 +182,7 @@ func write_table_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *
 			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
 		}
 	}
-	statement = ""
+	statement.Reset()
 	var create_table string
 	row := result.Values[0]
 	if o.global.schema_sequence_fix {
@@ -190,9 +190,9 @@ func write_table_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *
 	} else {
 		create_table = string(row[1].AsString())
 	}
-	statement += create_table
-	statement += ";\n"
-	if !write_data(outfile, statement) {
+	statement.WriteString(create_table)
+	statement.WriteString(";\n")
+	if !write_data(outfile, statement.String()) {
 		log.Fatalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
 	}
 	m_close(o, 0, outfile, filename, 1, dbt)

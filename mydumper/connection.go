@@ -23,9 +23,18 @@ func initialize_connection(o *OptionEntries, app string) {
 }
 
 func connection_arguments_callback(o *OptionEntries) error {
-	if o.Connection.Protocol == "" {
+	if o.Connection.HidePassword != "" {
+		var tempPasswd []byte = make([]byte, len(o.Connection.HidePassword))
+		copy(tempPasswd, []byte(o.Connection.HidePassword))
+		o.Connection.Password = string(tempPasswd)
+	}
+	if o.Connection.Port != 0 || o.Connection.Hostname != "" {
 		o.Connection.Protocol = "tcp"
 	}
+	if o.Connection.Socket != "" || (o.Connection.Port == 0 && o.Connection.Hostname == "" && o.Connection.Socket == "") {
+		o.Connection.Protocol = "socket"
+	}
+
 	if o.Connection.Protocol != "" {
 		if strings.ToLower(o.Connection.Protocol) == "tcp" {
 			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
@@ -46,10 +55,16 @@ func connection_arguments_callback(o *OptionEntries) error {
 func configure_connection(o *OptionEntries) (conn *client.Conn, err error) {
 	var host string
 	if o.Connection.Protocol == "tcp" {
+		if o.Connection.Hostname != "" && o.Connection.Port == 0 {
+			o.Connection.Port = 3306
+		}
 		host = fmt.Sprintf("%s:%d", o.Connection.Hostname, o.Connection.Port)
 	}
 	if o.Connection.Protocol == "socket" {
 		host = o.Connection.Socket
+		if host == "" {
+			host = "/var/lib/mysql/mysql.sock"
+		}
 	}
 	if o.CommonConnection.Ssl {
 		tlsConfig := client.NewClientTLSConfig([]byte(o.CommonConnection.Ca), []byte(o.CommonConnection.Cert), []byte(o.CommonConnection.Key),
@@ -128,17 +143,15 @@ func m_connect(o *OptionEntries) (*client.Conn, error) {
 }
 
 func hide_password(o *OptionEntries) {
-	if o.Connection.Password != "" {
-		var tmpPasswd []byte = []byte(o.Connection.Password)
+	if o.Connection.HidePassword != "" {
 		for index := 1; index <= len(os.Args)-1; index++ {
-			if os.Args[index] == string(tmpPasswd) {
+			if os.Args[index] == string(o.Connection.HidePassword) {
 				p := *(*unsafe.Pointer)(unsafe.Pointer(&os.Args[index]))
 				for i := 0; i < len(os.Args[index]); i++ {
 					*(*uint8)(unsafe.Pointer(uintptr(p) + uintptr(i))) = 'X'
 				}
 			}
 		}
-		o.Connection.Password = string(tmpPasswd)
 	}
 }
 
@@ -166,7 +179,7 @@ func terminalInput() string {
 }
 
 func ask_password(o *OptionEntries) {
-	if len(o.Connection.Password) == 0 || o.Connection.AskPassword {
+	if o.Connection.Password == "" && o.Connection.AskPassword {
 		o.Connection.Password = passwordPrompt()
 	}
 }

@@ -166,7 +166,7 @@ func terminalInput() string {
 }
 
 func ask_password(o *OptionEntries) {
-	if len(o.Connection.Password) == 0 || o.Connection.AskPassword {
+	if o.Connection.Password == "" && o.Connection.AskPassword {
 		o.Connection.Password = passwordPrompt()
 	}
 }

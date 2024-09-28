@@ -324,13 +324,14 @@ type CommonConnectionEntries struct {
 }
 
 type ConnectionEntries struct {
-	Hostname    string `json:"hostname" ini:"host"`             // The host to connect to
-	Username    string `json:"username" ini:"user"`             // Username with the necessary privileges
-	Password    string `json:"password" ini:"password"`         // User password
-	AskPassword bool   `json:"ask_password" ini:"ask_password"` // Prompt For User password
-	Port        int    `json:"port" ini:"port"`                 // TCP/IP port to connect to
-	Socket      string `json:"socket" ini:"socket"`             // UNIX domain socket file to use for connection
-	Protocol    string `json:"protocol" ini:"protocol"`         // The protocol to use for connection (tcp, socket)
+	Hostname     string `json:"hostname" ini:"host"`               // The host to connect to
+	Username     string `json:"username" ini:"user"`               // Username with the necessary privileges
+	Password     string `json:"password" ini:"password"`           // User password
+	HidePassword string `json:"hide_password" ini:"hide_password"` // hide password
+	AskPassword  bool   `json:"ask_password" ini:"ask_password"`   // Prompt For User password
+	Port         int    `json:"port" ini:"port"`                   // TCP/IP port to connect to
+	Socket       string `json:"socket" ini:"socket"`               // UNIX domain socket file to use for connection
+	Protocol     string `json:"protocol" ini:"protocol"`           // The protocol to use for connection (tcp, socket)
 }
 
 func newEntries() *OptionEntries {
@@ -455,9 +456,9 @@ func commandEntries(o *OptionEntries) {
 	// connection
 	pflag.StringVarP(&o.Connection.Hostname, "host", "h", "", "The host to connect to")
 	pflag.StringVarP(&o.Connection.Username, "user", "u", "", "Username with the necessary privileges")
-	pflag.StringVarP(&o.Connection.Password, "password", "p", "", "User password")
+	pflag.StringVarP(&o.Connection.HidePassword, "password", "p", "", "User password")
 	pflag.BoolVarP(&o.Connection.AskPassword, "ask-password", "a", false, "Prompt For User password")
-	pflag.IntVarP(&o.Connection.Port, "port", "P", 3306, "TCP/IP port to connect to")
+	pflag.IntVarP(&o.Connection.Port, "port", "P", 0, "TCP/IP port to connect to")
 	pflag.StringVarP(&o.Connection.Socket, "socket", "S", "", "UNIX domain socket file to use for connection")
 	pflag.StringVar(&o.Connection.Protocol, "protocol", "tcp", "The protocol to use for connection (tcp, socket)")
 	// Common module
@@ -466,7 +467,7 @@ func commandEntries(o *OptionEntries) {
 	pflag.StringVar(&o.Common.IdentifierQuoteCharacter, "identifier-quote-character", "", "This set the identifier quote character that is used to INSERT statements only on mydumper and to split statement on myloader. Use SQL_MODE to change the CREATE TABLE statements Posible values are: BACKTICK and DOUBLE_QUOTE. Default: BACKTICK")
 	pflag.IntVarP(&o.Common.Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info")
 	pflag.BoolVar(&o.Common.Debug, "debug", false, "(automatically sets verbosity to 3),print more info")
-	pflag.StringVar(&o.Common.DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/cnf")
+	pflag.StringVar(&o.Common.DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/mydumper.cnf")
 	pflag.StringVar(&o.Common.DefaultsExtraFile, "defaults-extra-file", "", "Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values")
 	// pflag.StringVar(&o.Common.Fifo_directory, "fifodir", "", "Directory where the FIFO files will be created when needed. Default: Same as backup")
 
