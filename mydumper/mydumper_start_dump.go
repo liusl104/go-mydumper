@@ -229,7 +229,7 @@ type db_table struct {
 	rows_in_sts               uint64
 	select_fields             string
 	complete_insert           bool
-	insert_statement          string
+	insert_statement          *strings.Builder
 	is_innodb                 bool
 	has_json_fields           bool
 	character_set             string

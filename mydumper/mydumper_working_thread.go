@@ -1097,7 +1097,7 @@ func new_db_table(o *OptionEntries, conn *client.Conn, conf *configuration, data
 	dbt.max = ""
 	dbt.chunk_type = UNDEFINED
 	dbt.chunks = nil
-	dbt.insert_statement = ""
+	dbt.insert_statement = new(strings.Builder)
 	dbt.chunks_mutex = g_mutex_new()
 	dbt.chunks_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	dbt.chunks_completed = 0

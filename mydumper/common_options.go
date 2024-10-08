@@ -16,6 +16,8 @@ const (
 )
 
 func arguments_callback(o *OptionEntries) bool {
+	o.global.sync_wait = -1
+	o.global.insert_statement = INSERT
 	if o.Extra.Compress {
 		if o.Extra.CompressMethod == "" {
 			o.Extra.CompressMethod = GZIP
@@ -26,9 +28,6 @@ func arguments_callback(o *OptionEntries) bool {
 			return true
 		}
 	}
-	o.global.sync_wait = -1
-	o.global.insert_statement = INSERT
-
 	return false
 }
 

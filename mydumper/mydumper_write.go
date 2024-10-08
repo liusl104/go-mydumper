@@ -8,6 +8,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"math"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -130,9 +131,10 @@ func finalize_write(o *OptionEntries) {
 	o.global.lines_terminated_by = ""
 }
 
-func append_load_data_columns(statement *strings.Builder, fields []*mysql.Field, num_fields uint) string {
+func append_load_data_columns(statement *strings.Builder, fields []*mysql.Field, num_fields uint) *strings.Builder {
 	var i uint
-	var str = "SET "
+	var str *strings.Builder = new(strings.Builder)
+	str.WriteString("SET ")
 	for i = 0; i < num_fields; i++ {
 		if i > 0 {
 			statement.WriteString(",")
@@ -140,44 +142,59 @@ func append_load_data_columns(statement *strings.Builder, fields []*mysql.Field,
 		if fields[i].Type == mysql.MYSQL_TYPE_JSON {
 			statement.WriteString("@")
 			statement.WriteString(string(fields[i].Name))
-			if len(str) > 4 {
-				str += ","
+			if str.Len() > 4 {
+				str.WriteString(",")
 			}
-			str += fmt.Sprintf("`%s`=CONVERT(@%s USING UTF8MB4)", fields[i].Name, fields[i].Name)
+			str.WriteString("`")
+			str.Write(fields[i].Name)
+			str.WriteString("`=CONVERT(@")
+			str.Write(fields[i].Name)
+			str.WriteString(" USING UTF8MB4)")
 		} else {
-			statement.WriteString(fmt.Sprintf("`%s`", fields[i].Name))
+			str.WriteString("`")
+			str.Write(fields[i].Name)
+			str.WriteString("`")
 		}
 	}
-	if len(str) > 4 {
+	if str.Len() > 4 {
 		return str
 	}
-	return ""
+	return str
 }
 
-func append_columns(o *OptionEntries, statement *string, fields []*mysql.Field, num_fields uint) {
+func append_columns(o *OptionEntries, statement *strings.Builder, fields []*mysql.Field, num_fields uint) {
 	var i uint
 	for i = 0; i < num_fields; i++ {
 		if i > 0 {
-			*statement += ","
+			statement.WriteString(",")
 		}
-		*statement += fmt.Sprintf("%s%s%s", o.Common.IdentifierQuoteCharacter, fields[i].Name, o.Common.IdentifierQuoteCharacter)
+		statement.WriteString(o.Common.IdentifierQuoteCharacter)
+		statement.Write(fields[i].Name)
+		statement.WriteString(o.Common.IdentifierQuoteCharacter)
 	}
 
 }
 
 func build_insert_statement(o *OptionEntries, dbt *db_table, fields []*mysql.Field, num_fields uint) {
-	dbt.insert_statement = o.global.insert_statement
-	dbt.insert_statement += fmt.Sprintf(" INTO %s%s%s", o.Common.IdentifierQuoteCharacter, dbt.table, o.Common.IdentifierQuoteCharacter)
+	dbt.insert_statement.Reset()
+	dbt.insert_statement.WriteString(o.global.insert_statement)
+	dbt.insert_statement.WriteString(" INTO ")
+	dbt.insert_statement.WriteString(o.Common.IdentifierQuoteCharacter)
+	dbt.insert_statement.WriteString(dbt.table)
+	dbt.insert_statement.WriteString(o.Common.IdentifierQuoteCharacter)
+
 	if dbt.columns_on_insert != "" {
-		dbt.insert_statement += fmt.Sprintf(" (%s)", dbt.columns_on_insert)
+		dbt.insert_statement.WriteString(" (")
+		dbt.insert_statement.WriteString(dbt.columns_on_insert)
+		dbt.insert_statement.WriteString(")")
 	} else {
 		if dbt.complete_insert {
-			dbt.insert_statement += fmt.Sprintf(" (")
-			append_columns(o, &dbt.insert_statement, fields, num_fields)
-			dbt.insert_statement += fmt.Sprintf(")")
+			dbt.insert_statement.WriteString(" (")
+			append_columns(o, dbt.insert_statement, fields, num_fields)
+			dbt.insert_statement.WriteString(")")
 		}
 	}
-	dbt.insert_statement += " VALUES "
+	dbt.insert_statement.WriteString(" VALUES ")
 }
 
 func real_write_data(file *file_write, filesize *float64, data string) bool {
@@ -226,8 +243,8 @@ func initialize_load_data_statement(o *OptionEntries, statement *strings.Builder
 	} else {
 		var set_statement = append_load_data_columns(statement, fields, num_fields)
 		statement.WriteString(")")
-		if set_statement != "" {
-			statement.WriteString(set_statement)
+		if set_statement.Len() != 0 {
+			statement.WriteString(set_statement.String())
 		}
 	}
 	statement.WriteString(";\n")
@@ -324,7 +341,7 @@ func write_load_data_column_into_string(o *OptionEntries, conn *client.Conn, col
 		statement_row.WriteString(*escaped)
 		statement_row.WriteString(o.global.fields_enclosed_by)
 	} else {
-		statement_row.WriteString(fmt.Sprintf("%d", column.AsInt64()))
+		statement_row.WriteString(strconv.FormatInt(column.AsInt64(), 10))
 	}
 }
 
@@ -336,7 +353,7 @@ func write_sql_column_into_string(o *OptionEntries, conn *client.Conn, column my
 	if column.Value() == nil {
 		statement_row.WriteString("NULL")
 	} else if field.Type <= mysql.MYSQL_TYPE_INT24 {
-		statement_row.WriteString(fmt.Sprintf("%d", column.AsInt64()))
+		statement_row.WriteString(strconv.FormatInt(column.AsInt64(), 10))
 	} else if length.ColumnLength == 0 {
 		statement_row.WriteString(o.global.fields_enclosed_by)
 		statement_row.WriteString(o.global.fields_enclosed_by)
@@ -349,7 +366,10 @@ func write_sql_column_into_string(o *OptionEntries, conn *client.Conn, column my
 		if field.Type == mysql.MYSQL_TYPE_JSON {
 			statement_row.WriteString("CONVERT(")
 		}
-		statement_row.WriteString(fmt.Sprintf("%s%s%s", o.global.fields_enclosed_by, *escaped, o.global.fields_enclosed_by))
+		statement_row.WriteString(o.global.fields_enclosed_by)
+		statement_row.WriteString(*escaped)
+		statement_row.WriteString(o.global.fields_enclosed_by)
+		// statement_row.WriteString(fmt.Sprintf("%s%s%s", o.global.fields_enclosed_by, *escaped, o.global.fields_enclosed_by))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
 			statement_row.WriteString(" USING UTF8MB4)")
 		}
@@ -360,15 +380,15 @@ func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, r
 	var i uint
 	statement_row.WriteString(o.global.lines_starting_by)
 	_ = dbt
-	var f = dbt.anonymized_function
+	// var f = dbt.anonymized_function
 	var p *function_pointer
 
 	for i = 0; i < num_fields-1; i++ {
-		if f == nil {
+		/*if f == nil {
 			p = new(function_pointer)
 		} else {
 			p = f[i]
-		}
+		}*/
 		write_column_into_string(o, conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
 		statement_row.WriteString(o.global.fields_terminated_by)
 
@@ -491,7 +511,7 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 				statement.Reset()
 			}
 			dbt.chunks_mutex.Lock()
-			statement.WriteString(dbt.insert_statement)
+			statement.WriteString(dbt.insert_statement.String())
 			dbt.chunks_mutex.Unlock()
 			num_rows_st = 0
 		}
@@ -544,9 +564,9 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 		fields = result.Fields
 		update_files_on_table_job(o, tj)
 		message_dumping_data(o, tj.td, tj)
-		if dbt.insert_statement == "" {
+		if dbt.insert_statement.Len() == 0 {
 			dbt.chunks_mutex.Lock()
-			if dbt.insert_statement == "" {
+			if dbt.insert_statement.Len() == 0 {
 				build_insert_statement(o, dbt, fields, num_fields)
 			}
 			dbt.chunks_mutex.Unlock()
@@ -555,7 +575,7 @@ func write_row_into_file_in_sql_mode(o *OptionEntries, conn *client.Conn, query 
 	})
 	if statement_row.Len() != 0 {
 		if statement.Len() == 0 {
-			statement.WriteString(dbt.insert_statement)
+			statement.WriteString(dbt.insert_statement.String())
 		}
 		statement.WriteString(statement_row.String())
 	}
