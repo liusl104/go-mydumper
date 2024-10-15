@@ -1,13 +1,17 @@
 package mydumper
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"io"
 	"math"
+	"os"
 	"path"
 	"testing"
+	"time"
 )
 
 func TestReplace_escaped_strings(t *testing.T) {
@@ -113,5 +117,58 @@ func TestG_key_file_has_group(t *testing.T) {
 		t.Log("ok")
 	} else {
 		t.Fail()
+	}
+}
+
+func fileReader() *bufio.Reader {
+	file, err := os.Open("/Users/liu/GolandProjects/go-mydumper/cmd/config.ini")
+	if err != nil {
+		return nil
+	}
+	reader := bufio.NewReader(file)
+	return reader
+}
+
+func outputReader(b *bufio.Reader) string {
+	line, err := b.ReadString('\n')
+	if err != nil {
+		if err == io.EOF {
+			return ""
+		}
+	}
+	return line
+}
+func TestReadFile(t *testing.T) {
+	reader := fileReader()
+
+	for {
+		line := outputReader(reader)
+		if line == "" {
+			break
+		}
+		t.Log(line)
+		time.Sleep(1 * time.Second)
+	}
+
+}
+
+func TestNumberInt(t *testing.T) {
+	conn, err := client.Connect("10.23.14.50:5000", "root", "admin123", "mysql")
+
+	result, err := conn.Execute("select id from test.tb")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	// fmt.Println(result.FieldNames)
+	//
+	for _, row := range result.Values {
+		for _, column := range row {
+			// strconv.FormatInt()
+			t.Logf("%d", column.Value())
+			t.Logf("%s", column.AsString())
+			t.Log(column.AsInt64())
+
+		}
+
 	}
 }
