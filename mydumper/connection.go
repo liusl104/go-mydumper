@@ -7,7 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/term"
 	"os"
-	"strings"
+	"strconv"
 	"sync/atomic"
 	"unsafe"
 )
@@ -22,46 +22,25 @@ func initialize_connection(o *OptionEntries, app string) {
 	o.global.print_connection_details = 1
 }
 
-func connection_arguments_callback(o *OptionEntries) error {
-	if o.Connection.HidePassword != "" {
-		var tempPasswd []byte = make([]byte, len(o.Connection.HidePassword))
-		copy(tempPasswd, []byte(o.Connection.HidePassword))
-		o.Connection.Password = string(tempPasswd)
-	}
-	if o.Connection.Port != 0 || o.Connection.Hostname != "" {
-		o.Connection.Protocol = "tcp"
-	}
-	if o.Connection.Socket != "" || (o.Connection.Port == 0 && o.Connection.Hostname == "" && o.Connection.Socket == "") {
-		o.Connection.Protocol = "socket"
-	}
-
-	if o.Connection.Protocol != "" {
-		if strings.ToLower(o.Connection.Protocol) == "tcp" {
-			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
-			return nil
-		}
-		if strings.ToLower(o.Connection.Protocol) == "socket" {
-			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
-			return nil
-		}
-		log.Errorf("option --protocol value error")
-		return fmt.Errorf("option --protocol value error")
-	}
-
-	return nil
-
-}
-
 func configure_connection(o *OptionEntries) (conn *client.Conn, err error) {
 	var host string
 	if o.Connection.Protocol == "tcp" {
 		if o.Connection.Hostname != "" && o.Connection.Port == 0 {
-			o.Connection.Port = 3306
+			p := os.Getenv("MYSQL_TCP_PORT")
+			if p == "" {
+				o.Connection.Port = 3306
+			} else {
+				i, _ := strconv.ParseInt(p, 10, 64)
+				o.Connection.Port = int(i)
+			}
+		}
+		if o.Connection.Hostname == "" {
+			o.Connection.Hostname = os.Getenv("MYSQL_HOST")
 		}
 		host = fmt.Sprintf("%s:%d", o.Connection.Hostname, o.Connection.Port)
 	}
 	if o.Connection.Protocol == "socket" {
-		host = o.Connection.Socket
+		host = o.Connection.SocketPath
 		if host == "" {
 			host = "/var/lib/mysql/mysql.sock"
 		}
@@ -112,8 +91,8 @@ func print_connection_details_once(o *OptionEntries) {
 	if o.Connection.Port > 0 {
 		print_body += fmt.Sprintf(" Port: %d", o.Connection.Port)
 	}
-	if o.Connection.Socket != "" {
-		print_body += fmt.Sprintf(" Socket: %s", o.Connection.Socket)
+	if o.Connection.SocketPath != "" {
+		print_body += fmt.Sprintf(" SocketPath: %s", o.Connection.SocketPath)
 	}
 	if o.Connection.Username != "" {
 		print_body += fmt.Sprintf(" User: %s", o.Connection.Username)

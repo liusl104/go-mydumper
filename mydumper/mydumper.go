@@ -26,10 +26,14 @@ func CommandDump() error {
 	var context *OptionEntries
 	context = newEntries()
 	commandEntries(context)
-	context.StartDump()
-	if context.CommonOptionEntries.LogFile != "" {
-		context.global.log_output.Close()
+	if !context.Daemon.DaemonMode {
+		err := StartDump(context)
+		if err != nil {
+			return err
+		}
 	}
-
+	if context.CommonOptionEntries.LogFile != "" {
+		_ = context.global.log_output.Close()
+	}
 	return nil
 }

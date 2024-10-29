@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+func tables_skiplist_cmp(a string, b string, user_data any) bool {
+	_ = user_data
+	return strings.Compare(a, b) == 0
+}
+
 func read_tables_skiplist(o *OptionEntries, filename string) error {
 	var err error
 	var read_open *os.File

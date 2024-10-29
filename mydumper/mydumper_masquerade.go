@@ -7,3 +7,11 @@ func initialize_masquerade(o *OptionEntries) {
 func finalize_masquerade(o *OptionEntries) {
 	o.global.file_hash = nil
 }
+
+func get_estimated_remaining_chunks_on_dbt(dbt *db_table) uint64 {
+	var total uint64
+	for _, l := range dbt.chunks {
+		total += l.(*chunk_step).integer_step.estimated_remaining_steps
+	}
+	return total
+}

@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,9 @@ type configuration_per_table struct {
 	all_num_threads_per_table       map[string]uint
 	all_columns_on_select_per_table map[string]string
 	all_columns_on_insert_per_table map[string]string
+	all_object_to_export            map[string]string
+	all_partition_regex_per_table   map[string]*regexp.Regexp
+	all_rows_per_table              map[string]string
 }
 
 type function_pointer struct {
@@ -40,8 +44,14 @@ type function_pointer struct {
 	delimiters []string
 }
 
+type object_to_export struct {
+	no_data    bool
+	no_schema  bool
+	no_trigger bool
+}
+
 const (
-	VERSION                    = "0.15.1-3"
+	VERSION                    = "0.16.7-5"
 	DB_LIBRARY                 = "MySQL"
 	MYSQL_VERSION_STR          = "8.0.31"
 	MIN_THREAD_COUNT           = 2
@@ -61,6 +71,32 @@ const (
 	DIRECTORY                  = "export"
 	mydumper_global_variables  = "mydumper_global_variables"
 	mydumper_session_variables = "mydumper_session_variables"
+	WIDTH                      = 40
+	IS_INNODB_TABLE            = 2
+	INCLUDE_CONSTRAINT         = 4
+	IS_ALTER_TABLE_PRESENT     = 8
+	START_SLAVE                = "START SLAVE"
+	START_SLAVE_SQL_THREAD     = "START SLAVE SQL_THREAD"
+	CALL_START_REPLICATION     = "CALL mysql.rds_start_replication();"
+	STOP_SLAVE_SQL_THREAD      = "STOP SLAVE SQL_THREAD"
+	STOP_SLAVE                 = "STOP SLAVE"
+	CALL_STOP_REPLICATION      = "CALL mysql.rds_stop_replication();"
+	RESET_SLAVE                = "RESET SLAVE"
+	CALL_RESET_EXTERNAL_MASTER = "CALL mysql.rds_reset_external_master()"
+	SHOW_SLAVE_STATUS          = "SHOW SLAVE STATUS"
+	SHOW_ALL_SLAVES_STATUS     = "SHOW ALL SLAVES STATUS"
+	START_REPLICA              = "START REPLICA"
+	START_REPLICA_SQL_THREAD   = "START REPLICA SQL_THREAD"
+	STOP_REPLICA               = "STOP REPLICA"
+	STOP_REPLICA_SQL_THREAD    = "STOP REPLICA SQL_THREAD"
+	RESET_REPLICA              = "RESET REPLICA"
+	SHOW_REPLICA_STATUS        = "SHOW REPLICA STATUS"
+	SHOW_ALL_REPLICAS_STATUS   = "SHOW ALL REPLICAS STATUS"
+	SHOW_MASTER_STATUS         = "SHOW MASTER STATUS"
+	SHOW_BINLOG_STATUS         = "SHOW BINLOG STATUS"
+	SHOW_BINARY_LOG_STATUS     = "SHOW BINARY LOG STATUS"
+	CHANGE_MASTER              = "CHANGE MASTER"
+	CHANGE_REPLICATION_SOURCE  = "CHANGE REPLICATION SOURCE"
 )
 
 func g_file_test(filename string) bool {
@@ -69,6 +105,167 @@ func g_file_test(filename string) bool {
 		return true
 	}
 	return false
+}
+
+func matchText(a, b string) bool {
+
+	return true
+}
+func widthCompletion(width int, key string) string {
+	return key + strings.Repeat(" ", width-len(key))
+}
+
+func print_int(key string, val int) {
+	fmt.Printf("%s= %d\n", widthCompletion(WIDTH, key), val)
+}
+func print_uint(key string, val uint) {
+	fmt.Printf("%s= %d\n", widthCompletion(WIDTH, key), val)
+}
+
+func print_string(key string, val string) {
+	if val != "" {
+		fmt.Printf("%s= %s\n", widthCompletion(WIDTH, key), val)
+	} else {
+		fmt.Printf("# %s=\n", widthCompletion(WIDTH-2, key))
+	}
+
+}
+
+func print_bool(key string, val bool) {
+	if val {
+		fmt.Printf("%s= TRUE\n", widthCompletion(WIDTH, key))
+	} else {
+		fmt.Printf("# %s= FALSE\n", widthCompletion(WIDTH-2, key))
+	}
+}
+
+func print_list(key string, val []string) {
+	if len(val) != 0 {
+		fmt.Printf("%s= %s\n", widthCompletion(WIDTH, key), strings.Join(val, ","))
+	} else {
+		fmt.Printf("# %s= \"\"\n", widthCompletion(WIDTH-2, key))
+	}
+}
+
+func append_alter_table(alter_table_statement *strings.Builder, table string) {
+	alter_table_statement.WriteString(fmt.Sprintf("ALTER TABLE `%s` ", table))
+}
+
+func finish_alter_table(alterTableStatement *strings.Builder) {
+	// 检查逗号的位置
+	lastCommaIndex := strings.LastIndex(alterTableStatement.String(), ",")
+	str := alterTableStatement.String()[:lastCommaIndex]
+	if lastCommaIndex > (alterTableStatement.Len() - 5) {
+		// 替换最后一个逗号为分号
+		alterTableStatement.Reset()
+		alterTableStatement.WriteString(str + ";") // 替换逗号为分号
+		alterTableStatement.WriteString("\n")      // 添加换行符
+	} else {
+		// 在字符串末尾添加分号和换行符
+		alterTableStatement.WriteString(";\n")
+	}
+}
+
+func global_process_create_table_statement(statement *strings.Builder, create_table_statement *strings.Builder, alter_table_statement *strings.Builder, alter_table_constraint_statement *strings.Builder, real_table string, split_indexes bool) int {
+	var flag int
+	var split_file = strings.Split(statement.String(), "\n")
+	var autoinc_column string
+	append_alter_table(alter_table_statement, real_table)
+	append_alter_table(alter_table_constraint_statement, real_table)
+	var fulltext_counter int
+	var i int
+	for i = 0; i < len(split_file); i++ {
+		if split_indexes && (strings.HasPrefix(split_file[i], "  KEY") ||
+			strings.HasPrefix(split_file[i], "  UNIQUE") ||
+			strings.HasPrefix(split_file[i], "  SPATIAL") ||
+			strings.HasPrefix(split_file[i], "  FULLTEXT") ||
+			strings.HasPrefix(split_file[i], "  INDEX")) {
+			if autoinc_column != "" && split_file[i] == autoinc_column {
+				create_table_statement.WriteString(split_file[i])
+				create_table_statement.WriteString("\n")
+			} else {
+				flag |= IS_ALTER_TABLE_PRESENT
+				if strings.HasPrefix(split_file[i], "  FULLTEXT") {
+					fulltext_counter++
+				}
+				if fulltext_counter > 1 {
+					fulltext_counter = 1
+					finish_alter_table(alter_table_statement)
+					append_alter_table(alter_table_statement, real_table)
+				}
+				alter_table_statement.WriteString("\n ADD")
+				alter_table_statement.WriteString(split_file[i])
+			}
+		} else {
+			if strings.HasPrefix(split_file[i], "  CONSTRAINT") {
+				flag |= INCLUDE_CONSTRAINT
+				alter_table_constraint_statement.WriteString("\n ADD")
+				alter_table_constraint_statement.WriteString(split_file[i])
+			} else {
+				if strings.HasPrefix(split_file[i], "AUTO_INCREMENT") {
+					var autoinc_split = strings.SplitN(split_file[i], "`", 3)
+					autoinc_column = fmt.Sprintf("(`%s`", autoinc_split[1])
+				}
+				create_table_statement.WriteString(split_file[i])
+				create_table_statement.WriteString("\n")
+			}
+		}
+		if strings.HasPrefix(split_file[i], "ENGINE=InnoDB") {
+			flag |= IS_INNODB_TABLE
+		}
+	}
+	s := strings.ReplaceAll(create_table_statement.String(), ",\n)", "\n)")
+	create_table_statement.Reset()
+	create_table_statement.WriteString(s)
+	finish_alter_table(alter_table_statement)
+	finish_alter_table(alter_table_constraint_statement)
+	return flag
+}
+
+func initialize_conf_per_table(cpt *configuration_per_table) {
+	cpt.all_anonymized_function = make(map[string]map[string]string)
+	cpt.all_where_per_table = make(map[string]string)
+	cpt.all_limit_per_table = make(map[string]string)
+	cpt.all_num_threads_per_table = make(map[string]uint)
+	cpt.all_columns_on_select_per_table = make(map[string]string)
+	cpt.all_columns_on_insert_per_table = make(map[string]string)
+	cpt.all_object_to_export = make(map[string]string)
+	cpt.all_partition_regex_per_table = make(map[string]*regexp.Regexp)
+	cpt.all_rows_per_table = make(map[string]string)
+}
+
+func parse_object_to_export(object_to_export *object_to_export, val string) {
+	if val == "" {
+		object_to_export.no_data = false
+		object_to_export.no_schema = false
+		object_to_export.no_trigger = false
+		return
+	}
+	var split_option []string = strings.SplitN(val, ",", 4)
+	object_to_export.no_data = !slices.Contains(split_option, "DATA")
+	object_to_export.no_data = !slices.Contains(split_option, "SCHEMA")
+	object_to_export.no_data = !slices.Contains(split_option, "TRIGGER")
+	if slices.Contains(split_option, "ALL") {
+		object_to_export.no_data = false
+		object_to_export.no_schema = false
+		object_to_export.no_trigger = false
+	}
+	if slices.Contains(split_option, "NONE") {
+		object_to_export.no_data = true
+		object_to_export.no_schema = true
+		object_to_export.no_trigger = true
+	}
+}
+
+func build_dbt_key(o *OptionEntries, a, b string) string {
+	return fmt.Sprintf("%s%s%s.%s%s%s", o.Common.IdentifierQuoteCharacter, a, o.Common.IdentifierQuoteCharacter,
+		o.Common.IdentifierQuoteCharacter, b, o.Common.IdentifierQuoteCharacter)
+}
+
+func discard_mysql_output(conn *client.Conn) {
+	// TODO
+	_ = conn.Ping()
+	// conn.Close()
 }
 
 func (o *OptionEntries) initialize_hash_of_session_variables() map[string]string {
@@ -188,7 +385,7 @@ func load_hash_from_key_file(kf *ini.File, set_session_hash map[string]string, g
 	return set_session_hash
 }
 
-func load_per_table_info_from_key_file(kf *ini.File, conf_per_table *configuration_per_table) {
+func load_per_table_info_from_key_file(kf *ini.File, cpt *configuration_per_table) {
 	var groups = kf.SectionStrings()
 	var i int
 	var keys []*ini.Key
@@ -198,28 +395,36 @@ func load_per_table_info_from_key_file(kf *ini.File, conf_per_table *configurati
 			keys = kf.Section(groups[i]).Keys()
 			for _, key := range keys {
 				if strings.Compare(key.Name(), "where") == 0 {
-					conf_per_table.all_where_per_table[groups[i]] = key.Value()
+					cpt.all_where_per_table[groups[i]] = key.Value()
 				}
 				if strings.Compare(key.Name(), "limit") == 0 {
-					conf_per_table.all_limit_per_table[groups[i]] = key.Value()
+					cpt.all_limit_per_table[groups[i]] = key.Value()
 				}
 				if strings.Compare(key.Name(), "num_threads") == 0 {
 					value = key.Value()
 					n, _ := strconv.Atoi(value)
-					conf_per_table.all_num_threads_per_table[groups[i]] = uint(n)
+					cpt.all_num_threads_per_table[groups[i]] = uint(n)
 				}
 				if strings.Compare(key.Name(), "columns_on_select") == 0 {
-					conf_per_table.all_columns_on_select_per_table[groups[i]] = key.Value()
+					cpt.all_columns_on_select_per_table[groups[i]] = key.Value()
 				}
-				if strings.Compare(key.Name(), "columns_on_insert") == 0 {
-					conf_per_table.all_columns_on_insert_per_table[groups[i]] = key.Value()
+				if strings.Compare(key.Name(), "object_to_export") == 0 {
+					cpt.all_columns_on_insert_per_table[groups[i]] = key.Value()
+				}
+				if strings.Compare(key.Name(), "partition_regex") == 0 {
+					r, err := init_regex(key.Value())
+					if err != nil {
+						log.Warnf("parse key %s: %v", key.Name(), err)
+						continue
+					}
+					cpt.all_partition_regex_per_table[groups[i]] = r
+				}
+				if strings.Compare(key.Name(), "rows") == 0 {
+					cpt.all_rows_per_table[groups[i]] = key.Value()
 				}
 			}
-
 		}
-
 	}
-
 }
 
 func load_hash_of_all_variables_perproduct_from_key_file(kf *ini.File, context *OptionEntries, set_session_hash map[string]string, str string) map[string]string {
@@ -244,33 +449,36 @@ func free_hash_table(hash map[string]string) map[string]string {
 	return hash
 }
 
-func refresh_set_from_hash(ss string, kind string, set_hash map[string]string) string {
+func refresh_set_from_hash(ss *string, kind string, set_hash map[string]string) {
 	for key, value := range set_hash {
 		index := strings.Index(value, "/*!")
 		if index != -1 {
 			var e = value[:index]
 			var c = value[index:]
-			ss += fmt.Sprintf("/%s SET %s %s = %s */;\n", c, kind, key, e)
-			if strings.Contains(ss, "//") {
-				ss = strings.ReplaceAll(ss, "//", "/")
+			*ss += fmt.Sprintf("/%s SET %s %s = %s */;\n", c, kind, key, e)
+			if strings.Contains(*ss, "//") {
+				*ss = strings.ReplaceAll(*ss, "//", "/")
 			}
 		} else {
 			v, err := strconv.Atoi(value)
 			if err != nil {
-				ss += fmt.Sprintf("SET %s %s = '%s' ;\n", kind, key, value)
+				*ss += fmt.Sprintf("SET %s %s = '%s' ;\n", kind, key, value)
 			} else {
-				ss += fmt.Sprintf("SET %s %s = %d ;\n", kind, key, v)
+				*ss += fmt.Sprintf("SET %s %s = %d ;\n", kind, key, v)
 			}
 
 		}
 
 	}
-	return ss
 }
 
-func refresh_set_session_from_hash(ss string, set_session_hash map[string]string) string {
-	ss = refresh_set_from_hash(ss, "SESSION", set_session_hash)
-	return ss
+func refresh_set_session_from_hash(o *OptionEntries) {
+	var ok bool
+	if o.global.set_session, ok = o.global.set_session_hash["FOREIGN_KEY_CHECKS"]; !ok {
+		o.global.set_session_hash["FOREIGN_KEY_CHECKS"] = "0"
+	}
+	refresh_set_from_hash(&o.global.set_session, "SESSION", o.global.set_session_hash)
+
 }
 
 func set_global_rollback_from_hash(ss *string, sr *string, set_hash map[string]string) {
@@ -300,7 +508,7 @@ func set_global_rollback_from_hash(ss *string, sr *string, set_hash map[string]s
 
 func refresh_set_global_from_hash(ss *string, sr *string, set_global_hash map[string]string) {
 	set_global_rollback_from_hash(ss, sr, set_global_hash)
-	*ss = refresh_set_from_hash(*ss, "GLOBAL", set_global_hash)
+	refresh_set_from_hash(ss, "GLOBAL", set_global_hash)
 }
 
 func free_hash(set_session_hash map[string]string) map[string]string {
@@ -426,17 +634,32 @@ func remove_new_line(to string) string {
 	return strings.ReplaceAll(to, "\n", "")
 }
 
+func m_remove0(directory string, filename string) {
+	remove_path := filepath.Join(directory, filename)
+	log.Infof("Removing file: %s ", remove_path)
+	err := os.Remove(remove_path)
+	if err != nil {
+		log.Warnf("Remove failed: %s (%s)", remove_path, err.Error())
+	}
+}
+
 func m_remove(o *OptionEntries, directory, filename string) bool {
 	if o.Stream.Stream && o.global.no_delete == false {
-		remove_path := filepath.Join(directory, filename)
-		log.Infof("Removing file: %s ", remove_path)
-		_ = os.Remove(remove_path)
+		m_remove0(directory, filename)
 	}
 	return true
 }
+func is_mysql_special_tables(database string, table string) bool {
+	return strings.Compare(database, "mysql") == 0 &&
+		(strings.Compare(table, "general_log") == 0 ||
+			strings.Compare(table, "slow_log") == 0 ||
+			strings.Compare(table, "innodb_index_stats") == 0 ||
+			strings.Compare(table, "innodb_table_stats") == 0)
+}
 
-func is_table_in_list(table_name string, tl []string) bool {
-	return slices.Contains(tl, table_name)
+func is_table_in_list(database, table_name string, tl []string) bool {
+	var table_name_lower = fmt.Sprintf("%s.%s", database, table_name)
+	return slices.Contains(tl, table_name_lower)
 }
 
 func m_key_file_merge(b *ini.File, a *ini.File) {
@@ -464,7 +687,7 @@ func initialize_common_options(o *OptionEntries, group string) {
 			log.Fatalf("Default file %s not found", o.Common.DefaultsFile)
 		}
 	}
-
+	o.global.identifier_quote_character_str = "`"
 	if o.Common.DefaultsExtraFile != "" {
 		if !g_file_test(o.Common.DefaultsExtraFile) {
 			log.Fatalf("Default extra file %s not found", o.Common.DefaultsExtraFile)
@@ -507,7 +730,7 @@ func initialize_common_options(o *OptionEntries, group string) {
 		set_connection_defaults_file_and_group(o, o.Common.DefaultsExtraFile, "")
 	}
 	log.Infof("Merging config files user: ")
-	if o.Connection.Socket != "" {
+	if o.Connection.SocketPath != "" {
 		o.Connection.Protocol = "socket"
 	}
 	m_key_file_merge(o.global.key_file, extra_key_file)
@@ -562,32 +785,17 @@ func remove_definer(data string) string {
 }
 
 func print_version(program string) {
-	fmt.Printf("%s v%s, built against %s %s  with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+	fmt.Printf("%s v%s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
 	fmt.Printf("Git Commit Hash: %s\n", src.GitHash)
 	fmt.Printf("Git Branch: %s\n", src.GitBranch)
 	fmt.Printf("Build Time: %s\n", src.BuildTS)
 	fmt.Printf("Go Version: %s\n", src.GoVersion)
 }
 
-func stream_arguments_callback(o *OptionEntries) bool {
-	if o.Stream.Stream {
-		if strings.ToUpper(o.Stream.StreamOpt) == "TRADITIONAL" || o.Stream.StreamOpt == "" {
-			return true
-		}
-		if strings.ToUpper(o.Stream.StreamOpt) == "NO_DELETE" {
-			o.global.no_delete = true
-			return true
-		}
-		if strings.ToUpper(o.Stream.StreamOpt) == "NO_STREAM_AND_NO_DELETE" {
-			o.global.no_delete = true
-			o.global.no_stream = true
-			return true
-		}
-	}
-	return false
-}
-
 func check_num_threads(o *OptionEntries) {
+	if o.Common.NumThreads <= 0 {
+		o.Common.NumThreads = g_get_num_processors()
+	}
 	if o.Common.NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", o.Common.NumThreads, MIN_THREAD_COUNT)
 		o.Common.NumThreads = MIN_THREAD_COUNT
@@ -616,14 +824,14 @@ func mysqlError(err error) (myErr *mysql.MyError) {
 	return
 }
 
-func mysql_get_server_version(conn *client.Conn) int {
+func mysql_get_server_version(conn *client.Conn) uint {
 	res, _ := conn.Execute("select @@version")
 	v := string(res.Values[0][0].AsString())
 	serverVersion := strings.SplitN(v, ".", 3)
 	major_version, _ := strconv.Atoi(serverVersion[0])
 	release_level, _ := strconv.Atoi(serverVersion[1])
 	sub_version, _ := strconv.Atoi(serverVersion[2])
-	return major_version*10000 + release_level*100 + sub_version
+	return uint(major_version*10000 + release_level*100 + sub_version)
 }
 
 func (o *OptionEntries) free_set_names() {
@@ -636,4 +844,50 @@ func intToBool(v int) bool {
 		return false
 	}
 	return true
+}
+
+func backtick_protect(r string) string {
+	var s = r
+	s = strings.ReplaceAll(s, "\"", "\"\"")
+	r = s
+	return r
+}
+
+func newline_protect(r string) string {
+	var s string = r
+	s = strings.ReplaceAll(s, "\n", "\u10000")
+	return s
+}
+
+func newline_unprotect(r string) string {
+	var s string = r
+	s = strings.ReplaceAll(s, "\u10000", "\n")
+	return s
+}
+
+func double_quoute_protect(r string) string {
+	var s = r
+	s = strings.ReplaceAll(s, "\"", "\"\"")
+	return s
+}
+
+func g_get_num_processors() uint {
+	return uint(runtime.NumCPU())
+}
+
+func m_query(o *OptionEntries, conn *client.Conn, query string, log_fun func(fmt string, a ...any), fmt string) *mysql.Result {
+	res, err := conn.Execute(query)
+	if err != nil {
+		if !slices.Contains(o.global.ignore_errors_list, mysqlError(err).Code) {
+			log_fun("%v", err)
+			return res
+		} else {
+			log.Warnf("ignore error: %v", err)
+		}
+	}
+	return nil
+}
+
+func m_critical(fmt string, a ...any) {
+
 }

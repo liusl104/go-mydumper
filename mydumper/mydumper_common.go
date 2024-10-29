@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -28,11 +27,6 @@ func g_mutex_new() *sync.Mutex {
 }
 
 func initialize_common(o *OptionEntries) {
-	o.global.available_pids = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	var i uint
-	for i = 0; i < (o.Common.NumThreads * 2); i++ {
-		release_pid(o)
-	}
 	o.global.ref_table_mutex = g_mutex_new()
 	o.global.ref_table = make(map[string]string)
 }
@@ -40,147 +34,6 @@ func initialize_common(o *OptionEntries) {
 func free_common(o *OptionEntries) {
 	o.global.ref_table_mutex = nil
 	o.global.ref_table = nil
-}
-
-func release_pid(o *OptionEntries) {
-	o.global.available_pids.push(1)
-}
-
-func execute_file_per_thread(sql_fn string, sql_fn3 string) int {
-	// TODO
-	/*
-	 // 创建一个文件用于保存压缩后的数据
-	    outFile, err := os.Create("list.gz")
-	    if err != nil {
-	        panic(err)
-	    }
-	    defer outFile.Close()
-
-	    // 创建ls命令
-	    lsCmd := exec.Command("ls")
-
-	    // 创建gzip命令
-	    gzipCmd := exec.Command("gzip", "-c")
-
-	    // 设置gzip命令的标准输出到文件
-	    gzipCmd.Stdout = outFile
-
-	    // 创建管道
-	    pipeReader, pipeWriter := io.Pipe()
-
-	    // 设置ls命令的标准输出到管道的写入端
-	    lsCmd.Stdout = pipeWriter
-	    // 设置gzip命令的标准输入为管道的读取端
-	    gzipCmd.Stdin = pipeReader
-
-	    // 开始执行ls命令
-	    if err := lsCmd.Start(); err != nil {
-	        panic(err)
-	    }
-
-	    // 开始执行gzip命令
-	    if err := gzipCmd.Start(); err != nil {
-	        panic(err)
-	    }
-
-	    // 等待ls命令完成，并关闭管道的写入端
-	    if err := lsCmd.Wait(); err != nil {
-	        panic(err)
-	    }
-	    pipeWriter.Close()
-
-	    // 等待gzip命令完成
-	    if err := gzipCmd.Wait(); err != nil {
-	        panic(err)
-	    }*/
-	return 0
-}
-
-func m_open_pipe(o *OptionEntries, filename *string, mode string) (*file_write, error) {
-	*filename = fmt.Sprintf("%s%s", *filename, o.Exec.ExecPerThreadExtension)
-	var flag int
-	if strings.ToLower(mode) == "w" {
-		flag = os.O_CREATE | os.O_WRONLY
-	} else if strings.ToLower(mode) == "r" {
-		flag = os.O_RDONLY
-	}
-	file, err := os.OpenFile(*filename, flag, 0660)
-	if err != nil {
-		log.Fatalf("open file %s fail:%v", *filename, err)
-	}
-	var compressFile *gzip.Writer
-	var compressEncode *zstd.Encoder
-	var f = new(file_write)
-	switch strings.ToUpper(o.Extra.CompressMethod) {
-	case GZIP:
-		compressFile, err = gzip.NewWriterLevel(file, gzip.DefaultCompression)
-		if err != nil {
-			return nil, err
-		}
-		f.flush = compressFile.Flush
-		f.write = compressFile.Write
-		f.close = compressFile.Close
-		return f, err
-	case ZSTD:
-		compressEncode, err = zstd.NewWriter(file)
-		if err != nil {
-			return nil, err
-		}
-		f.flush = compressEncode.Flush
-		f.write = compressEncode.Write
-		f.close = compressEncode.Close
-		return f, err
-
-	default:
-		if err != nil {
-			return nil, err
-		}
-
-		f.flush = file.Sync
-		f.write = file.Write
-		f.close = file.Close
-		return f, err
-	}
-
-}
-
-func m_close_pipe(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
-	release_pid(o)
-	var err error
-	err = file.close()
-	if size > 0 {
-		if o.Stream.Stream {
-			stream_queue_push(o, dbt, "")
-		}
-	} else if !o.Extra.BuildEmptyFiles {
-		err = os.Remove(filename)
-		if err != nil {
-			log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
-		} else {
-			log.Debugf("Thread %d: File removed: %s", thread_id, filename)
-		}
-	}
-
-	return err
-}
-
-// o *OptionEntries, thread_id uint, file *os.File, filename string, size uint, dbt *db_table
-func m_close_file(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
-	var err error
-	err = file.close()
-	if size > 0 {
-		if o.Stream.Stream {
-			stream_queue_push(o, dbt, filename)
-		}
-	} else if !o.Extra.BuildEmptyFiles {
-		err = os.Remove(filename)
-		if err != nil {
-			log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
-		} else {
-			log.Debugf("Thread %d: File removed: %s", thread_id, filename)
-		}
-	}
-	return err
 }
 
 func determine_filename(o *OptionEntries, table string) string {
@@ -191,6 +44,18 @@ func determine_filename(o *OptionEntries, table string) string {
 		o.global.table_number++
 		return r
 	}
+}
+
+func get_ref_table(o *OptionEntries, k string) string {
+	o.global.ref_table_mutex.Lock()
+	var val string = o.global.ref_table[k]
+	if val == "" {
+		var t = k
+		val = determine_filename(o, t)
+		o.global.ref_table[t] = val
+	}
+	o.global.ref_table_mutex.Unlock()
+	return val
 }
 
 func escape_string(str string) string {
@@ -226,28 +91,31 @@ func build_meta_filename(dump_directory, database string, table string, suffix s
 	return r
 }
 
-func set_charset(statement *string, character_set []byte, collation_connection []byte) {
-	*statement = "SET @PREV_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT;\n"
-	*statement += "SET @PREV_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS;\n"
-	*statement += "SET @PREV_COLLATION_CONNECTION=@@COLLATION_CONNECTION;\n"
-	*statement += fmt.Sprintf("SET character_set_client = %s;\n", character_set)
-	*statement += fmt.Sprintf("SET character_set_results = %s;\n", character_set)
-	*statement += fmt.Sprintf("SET collation_connection = %s;\n", collation_connection)
+func set_charset(statement *strings.Builder, character_set []byte, collation_connection []byte) {
+	statement.Reset()
+	statement.WriteString("SET @PREV_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT;\n")
+	statement.WriteString("SET @PREV_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS;\n")
+	statement.WriteString("SET @PREV_COLLATION_CONNECTION=@@COLLATION_CONNECTION;\n")
+	statement.WriteString(fmt.Sprintf("SET character_set_client = %s;\n", character_set))
+	statement.WriteString(fmt.Sprintf("SET character_set_results = %s;\n", character_set))
+	statement.WriteString(fmt.Sprintf("SET collation_connection = %s;\n", collation_connection))
 
 }
 
-func restore_charset(statement *string) {
-	*statement += "SET character_set_client = @PREV_CHARACTER_SET_CLIENT;\n"
-	*statement += "SET character_set_results = @PREV_CHARACTER_SET_RESULTS;\n"
-	*statement += "SET collation_connection = @PREV_COLLATION_CONNECTION;\n"
+func restore_charset(statement *strings.Builder) {
+	statement.WriteString("SET character_set_client = @PREV_CHARACTER_SET_CLIENT;\n")
+	statement.WriteString("SET character_set_results = @PREV_CHARACTER_SET_RESULTS;\n")
+	statement.WriteString("SET collation_connection = @PREV_COLLATION_CONNECTION;\n")
 }
 
 func clear_dump_directory(directory string) error {
 	dir, err := os.Open(directory)
+
 	if err != nil {
 		log.Errorf("cannot open directory %s, %v", directory, err)
 		return err
 	}
+	defer dir.Close()
 	filename, err := dir.Readdirnames(-1)
 	if err != nil {
 		return err
@@ -260,13 +128,31 @@ func clear_dump_directory(directory string) error {
 	}
 	return nil
 }
+func is_empty_dir(directory string) bool {
+	dir, err := os.Stat(directory)
+	if err != nil {
+		log.Errorf("cannot open directory %s, %v\n", directory, err)
+		return false
+	}
+	if dir.IsDir() {
+		openDir, _ := os.Open(directory)
+		defer openDir.Close()
+		filename, _ := openDir.ReadDir(-1)
+		if len(filename) > 0 {
+			return false
+		}
+		return true
+	}
+	log.Errorf("%s is file", directory)
+	return false
+}
 
-func set_transaction_isolation_level_repeatable_read(conn *client.Conn) error {
+func set_transaction_isolation_level_repeatable_read(conn *client.Conn) {
 	_, err := conn.Execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 	if err != nil {
 		log.Errorf("Failed to set isolation level: %v", err)
+		os.Exit(EXIT_FAILURE)
 	}
-	return err
 }
 
 func build_filename(dump_directory, database string, table string, part uint64, sub_part uint, extension string, second_extension string) string {
@@ -286,20 +172,19 @@ func build_filename(dump_directory, database string, table string, part uint64, 
 	return r
 }
 
-func build_data_filename(dump_directory, database, table string, part uint64, sub_part uint) string {
-	return build_filename(dump_directory, database, table, part, sub_part, "sql", "")
-}
-
-func build_fifo_filename(dump_directory, database, table string, part uint64, sub_part uint, extension string) string {
-	return build_filename(dump_directory, database, table, part, sub_part, extension, "fifo")
-}
-
 func build_stdout_filename(dump_directory, database, table string, part uint64, sub_part uint, extension string, second_extension string) string {
 	return build_filename(dump_directory, database, table, part, sub_part, extension, second_extension)
 }
 
 func build_load_data_filename(dump_directory, database, table string, part uint64, sub_part uint) string {
 	return build_filename(dump_directory, database, table, part, sub_part, "dat", "")
+}
+
+func build_sql_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
+	return build_filename(o.global.dump_directory, database, table, part, sub_part, SQL, "")
+}
+func build_rows_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
+	return build_filename(o.global.dump_directory, database, table, part, sub_part, o.global.rows_file_extension, "")
 }
 
 func m_real_escape_string(from string) string {
@@ -354,39 +239,80 @@ func m_replace_char_with_char(needle rune, repl rune, from []rune) string {
 }
 
 func determine_show_table_status_columns(result []*mysql.Field, ecol *int, ccol *int, collcol *int, rowscol *int) {
+	var fields = result
 	var i int
-	for i = 0; i < len(result); i++ {
-		if strings.ToLower(string(result[i].Name)) == strings.ToLower("Engine") {
+	for i = 0; i < len(fields); i++ {
+		if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Engine") {
 			*ecol = i
-		} else if strings.ToLower(string(result[i].Name)) == strings.ToLower("Comment") {
+		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Comment") {
 			*ccol = i
-		} else if strings.ToLower(string(result[i].Name)) == strings.ToLower("Collation") {
+		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Collation") {
 			*collcol = i
-		} else if strings.ToLower(string(result[i].Name)) == strings.ToLower("Rows") {
+		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Rows") {
+			*rowscol = i
+		}
+	}
+	if *ecol == 0 || *ccol == 0 || *collcol == 0 {
+		log.Errorf("assert value error")
+	}
+}
+
+func determine_explain_columns(result *mysql.Result, rowscol *int) {
+	var fields []*mysql.Field = result.Fields
+	var i int
+	for i = 0; i < len(fields); i++ {
+		if string(fields[i].Name) == "rows" {
+			*rowscol = i
+		} else if string(fields[i].Name) == "estRows" {
+			// TiDB
 			*rowscol = i
 		}
 	}
 }
 
-func initialize_sql_statement(o *OptionEntries, statement *strings.Builder) {
+func determine_charset_and_coll_columns_from_show(result *mysql.Result, charcol *uint, collcol *uint) {
+	*charcol = 0
+	*collcol = 0
+	var fields []*mysql.Field = result.Fields
+	var i uint
+	for i = 0; i < uint(len(fields)); i++ {
+		if string(fields[i].Name) == "character_set_client" {
+			*charcol = i
+		} else if string(fields[i].Name) == "collation_connection" {
+			*collcol = i
+		}
+	}
+	if *charcol == 0 || *collcol == 0 {
+		log.Errorf("assert value error")
+	}
+}
+
+func initialize_headers(o *OptionEntries) {
 	if o.is_mysql_like() {
 		if o.global.set_names_statement != "" {
-			statement.Reset()
-			statement.WriteString(fmt.Sprintf("%s;\n", o.global.set_names_statement))
+			o.global.headers.WriteString(fmt.Sprintf("%s;\n", o.global.set_names_statement))
 		}
-		statement.WriteString("/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
+		o.global.headers.WriteString("/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
+		if o.global.sql_mode != "" && !o.Extra.Compact {
+			o.global.headers.WriteString("/*!40101 SET SQL_MODE=%s*/;\n")
+		}
 		if !o.Statement.SkipTz {
-			statement.WriteString(fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n"))
+			o.global.headers.WriteString("/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
 	} else if o.global.detected_server == SERVER_TYPE_TIDB {
 		if !o.Statement.SkipTz {
-			statement.Reset()
-			statement.WriteString(fmt.Sprintf("/*!40103 SET TIME_ZONE='+00:00' */;\n"))
+			o.global.headers.WriteString("/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
 	} else {
-		statement.Reset()
-		statement.WriteString("SET FOREIGN_KEY_CHECKS=0;\n")
+		o.global.headers.WriteString("SET FOREIGN_KEY_CHECKS=0;\n")
+		if o.global.sql_mode != "" && !o.Extra.Compact {
+			o.global.headers.WriteString(fmt.Sprintf("SET SQL_MODE=%s;\n", o.global.sql_mode))
+		}
 	}
+
+}
+func initialize_sql_statement(o *OptionEntries, statement *strings.Builder) {
+	statement.WriteString(o.global.headers.String())
 }
 
 func set_tidb_snapshot(o *OptionEntries, conn *client.Conn) error {
@@ -397,4 +323,41 @@ func set_tidb_snapshot(o *OptionEntries, conn *client.Conn) error {
 		return err
 	}
 	return nil
+}
+
+func my_pow_two_plus_prev(prev uint64, max uint) uint64 {
+	var r uint64 = 1
+	var i uint
+	for i = 0; i < max; i++ {
+		r *= 2
+	}
+	return r + prev
+}
+
+func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *uint64) bool {
+	var split = strings.Split(rows_p_chunk, ":")
+	var err error
+	if len(split) > 0 {
+		if split[0][0] == '-' {
+			return false
+		}
+	}
+	switch len(split) {
+	case 0:
+		log.Fatalf("This should not happend")
+	case 1:
+		*start, err = strconv.ParseUint(split[0], 10, 64)
+		*min = *start
+		*max = *start
+	case 2:
+		*min, err = strconv.ParseUint(split[0], 10, 64)
+		*start, err = strconv.ParseUint(split[1], 10, 64)
+		*max = *start
+	default:
+		*min, err = strconv.ParseUint(split[0], 10, 64)
+		*start, err = strconv.ParseUint(split[1], 10, 64)
+		*max, err = strconv.ParseUint(split[2], 10, 64)
+	}
+	_ = err
+	return true
 }
