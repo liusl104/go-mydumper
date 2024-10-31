@@ -7,6 +7,7 @@ import (
 	"github.com/siddontang/go-log/log"
 	"os"
 	"strings"
+	"sync"
 )
 
 func m_open_file(o *OptionEntries, filename *string, t string) (f *file_write, err error) {
@@ -16,16 +17,17 @@ func m_open_file(o *OptionEntries, filename *string, t string) (f *file_write, e
 	if strings.ToLower(t) == "w" {
 		ff, err = os.OpenFile(*filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0660)
 		if err != nil {
-			log.Errorf("open file %s failed: %v", filename, err)
+			log.Errorf("open file %s failed: %v", *filename, err)
 			return
 		}
 	} else {
 		ff, err = os.OpenFile(*filename, os.O_RDONLY, 0660)
 		if err != nil {
-			log.Errorf("open file %s failed: %v", filename, err)
+			log.Errorf("open file %s failed: %v", *filename, err)
 			return
 		}
 	}
+	f.status = 1
 	f.write = ff.Write
 	f.close = ff.Close
 	f.flush = ff.Sync
@@ -37,6 +39,7 @@ func m_open_file(o *OptionEntries, filename *string, t string) (f *file_write, e
 func m_close_file(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	var err error
 	err = file.close()
+	file.status = 0
 	if size > 0 {
 		if o.Stream.Stream {
 			stream_queue_push(o, dbt, filename)
@@ -83,7 +86,7 @@ func wait_close_files(o *OptionEntries) {
 	f.child_pid = -10
 	f.filename = ""
 	close_file_queue_push(o, f)
-	o.global.thread_pool["cft"].join.Wait()
+	o.global.cft.Wait()
 }
 
 func release_pid(o *OptionEntries) {
@@ -155,6 +158,7 @@ func m_open_pipe(o *OptionEntries, filename *string, mode string) (*file_write, 
 	var compressFile *gzip.Writer
 	var compressEncode *zstd.Encoder
 	var f = new(file_write)
+	f.status = 1
 	switch strings.ToUpper(o.Extra.CompressMethod) {
 	case GZIP:
 		compressFile, err = gzip.NewWriterLevel(file, gzip.DefaultCompression)
@@ -192,6 +196,7 @@ func m_close_pipe(o *OptionEntries, thread_id uint, file *file_write, filename s
 	release_pid(o)
 	var err error
 	err = file.close()
+	file.status = 0
 	if size > 0 {
 		if o.Stream.Stream {
 			stream_queue_push(o, dbt, "")
@@ -224,6 +229,11 @@ func final_step_close_file(o *OptionEntries, thread_id uint, filename string, f 
 }
 
 func close_file_thread(o *OptionEntries) {
+	if o.global.cft == nil {
+		o.global.cft = new(sync.WaitGroup)
+	}
+	o.global.cft.Add(1)
+	defer o.global.cft.Done()
 	_ = o
 	var f *fifo
 	var err error
@@ -254,11 +264,11 @@ func close_file_thread(o *OptionEntries) {
 
 func initialize_file_handler(o *OptionEntries, is_pipe bool) {
 	if is_pipe {
-		m_open = m_open_pipe
-		m_close = m_close_pipe
+		o.global.m_open = m_open_pipe
+		o.global.m_close = m_close_pipe
 	} else {
-		m_open = m_open_file
-		m_close = m_close_file
+		o.global.m_open = m_open_file
+		o.global.m_close = m_close_file
 	}
 	o.global.available_pids = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	o.global.close_file_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
@@ -269,5 +279,5 @@ func initialize_file_handler(o *OptionEntries, is_pipe bool) {
 	o.global.pipe_creation = g_mutex_new()
 	o.global.file_hash = make(map[string]map[string][]string)
 	o.global.fifo_table_mutex = g_mutex_new()
-	g_thread_create(o, close_file_thread, "cft", true)
+	go close_file_thread(o)
 }

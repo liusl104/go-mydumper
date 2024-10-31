@@ -97,7 +97,7 @@ func (o *OptionEntries) get_tablespace_query() string {
 
 func write_tablespace_definition_into_file(o *OptionEntries, conn *client.Conn, filename string) {
 	var query string
-	outfile, err := m_open(o, &filename, "w")
+	outfile, err := o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: Could not create output file %s (%v)", filename, err)
 		return
@@ -135,7 +135,7 @@ func write_schema_definition_into_file(o *OptionEntries, conn *client.Conn, data
 	var outfile *file_write
 	var query string
 	var err error
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
 	}
@@ -162,7 +162,7 @@ func write_schema_definition_into_file(o *OptionEntries, conn *client.Conn, data
 	if !write_data(outfile, statement) {
 		log.Fatalf("Could not write create database for %s", database.name)
 	}
-	err = m_close(o, 0, outfile, filename, 1, nil)
+	err = o.global.m_close(o, 0, outfile, filename, 1, nil)
 	if o.Checksum.SchemaChecksums {
 		database.schema_checksum = write_checksum_into_file(o, conn, database, "", checksum_database_defaults)
 	}
@@ -173,7 +173,7 @@ func write_table_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *
 	var outfile *file_write
 	var query string
 	var err error
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
 	}
@@ -225,7 +225,7 @@ func write_table_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *
 		}
 	}
 
-	m_close(o, 0, outfile, filename, 1, dbt)
+	o.global.m_close(o, 0, outfile, filename, 1, dbt)
 	if checksum_filename {
 		dbt.schema_checksum = write_checksum_into_file(o, conn, dbt.database, dbt.table, checksum_table_structure)
 	}
@@ -283,7 +283,7 @@ func write_triggers_definition_into_file_from_dbt(o *OptionEntries, conn *client
 	var query string
 	var result *mysql.Result
 	var err error
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
 		return
@@ -301,7 +301,7 @@ func write_triggers_definition_into_file_from_dbt(o *OptionEntries, conn *client
 	}
 	message := fmt.Sprintf("%s.%s", dbt.database.name, dbt.table)
 	write_triggers_definition_into_file(o, conn, result, dbt.database, message, outfile)
-	err = m_close(o, 0, outfile, filename, 1, dbt)
+	err = o.global.m_close(o, 0, outfile, filename, 1, dbt)
 	if checksum_filename {
 		dbt.triggers_checksum = write_checksum_into_file(o, conn, dbt.database, dbt.table, checksum_trigger_structure)
 	}
@@ -314,7 +314,7 @@ func write_triggers_definition_into_file_from_database(o *OptionEntries, conn *c
 	var err error
 	var result *mysql.Result
 	var q = o.Common.IdentifierQuoteCharacter
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
 	}
@@ -328,7 +328,7 @@ func write_triggers_definition_into_file_from_database(o *OptionEntries, conn *c
 		}
 	}
 	write_triggers_definition_into_file(o, conn, result, database, database.name, outfile)
-	err = m_close(o, 0, outfile, filename, 1, nil)
+	err = o.global.m_close(o, 0, outfile, filename, 1, nil)
 	if checksum_filename {
 		database.triggers_checksum = write_checksum_into_file(o, conn, database, "", checksum_trigger_structure_from_database)
 	}
@@ -347,7 +347,7 @@ func write_view_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *d
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
 	}
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
 	}
@@ -388,10 +388,10 @@ func write_view_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *d
 			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
 		}
 	}
-	m_close(o, 0, outfile, filename, 1, dbt)
+	o.global.m_close(o, 0, outfile, filename, 1, dbt)
 	statement.Reset()
 	var outfile2 *file_write
-	outfile2, err = m_open(o, &filename2, "w")
+	outfile2, err = o.global.m_open(o, &filename2, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
 	}
@@ -415,7 +415,7 @@ func write_view_definition_into_file(o *OptionEntries, conn *client.Conn, dbt *d
 	if !write_data(outfile2, statement) {
 		log.Fatalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
 	}
-	err = m_close(o, 0, outfile2, filename2, 1, dbt)
+	err = o.global.m_close(o, 0, outfile2, filename2, 1, dbt)
 	if checksum_filename {
 		dbt.schema_checksum = write_checksum_into_file(o, conn, dbt.database, dbt.table, checksum_view_structure)
 	}
@@ -432,7 +432,7 @@ func write_sequence_definition_into_file(o *OptionEntries, conn *client.Conn, db
 	var q = o.Common.IdentifierQuoteCharacter
 	err = conn.UseDB(dbt.database.name)
 
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
 		return
@@ -483,7 +483,7 @@ func write_sequence_definition_into_file(o *OptionEntries, conn *client.Conn, db
 	if !write_data(outfile, statement) {
 		log.Fatalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
 	}
-	err = m_close(o, 0, outfile, filename, 1, dbt)
+	err = o.global.m_close(o, 0, outfile, filename, 1, dbt)
 	if checksum_filename {
 		write_checksum_into_file(o, conn, dbt.database, dbt.table, checksum_table_structure)
 	}
@@ -497,7 +497,7 @@ func write_routines_definition_into_file(o *OptionEntries, conn *client.Conn, da
 	var result2 *mysql.Result
 	var splited_st []string
 	var err error
-	outfile, err = m_open(o, &filename, "w")
+	outfile, err = o.global.m_open(o, &filename, "w")
 	if err != nil {
 		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
 	}
@@ -527,7 +527,7 @@ func write_routines_definition_into_file(o *OptionEntries, conn *client.Conn, da
 
 			for _, row := range result.Values {
 				set_charset(statement, row[charcol].AsString(), row[collcol].AsString())
-				statement.WriteString(fmt.Sprintf("DROP %s IF EXISTS %s%%s;\n", o.global.routine_type[r], q, row[1].AsString(), q))
+				statement.WriteString(fmt.Sprintf("DROP %s IF EXISTS %s%s%s;\n", o.global.routine_type[r], q, row[1].AsString(), q))
 				if !write_data(outfile, statement) {
 					log.Fatalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
 				}
@@ -596,7 +596,7 @@ func write_routines_definition_into_file(o *OptionEntries, conn *client.Conn, da
 			statement.Reset()
 		}
 	}
-	err = m_close(o, 0, outfile, filename, 1, nil)
+	err = o.global.m_close(o, 0, outfile, filename, 1, nil)
 	return
 }
 
@@ -839,22 +839,31 @@ func create_job_to_dump_checksum(o *OptionEntries, dbt *db_table, conf *configur
 
 func update_files_on_table_job(o *OptionEntries, tj *table_job) bool {
 	var csi *chunk_step_item = tj.chunk_step_item
-	if tj.rows.file == nil {
+	var err error
+	if tj.rows.file.status == 0 {
 		if csi.chunk_type == INTEGER {
 			var s *integer_step = csi.chunk_step.integer_step
 			if s.is_step_fixed_length {
 				if s.is_unsigned {
-					tj.sub_part = uint(s.types.unsign.min)
+					tj.sub_part = uint(s.types.unsign.min/s.step + 1)
 				} else {
 					tj.sub_part = uint(s.types.sign.min/int64(s.step) + 1)
 				}
 			}
 		}
 		tj.rows.filename = build_rows_filename(o, tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
-		tj.rows.file, _ = m_open(o, &tj.rows.filename, "w")
+		tj.rows.file, err = o.global.m_open(o, &tj.rows.filename, "w")
+		if err != nil {
+			log.Fatalf("open file %s fail: %v", tj.rows.filename, err)
+		}
+		tj.rows.file.status = 1
 		if tj.sql != nil {
-			tj.rows.filename = build_rows_filename(o, tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
-			tj.rows.file, _ = m_open(o, &tj.sql.filename, "w")
+			tj.rows.filename = build_sql_filename(o, tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
+			tj.rows.file, err = o.global.m_open(o, &tj.sql.filename, "w")
+			if err != nil {
+				log.Fatalf("open file %s fail: %v", tj.sql.filename, err)
+			}
+			tj.rows.file.status = 1
 			return true
 		}
 	}
@@ -892,12 +901,12 @@ func new_table_job(o *OptionEntries, dbt *db_table, partition string, nchunk uin
 
 func free_table_job(o *OptionEntries, tj *table_job) {
 	if tj.sql != nil {
-		m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, tj.filesize, tj.dbt)
+		o.global.m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, tj.filesize, tj.dbt)
 		tj.sql.file = nil
 		tj.sql = nil
 	}
 	if tj.rows != nil {
-		m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, tj.filesize, tj.dbt)
+		o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, tj.filesize, tj.dbt)
 		tj.rows.file = nil
 		tj.rows = nil
 	}

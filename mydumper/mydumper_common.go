@@ -14,12 +14,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var m_close func(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error
-
 type file_write struct {
-	write write_fun
-	close close_fun
-	flush flush_fun
+	write  write_fun
+	close  close_fun
+	flush  flush_fun
+	status int
 }
 
 func g_mutex_new() *sync.Mutex {
@@ -172,17 +171,10 @@ func build_filename(dump_directory, database string, table string, part uint64, 
 	return r
 }
 
-func build_stdout_filename(dump_directory, database, table string, part uint64, sub_part uint, extension string, second_extension string) string {
-	return build_filename(dump_directory, database, table, part, sub_part, extension, second_extension)
-}
-
-func build_load_data_filename(dump_directory, database, table string, part uint64, sub_part uint) string {
-	return build_filename(dump_directory, database, table, part, sub_part, "dat", "")
-}
-
 func build_sql_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
 	return build_filename(o.global.dump_directory, database, table, part, sub_part, SQL, "")
 }
+
 func build_rows_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
 	return build_filename(o.global.dump_directory, database, table, part, sub_part, o.global.rows_file_extension, "")
 }
@@ -294,7 +286,7 @@ func initialize_headers(o *OptionEntries) {
 		}
 		o.global.headers.WriteString("/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
 		if o.global.sql_mode != "" && !o.Extra.Compact {
-			o.global.headers.WriteString("/*!40101 SET SQL_MODE=%s*/;\n")
+			o.global.headers.WriteString(fmt.Sprintf("/*!40101 SET SQL_MODE='%s'*/;\n", o.global.sql_mode))
 		}
 		if !o.Statement.SkipTz {
 			o.global.headers.WriteString("/*!40103 SET TIME_ZONE='+00:00' */;\n")
@@ -306,7 +298,7 @@ func initialize_headers(o *OptionEntries) {
 	} else {
 		o.global.headers.WriteString("SET FOREIGN_KEY_CHECKS=0;\n")
 		if o.global.sql_mode != "" && !o.Extra.Compact {
-			o.global.headers.WriteString(fmt.Sprintf("SET SQL_MODE=%s;\n", o.global.sql_mode))
+			o.global.headers.WriteString(fmt.Sprintf("SET SQL_MODE='%s';\n", o.global.sql_mode))
 		}
 	}
 

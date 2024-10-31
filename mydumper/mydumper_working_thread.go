@@ -353,7 +353,8 @@ func check_connection_status(o *OptionEntries, td *thread_data) {
 
 func write_snapshot_info(o *OptionEntries, conn *client.Conn, file *os.File) {
 	var master, mdb *mysql.Result
-	var masterlog, masterpos, mastergtid string
+	var masterlog, mastergtid string
+	var masterpos uint64
 	var err error
 	master, err = conn.Execute(o.global.show_binary_log_status)
 	if err != nil {
@@ -361,7 +362,7 @@ func write_snapshot_info(o *OptionEntries, conn *client.Conn, file *os.File) {
 	}
 	for _, row := range master.Values {
 		masterlog = string(row[0].AsString())
-		masterpos = string(row[1].AsString())
+		masterpos = row[1].AsUint64()
 		if len(row) == 5 {
 			mastergtid = remove_new_line(string(row[4].AsString()))
 		} else {
@@ -386,9 +387,9 @@ func write_snapshot_info(o *OptionEntries, conn *client.Conn, file *os.File) {
 			fmt.Fprintf(file, "executed_gtid_set = \"%s\"\n", mastergtid)
 			if o.Extra.SourceData&1<<(4) > 0 {
 				fmt.Fprintf(file, "SOURCE_AUTO_POSITION = 1\n")
-				fmt.Fprintf(file, "#SOURCE_LOG_FILE = \"%s\"\n#SOURCE_LOG_POS = %s\n", masterlog, masterpos)
+				fmt.Fprintf(file, "#SOURCE_LOG_FILE = \"%s\"\n#SOURCE_LOG_POS = %d\n", masterlog, masterpos)
 			} else {
-				fmt.Fprintf(file, "SOURCE_LOG_FILE = \"%s\"\nSOURCE_LOG_POS = %s\n", masterlog, masterpos)
+				fmt.Fprintf(file, "SOURCE_LOG_FILE = \"%s\"\nSOURCE_LOG_POS = %d\n", masterlog, masterpos)
 				fmt.Fprintf(file, "#SOURCE_AUTO_POSITION = {0|1}\n")
 			}
 			fmt.Fprintf(file, "myloader_exec_reset_replica = %d\n", o.Extra.SourceData&1<<(0))
@@ -405,7 +406,7 @@ func write_snapshot_info(o *OptionEntries, conn *client.Conn, file *os.File) {
 			}
 
 		} else {
-			fmt.Fprintf(file, "File = %s\nPosition = %s\nExecuted_Gtid_Set = %s\n", masterlog, masterpos, mastergtid)
+			fmt.Fprintf(file, "File = %s\nPosition = %d\nExecuted_Gtid_Set = %s\n", masterlog, masterpos, mastergtid)
 		}
 		log.Infof("Written master status")
 	}
@@ -547,6 +548,9 @@ func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 }
 
 func working_thread(o *OptionEntries, td *thread_data) {
+	if o.global.threads == nil {
+		o.global.threads = new(sync.WaitGroup)
+	}
 	o.global.threads.Add(1)
 	defer o.global.threads.Done()
 	o.global.init_mutex.Lock()
@@ -606,7 +610,7 @@ func working_thread(o *OptionEntries, td *thread_data) {
 			}
 		} else {
 			process_queue(o, td.conf.non_innodb.queue, td, false, td.conf.non_innodb.request_chunk)
-			process_queue(o, td.conf.non_innodb.queue, td, false, nil)
+			process_queue(o, td.conf.non_innodb.deferQueue, td, false, nil)
 			td.conf.unlock_tables.push(1)
 		}
 
@@ -767,19 +771,20 @@ func new_db_table(o *OptionEntries, d **db_table, conn *client.Conn, conf *confi
 	var lkey = build_dbt_key(o, database.name, table)
 	o.global.all_dbts_mutex.Lock()
 	var dbt *db_table
-	dbt, _ = o.global.all_dbts[lkey]
+	dbt = o.global.all_dbts[lkey]
 	if dbt != nil {
 		b = false
 		o.global.all_dbts_mutex.Unlock()
 	} else {
 		dbt = new(db_table)
 		dbt.key = lkey
+		dbt.object_to_export = new(object_to_export)
 		dbt.status = UNDEFINED
 		o.global.all_dbts[lkey] = dbt
 		o.global.all_dbts_mutex.Unlock()
 		dbt.database = database
 		dbt.table = o.global.identifier_quote_character_protect(table)
-		dbt.table_filename = get_ref_table(o, dbt.table_filename)
+		dbt.table_filename = get_ref_table(o, dbt.table)
 		dbt.is_sequence = is_sequence
 		if table_collation == "" {
 			dbt.character_set = ""

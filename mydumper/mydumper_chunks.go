@@ -7,6 +7,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -76,6 +77,10 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 	var nmin, nmax int64
 	var lengths = minmax.Fields
 	for _, row = range minmax.Values {
+		if row[0].Value() == nil {
+			log.Infof("It is NONE with minmax == NULL")
+			return new_none_chunk_step()
+		}
 		switch fields[0].Type {
 		case mysql.MYSQL_TYPE_TINY, mysql.MYSQL_TYPE_SHORT, mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_LONGLONG, mysql.MYSQL_TYPE_INT24:
 			log.Debugf("Integer PK found on `%s`.`%s`", dbt.database.name, dbt.table)
@@ -90,11 +95,13 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 			}
 			var unsign bool = (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0
 			if diff_btwn_max_min > dbt.min_chunk_step_size {
-				var types *int_types
+				var types *int_types = new(int_types)
+				types.sign = new(signed_int)
+				types.unsign = new(unsigned_int)
 				var min_css uint64 = dbt.min_chunk_step_size
 				var max_css uint64 = dbt.max_chunk_step_size
 				var starting_css uint64 = dbt.starting_chunk_step_size
-				var is_step_fixed_length bool = (min_css != 0 && min_css == starting_css && max_css == starting_css)
+				var is_step_fixed_length bool = min_css != 0 && min_css == starting_css && max_css == starting_css
 
 				if unsign {
 					types.unsign.min = unmin
@@ -265,7 +272,7 @@ func get_primary_key(o *OptionEntries, conn *client.Conn, dbt *db_table, conf *c
 		return
 	}
 	for _, row = range indexes.Values {
-		if strings.Compare(string(row[1].AsString()), "0") == 0 {
+		if row[1].AsUint64() == 0 {
 			dbt.primary_key = append(dbt.primary_key, string(row[4].AsString()))
 		}
 	}
@@ -277,7 +284,7 @@ func get_primary_key(o *OptionEntries, conn *client.Conn, dbt *db_table, conf *c
 		var cardinality uint64
 		var field string
 		for _, row = range indexes.Values {
-			if strings.Compare(string(row[3].AsString()), "1") == 0 {
+			if row[3].AsUint64() == 1 {
 				if row[6].Value() != nil {
 					cardinality = row[6].AsUint64()
 				}
@@ -293,7 +300,7 @@ func get_primary_key(o *OptionEntries, conn *client.Conn, dbt *db_table, conf *c
 	}
 }
 
-func get_next_dbt_and_chunk_step_item(dbt_pointer *db_table, csi *chunk_step_item, dbt_list *MList) bool {
+func get_next_dbt_and_chunk_step_item(o *OptionEntries, dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
 	dbt_list.mutex.Lock()
 	var dbt *db_table
 	var are_there_jobs_defining bool
@@ -302,7 +309,7 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer *db_table, csi *chunk_step_ite
 		dbt.chunks_mutex.Lock()
 		if dbt.status != DEFINING {
 			if dbt.status == UNDEFINED {
-				dbt_pointer = dbt
+				*dbt_pointer = dbt
 				dbt.status = DEFINING
 				are_there_jobs_defining = true
 				dbt.chunks_mutex.Unlock()
@@ -317,8 +324,25 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer *db_table, csi *chunk_step_ite
 			}
 			lcs = dbt.chunks[0].(*chunk_step_item)
 			if lcs.chunk_type == NONE {
-				dbt_pointer = dbt
-				csi = lcs
+				*dbt_pointer = dbt
+				*csi = lcs
+				index := slices.Index(dbt_list.list, dbt)
+				dbt_list.list = append(dbt_list.list[:index], dbt_list.list[index+1:]...)
+				dbt.chunks_mutex.Unlock()
+				break
+			}
+			if dbt.max_threads_per_table <= dbt.current_threads_running {
+				dbt.chunks_mutex.Unlock()
+				continue
+			}
+			dbt.current_threads_running++
+			lcs = lcs.chunk_functions.get_next(o, dbt)
+			if lcs != nil {
+				*dbt_pointer = dbt
+				*csi = lcs
+				dbt.chunks_mutex.Unlock()
+				break
+			} else {
 				index := slices.Index(dbt_list.list, dbt)
 				dbt_list.list = append(dbt_list.list[:index], dbt_list.list[index+1:]...)
 				dbt.chunks_mutex.Unlock()
@@ -360,7 +384,7 @@ func table_job_enqueue(o *OptionEntries, q *table_queuing) {
 		dbt = nil
 		csi = nil
 		are_there_jobs_defining = false
-		are_there_jobs_defining = get_next_dbt_and_chunk_step_item(dbt, csi, q.table_list)
+		are_there_jobs_defining = get_next_dbt_and_chunk_step_item(o, &dbt, &csi, q.table_list)
 		if dbt != nil {
 			if dbt.status == DEFINING {
 				create_job_to_determine_chunk_type(dbt, g_async_queue_push, q.queue)
@@ -384,14 +408,14 @@ func table_job_enqueue(o *OptionEntries, q *table_queuing) {
 				default:
 					log.Errorf("This should not happen %v", csi.chunk_type)
 				}
-			} else {
-				if are_there_jobs_defining {
-					g_async_queue_push(q.request_chunk, 1)
-					time.Sleep(1 * time.Millisecond)
-					continue
-				}
-				break
 			}
+		} else {
+			if are_there_jobs_defining {
+				g_async_queue_push(q.request_chunk, 1)
+				time.Sleep(1 * time.Millisecond)
+				continue
+			}
+			break
 		}
 	}
 	log.Infof("%s tables completed", q.descr)
@@ -399,6 +423,11 @@ func table_job_enqueue(o *OptionEntries, q *table_queuing) {
 }
 
 func chunk_builder_thread(o *OptionEntries, conf *configuration) {
+	if o.global.chunk_builder == nil {
+		o.global.chunk_builder = new(sync.WaitGroup)
+	}
+	o.global.chunk_builder.Add(1)
+	defer o.global.chunk_builder.Done()
 	table_job_enqueue(o, conf.non_innodb)
 	table_job_enqueue(o, conf.innodb)
 	return

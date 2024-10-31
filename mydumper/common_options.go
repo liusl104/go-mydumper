@@ -176,6 +176,7 @@ type globalEntries struct {
 	metadata_partial_writer_thread              *sync.WaitGroup
 	chunk_builder                               *sync.WaitGroup
 	threads                                     *sync.WaitGroup
+	cft                                         *sync.WaitGroup
 	set_session_hash                            map[string]string
 	set_global_hash                             map[string]string
 	set_global                                  string
@@ -223,6 +224,8 @@ type globalEntries struct {
 	clickhouse                                  bool
 	ignore_errors_list                          []uint16
 	filename_regex                              string
+	m_open                                      func(*OptionEntries, *string, string) (*file_write, error)
+	m_close                                     func(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error
 }
 
 type StreamEntries struct {

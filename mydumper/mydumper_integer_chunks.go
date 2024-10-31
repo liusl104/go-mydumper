@@ -75,6 +75,9 @@ func initialize_integer_step_item(o *OptionEntries, csi *chunk_step_item, includ
 	csi.position = position
 	csi.next = next
 	csi.status = UNASSIGNED
+	if csi.chunk_functions == nil {
+		csi.chunk_functions = new(chunk_functions)
+	}
 	csi.chunk_functions.process = process_integer_chunk
 	csi.chunk_functions.get_next = get_next_integer_chunk
 	csi.where = ""
@@ -330,8 +333,9 @@ func update_integer_min(o *OptionEntries, conn *client.Conn, dbt *db_table, csi 
 	query = fmt.Sprintf("SELECT %s %s%s%s FROM %s%s%s.%s%s%s WHERE %s ORDER BY %s%s%s ASC LIMIT 1",
 		cache,
 		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, dbt.table,
-		o.global.identifier_quote_character_str, csi.field, where,
+		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
+		o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str,
+		where,
 		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str)
 
 	minmax, err = conn.Execute(query)

@@ -15,15 +15,14 @@ import (
 
 const LOAD_DATA_PREFIX = "LOAD DATA LOCAL INFILE '"
 
-var m_open func(*OptionEntries, *string, string) (*file_write, error)
-var m_write func(file *file_write, buff string) (int, error)
+// var m_write func(file *file_write, buff string) (int, error)
 
 func message_dumping_data_short(o *OptionEntries, tj *table_job) {
 	var total uint64 = 0
 	if tj.dbt.rows_total != 0 {
-		total = 100 * tj.dbt.rows / uint64(tj.dbt.rows_total)
+		total = 100 * (tj.dbt.rows / tj.dbt.rows_total)
 	}
-	log.Infof("Thread %d: %s%s%s.%s%s%s [ %d%% | Tables: %d/%d",
+	log.Infof("Thread %d: %s%s%s.%s%s%s [ %d%% ] | Tables: %d/%d",
 		tj.td.thread_id,
 		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str,
 		tj.dbt.table, o.global.identifier_quote_character_str,
@@ -119,12 +118,12 @@ func initialize_write(o *OptionEntries) {
 			o.global.lines_starting_by = replace_escaped_strings(o.Statement.LinesStartingByLd)
 		}
 		if o.Statement.LinesTerminatedByLd == "" {
-			o.global.lines_terminated_by = "("
+			o.global.lines_terminated_by = ")\n"
 		} else {
 			o.global.lines_terminated_by = replace_escaped_strings(o.Statement.LinesTerminatedByLd)
 		}
 		if o.Statement.StatementTerminatedByLd == "" {
-			o.global.statement_terminated_by = ";\n"
+			o.global.statement_terminated_by = ";"
 		} else {
 			o.global.statement_terminated_by = replace_escaped_strings(o.Statement.StatementTerminatedByLd)
 		}
@@ -312,7 +311,7 @@ func build_insert_statement(o *OptionEntries, dbt *db_table, fields []*mysql.Fie
 			i_s.WriteString(")")
 		}
 	}
-	i_s.WriteString(" VALUES")
+	i_s.WriteString(" VALUES ")
 	dbt.insert_statement = i_s
 }
 
@@ -588,10 +587,12 @@ func update_dbt_rows(dbt *db_table, num_rows uint64) {
 }
 
 func initiliaze_load_data_files(o *OptionEntries, tj *table_job, dbt *db_table) {
-	m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+	o.global.m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
+	tj.sql.file.status = 0
 	tj.rows.file = nil
+	tj.rows.file.status = 0
 	tj.sql.filename = ""
 	tj.rows.filename = ""
 	if update_files_on_table_job(o, tj) {
@@ -602,10 +603,12 @@ func initiliaze_load_data_files(o *OptionEntries, tj *table_job, dbt *db_table) 
 }
 
 func initiliaze_clickhouse_files(o *OptionEntries, tj *table_job, dbt *db_table) {
-	m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+	o.global.m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
+	tj.sql.file.status = 0
 	tj.rows.file = nil
+	tj.rows.file.status = 0
 
 	tj.sql.filename = ""
 	tj.rows.filename = ""
@@ -616,7 +619,7 @@ func initiliaze_clickhouse_files(o *OptionEntries, tj *table_job, dbt *db_table)
 	}
 }
 
-func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, result *mysql.Result, tj *table_job) error {
+func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, result mysql.Result, tj *table_job) error {
 	var dbt *db_table = tj.dbt
 	var num_fields uint
 	var escaped string
@@ -647,7 +650,7 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 		}
 	case CLICKHOUSE:
 		write_column_into_string = write_sql_column_into_string
-		if tj.rows.file == nil {
+		if tj.rows.file.status == 0 {
 			update_files_on_table_job(o, tj)
 		}
 		if dbt.load_data_suffix == nil {
@@ -671,7 +674,7 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 		statement.WriteString(dbt.insert_statement.String())
 	case SQL_INSERT:
 		write_column_into_string = write_sql_column_into_string
-		if tj.rows.file == nil {
+		if tj.rows.file.status == 0 {
 			update_files_on_table_job(o, tj)
 		}
 		if dbt.insert_statement == nil {
@@ -688,8 +691,8 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 	}
 	o.global.message_dumping_data(o, tj)
 	var from = time.Now()
-	lengths = result.Fields
-	err = conn.ExecuteSelectStreaming(query, result, func(row []mysql.FieldValue) error {
+
+	err = conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
 		num_rows++
 		write_row_into_string(o, conn, dbt, row, fields, lengths, num_fields, &escaped, statement_row, write_column_into_string)
 		if statement.Len()*statement_row.Len()+1 > o.Statement.StatementSize {
@@ -728,8 +731,9 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 			case CLICKHOUSE:
 				initiliaze_clickhouse_files(o, tj, dbt)
 			case SQL_INSERT:
-				m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+				o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 				tj.rows.file = nil
+				tj.rows.file.status = 0
 				update_files_on_table_job(o, tj)
 				initiliaze_clickhouse_files(o, tj, dbt)
 			}
@@ -746,6 +750,7 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 		statement_row.Reset()
 		return nil
 	}, func(result *mysql.Result) error {
+		lengths = result.Fields
 		num_fields = uint(len(result.Fields))
 		fields = result.Fields
 		return nil
@@ -804,7 +809,7 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 func write_table_job_into_file(o *OptionEntries, tj *table_job) {
 	var conn = tj.td.thrconn
 	var err error
-	var result *mysql.Result
+	var result mysql.Result
 	var query string
 	var cache, fields, where1, where_option1, where2, where_option2, where3, where_option3, order, limit string
 	if o.is_mysql_like() {
@@ -839,7 +844,9 @@ func write_table_job_into_file(o *OptionEntries, tj *table_job) {
 	if tj.dbt.limit != "" {
 		limit = "LIMIT"
 	}
-	query = fmt.Sprintf("SELECT %s %s FROM %s%s.%s%s%s %s %s %s %s %s %s %s %s %s %s %s", cache, fields,
+	query = fmt.Sprintf("SELECT %s %s FROM %s%s%s.%s%s%s %s %s %s %s %s %s %s %s %s %s %s",
+		cache,
+		fields,
 		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str,
 		o.global.identifier_quote_character_str, tj.dbt.table, o.global.identifier_quote_character_str,
 		tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, tj.order_by, limit, tj.dbt.limit)
@@ -851,7 +858,10 @@ func write_table_job_into_file(o *OptionEntries, tj *table_job) {
 		if err != nil {
 			if !o.global.it_is_a_consistent_backup {
 				log.Warnf("Thread %d: Reconnecting due errors", tj.td.thread_id)
-				tj.td.thrconn, _ = m_connect(o)
+				tj.td.thrconn, err = m_connect(o)
+				if err != nil {
+					log.Fatalf("Reconnect file: %v", err)
+				}
 				execute_gstring(tj.td.thrconn, o.global.set_session)
 			}
 		}

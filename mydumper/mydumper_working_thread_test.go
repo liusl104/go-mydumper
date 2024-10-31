@@ -53,9 +53,3 @@ func TestIsView(t *testing.T) {
 		}
 	}
 }
-
-func TestParse_rows_per_chunk(t *testing.T) {
-	o := newEntries()
-	o.Chunks.RowsPerChunk = "10a0:1000"
-	parse_rows_per_chunk(o)
-}

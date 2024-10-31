@@ -137,6 +137,7 @@ func before_arguments_callback(o *OptionEntries) bool {
 	o.global.source_control_command = TRADITIONAL
 	o.global.print_connection_details = 1
 	o.global.routine_type = []string{"FUNCTION", "PROCEDURE", "PACKAGE", "PACKAGE BODY"}
+	o.global.split_integer_tables = true
 	o.global.nroutines = 4
 	o.global.num_exec_threads = 4
 	o.global.sync_wait = -1

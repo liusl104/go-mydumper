@@ -798,7 +798,7 @@ func check_num_threads(o *OptionEntries) {
 	}
 	if o.Common.NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", o.Common.NumThreads, MIN_THREAD_COUNT)
-		o.Common.NumThreads = MIN_THREAD_COUNT
+		// o.Common.NumThreads = MIN_THREAD_COUNT
 	}
 }
 

@@ -337,6 +337,9 @@ func initialize_start_dump(o *OptionEntries) {
 	o.global.all_dbts = make(map[string]*db_table)
 	initialize_set_names(o)
 	initialize_working_thread(o)
+	if o.global.conf_per_table == nil {
+		o.global.conf_per_table = new(configuration_per_table)
+	}
 	initialize_conf_per_table(o.global.conf_per_table)
 
 	// until we have an unique option on lock int_types we need to ensure this
@@ -570,7 +573,7 @@ func detect_sql_mode(o *OptionEntries, conn *client.Conn) {
 	var str string
 	for _, row = range res.Values {
 		if !strings.Contains(string(row[0].AsString()), "NO_AUTO_VALUE_ON_ZERO") {
-			str = fmt.Sprintf("'NO_AUTO_VALUE_ON_ZERO,%s'", row[0].AsString())
+			str = fmt.Sprintf("NO_AUTO_VALUE_ON_ZERO,%s", row[0].AsString())
 		} else {
 			str = fmt.Sprintf("'%s'", row[0].AsString())
 		}
@@ -921,7 +924,7 @@ func send_lock_all_tables(o *OptionEntries, conn *client.Conn) {
 			query = fmt.Sprintf("SHOW TABLES IN %s LIKE '%s'", dt[0], dt[1])
 			res, err = conn.Execute(query)
 			if err != nil {
-				log.Fatal("Error showing tables in: %s - Could not execute query: %v", dt[0], err)
+				log.Fatalf("Error showing tables in: %s - Could not execute query: %v", dt[0], err)
 			} else {
 				for _, row := range res.Values {
 					if o.CommonFilter.TablesSkiplistFile != "" && check_skiplist(o, dt[0], string(row[0].AsString())) {
@@ -1226,7 +1229,7 @@ func StartDump(o *OptionEntries) error {
 		}
 		fmt.Fprintf(mdfile, "[config]\nquote_character = %s\n", qc)
 		fmt.Fprintf(mdfile, "\n[myloader_session_variables]")
-		fmt.Fprintf(mdfile, "\nSQL_MODE=%s /*!40101\n\n", o.global.sql_mode)
+		fmt.Fprintf(mdfile, "\nSQL_MODE=%s \n\n", o.global.sql_mode)
 		mdfile.Sync()
 	} else {
 		log.Fatalf("--identifier-quote-character not is %s or %s", BACKTICK, DOUBLE_QUOTE)
@@ -1327,6 +1330,10 @@ func StartDump(o *OptionEntries) error {
 	conf.initial_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	conf.schema_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	conf.post_data_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
+	if conf.innodb == nil {
+		conf.innodb = new(table_queuing)
+		conf.non_innodb = new(table_queuing)
+	}
 	conf.innodb.queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	conf.innodb.deferQueue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
 	if o.global.give_me_another_innodb_chunk_step_queue != nil && o.global.give_me_another_non_innodb_chunk_step_queue != nil &&
@@ -1366,6 +1373,22 @@ func StartDump(o *OptionEntries) error {
 	if o.Objects.DumpTablespaces {
 		create_job_to_dump_tablespaces(conf, o.global.dump_directory)
 	}
+	if len(o.global.tables) > 0 {
+		create_job_to_dump_table_list(o, o.global.tables, conf)
+	} else if len(o.global.db_items) > 0 {
+		var i int
+		for i = 0; i < len(o.global.db_items); i++ {
+			var this_db *database = new_database(o, conn, o.global.db_items[i], true)
+			create_job_to_dump_database(o, this_db, conf)
+			if !o.Objects.NoSchemas {
+				create_job_to_dump_schema(o, this_db, conf)
+			}
+		}
+	} else {
+		create_job_to_dump_all_databases(o, conf)
+	}
+	log.Infof("End job creation")
+
 	if !o.Objects.NoData {
 		go chunk_builder_thread(o, conf)
 	}
@@ -1377,6 +1400,7 @@ func StartDump(o *OptionEntries) error {
 	}
 
 	for n = 0; n < o.Common.NumThreads; n++ {
+		td[n] = new(thread_data)
 		td[n].conf = conf
 		td[n].thread_id = n + 1
 		td[n].less_locking_stage = false
