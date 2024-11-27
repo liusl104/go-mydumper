@@ -10,13 +10,12 @@ import (
 	"time"
 )
 
-func gint64_abs(a int64) int64 {
-	if a > 0 {
-		return a
+func gint64_abs(a int64) uint64 {
+	if a >= 0 {
+		return uint64(a)
 	}
-	return -a
+	return uint64(-a)
 }
-
 func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool, types *int_types, is_step_fixed_length bool,
 	step uint64, min_css uint64, max_css uint64, check_min bool, check_max bool) {
 	cs.integer_step.is_unsigned = is_unsigned
@@ -43,7 +42,7 @@ func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool,
 		if step != 0 {
 			cs.integer_step.step = step
 		} else {
-			cs.integer_step.step = uint64(gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min)/int64(o.Common.NumThreads) + 1)
+			cs.integer_step.step = gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min)/uint64(o.Common.NumThreads) + 1
 		}
 		if cs.integer_step.step > 0 {
 			cs.integer_step.estimated_remaining_steps = uint64(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min) / cs.integer_step.step
@@ -56,8 +55,7 @@ func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool,
 	cs.integer_step.check_min = check_min
 }
 
-func new_integer_step(o *OptionEntries, is_unsigned bool, types *int_types, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64,
-	check_min bool, check_max bool) *chunk_step {
+func new_integer_step(o *OptionEntries, is_unsigned bool, types *int_types, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64, check_min bool, check_max bool) *chunk_step {
 	var cs = new(chunk_step)
 	cs.integer_step = new(integer_step)
 	cs.integer_step.types = new(int_types)
@@ -115,7 +113,9 @@ func split_chunk_step(o *OptionEntries, csi *chunk_step_item) *chunk_step_item {
 	var number uint = uint(csi.number)
 	var new_minmax_signed int64 = 0
 	var new_minmax_unsigned uint64 = 0
-	var types *int_types
+	var types *int_types = new(int_types)
+	types.unsign = new(unsigned_int)
+	types.sign = new(signed_int)
 	var ics *integer_step = csi.chunk_step.integer_step
 	if ics.is_unsigned {
 		types.unsign.max = ics.types.unsign.max
@@ -200,8 +200,8 @@ func has_only_one_level(csi *chunk_step_item) bool {
 func is_splitable(csi *chunk_step_item) bool {
 	return !csi.chunk_step.integer_step.is_step_fixed_length && ((csi.chunk_step.integer_step.is_unsigned && (csi.chunk_step.integer_step.types.unsign.cursor < csi.chunk_step.integer_step.types.unsign.max && ((csi.status == DUMPING_CHUNK && (csi.chunk_step.integer_step.types.unsign.max-csi.chunk_step.integer_step.types.unsign.cursor) >= csi.chunk_step.integer_step.step) ||
 		(csi.status == ASSIGNED && (csi.chunk_step.integer_step.types.unsign.max-csi.chunk_step.integer_step.types.unsign.min) >= csi.chunk_step.integer_step.step)))) || (!csi.chunk_step.integer_step.is_unsigned && (csi.chunk_step.integer_step.types.sign.cursor < csi.chunk_step.integer_step.types.sign.max &&
-		(csi.status == DUMPING_CHUNK && gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.cursor) >= int64(csi.chunk_step.integer_step.step) ||
-			(csi.status == ASSIGNED && gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.min) >= int64(csi.chunk_step.integer_step.step)))))) ||
+		(csi.status == DUMPING_CHUNK && gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.cursor) >= csi.chunk_step.integer_step.step ||
+			(csi.status == ASSIGNED && gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.min) >= csi.chunk_step.integer_step.step))))) ||
 		(csi.chunk_step.integer_step.is_step_fixed_length && ((csi.chunk_step.integer_step.is_unsigned && csi.chunk_step.integer_step.types.unsign.max/csi.chunk_step.integer_step.step > csi.chunk_step.integer_step.types.unsign.min/csi.chunk_step.integer_step.step+1) || (!csi.chunk_step.integer_step.is_unsigned && csi.chunk_step.integer_step.types.sign.max/int64(csi.chunk_step.integer_step.step) > csi.chunk_step.integer_step.types.sign.min/int64(csi.chunk_step.integer_step.step)+1)))
 }
 
@@ -210,7 +210,6 @@ func clone_chunk_step_item(o *OptionEntries, csi *chunk_step_item) *chunk_step_i
 }
 
 func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
-	dbt.chunks_mutex.Lock()
 	var csi, new_csi *chunk_step_item
 	var task any
 	if dbt.chunks != nil {
@@ -230,7 +229,7 @@ func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 				if is_splitable(csi) {
 					new_csi = split_chunk_step(o, csi)
 					if new_csi != nil {
-						dbt.chunks = append(dbt.chunks, new_csi)
+						dbt.chunks.PushBack(new_csi)
 						dbt.chunks_queue.push(csi)
 						dbt.chunks_queue.push(new_csi)
 						csi.mutex.Unlock()
@@ -249,7 +248,7 @@ func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 							new_csi.next = split_chunk_step(o, csi.next)
 							if new_csi.next != nil {
 								new_csi.next.prefix = new_csi.where
-								dbt.chunks = append(dbt.chunks, new_csi)
+								dbt.chunks.PushBack(new_csi)
 								dbt.chunks_queue.push(csi)
 								dbt.chunks_queue.push(new_csi)
 								csi.next.mutex.Unlock()
@@ -412,6 +411,9 @@ func process_integer_chunk_step(o *OptionEntries, tj *table_job, csi *chunk_step
 	}
 	csi.mutex.Lock()
 	csi.status = DUMPING_CHUNK
+	if cs.integer_step.check_max {
+		cs.integer_step.check_max = false
+	}
 	if cs.integer_step.check_min {
 		cs.integer_step.check_min = false
 	}
@@ -427,7 +429,7 @@ func process_integer_chunk_step(o *OptionEntries, tj *table_job, csi *chunk_step
 			cs.integer_step.estimated_remaining_steps = 1
 		}
 	} else {
-		if int64(cs.integer_step.step-1) > gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min) {
+		if cs.integer_step.step-1 > gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min) {
 			cs.integer_step.types.sign.cursor = cs.integer_step.types.sign.max
 		} else {
 			cs.integer_step.types.sign.cursor = cs.integer_step.types.sign.min + int64(cs.integer_step.step) - 1
@@ -530,6 +532,8 @@ func process_integer_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item
 
 func update_integer_where_on_gstring(o *OptionEntries, where *string, include_null bool, prefix string, field string, is_unsigned bool, types *int_types, use_cursor bool) {
 	var t *int_types = new(int_types)
+	t.sign = new(signed_int)
+	t.unsign = new(unsigned_int)
 	if prefix != "" && len(prefix) > 0 {
 		*where += fmt.Sprintf("(%s AND ", prefix)
 	}

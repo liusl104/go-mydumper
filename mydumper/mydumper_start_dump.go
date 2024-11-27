@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -82,7 +83,7 @@ type configuration struct {
 	done                        int
 }
 type MList struct {
-	list  []*db_table
+	list  *list.List
 	mutex *sync.Mutex
 }
 type thread_data struct {
@@ -302,7 +303,7 @@ type db_table struct {
 	columns_on_insert              string
 	partition_regex                *regexp.Regexp
 	num_threads                    uint
-	chunks                         []any
+	chunks                         *list.List
 	chunks_queue                   *asyncQueue
 	chunks_mutex                   *sync.Mutex
 	primary_key                    []string
@@ -1137,7 +1138,7 @@ func StartDump(o *OptionEntries) error {
 	if o.Common.ClearDumpDir {
 		clear_dump_directory(o.global.dump_directory)
 	} else if !o.Common.DirtyDumpDir && !is_empty_dir(o.global.dump_directory) {
-		log.Errorf("Directory is not empty (use --clear or --dirty): %s\n", o.global.dump_directory)
+		log.Errorf("Directory is not empty (use --clear or --dirty): %s", o.global.dump_directory)
 	}
 
 	check_num_threads(o)

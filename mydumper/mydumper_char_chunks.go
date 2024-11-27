@@ -107,8 +107,8 @@ func free_char_step(cs *chunk_step) {
 
 func get_next_char_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 	var csi *chunk_step_item
-	for _, data := range dbt.chunks {
-		csi = data.(*chunk_step_item)
+	for e := dbt.chunks.Front(); e != nil; e = e.Next() {
+		csi = e.Value.(*chunk_step_item)
 		if csi.mutex == nil {
 			log.Infof("This should not happen")
 			continue
@@ -337,7 +337,7 @@ func process_char_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
 			if cont == true {
 				cs.char_step.previous = nil
 				dbt.chunks_mutex.Lock()
-				dbt.chunks = append(dbt.chunks, cs)
+				dbt.chunks.PushBack(cs)
 				dbt.chunks_mutex.Unlock()
 			} else {
 				dbt.chunks_mutex.Lock()

@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"container/list"
 	"errors"
 	"fmt"
 	"github.com/go-ini/ini"
@@ -736,7 +737,12 @@ func initialize_common_options(o *OptionEntries, group string) {
 	m_key_file_merge(o.global.key_file, extra_key_file)
 }
 
+// g_key_file_has_group 检查配置文件中是否存在指定的组。
+// 参数 kf 是一个指向 ini.File 的指针，代表配置文件。
+// 参数 group 是一个字符串，表示要检查的组名。
+// 返回值是一个布尔值，如果配置文件中存在该组，则为 true，否则为 false。
 func g_key_file_has_group(kf *ini.File, group string) bool {
+	// 使用 ini.File 的 HasSection 方法检查是否存在指定组。
 	return kf.HasSection(group)
 }
 
@@ -784,21 +790,40 @@ func remove_definer(data string) string {
 	return remove_definer_from_gchar(data)
 }
 
+// print_version 打印程序的版本信息。
+// 该函数接受一个字符串参数 program，表示程序的名称。
+// 函数没有返回值。
 func print_version(program string) {
+	// 使用 fmt 包的 Printf 函数按照指定格式输出版本信息。
 	fmt.Printf("%s v%s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+
+	// 输出源代码的 Git Commit Hash。
 	fmt.Printf("Git Commit Hash: %s\n", src.GitHash)
+
+	// 输出源代码的 Git 分支名称。
 	fmt.Printf("Git Branch: %s\n", src.GitBranch)
+
+	// 输出程序的构建时间。
 	fmt.Printf("Build Time: %s\n", src.BuildTS)
+
+	// 输出用于构建程序的 Go 语言版本。
 	fmt.Printf("Go Version: %s\n", src.GoVersion)
 }
 
+// check_num_threads 检查并设置线程数量
+// 该函数根据选项配置和系统处理器数量，确保线程数量设置为合理值
+// 参数:
+//
+//	o *OptionEntries: 指向选项配置的指针
 func check_num_threads(o *OptionEntries) {
+	// 如果配置的线程数量小于等于0，则将其设置为系统处理器数量
 	if o.Common.NumThreads <= 0 {
 		o.Common.NumThreads = g_get_num_processors()
 	}
+	// 如果线程数量小于最小线程数量，则记录警告并将其设置为最小线程数量
 	if o.Common.NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", o.Common.NumThreads, MIN_THREAD_COUNT)
-		// o.Common.NumThreads = MIN_THREAD_COUNT
+		o.Common.NumThreads = MIN_THREAD_COUNT
 	}
 }
 
@@ -811,6 +836,11 @@ func filter_sequence_schemas(create_table string) string {
 	return re.ReplaceAllString(create_table, fss[0][1])
 }
 
+// g_rec_mutex_new 创建并返回一个新的互斥锁。
+//
+// 返回值:
+//
+//	*sync.Mutex: 新创建的互斥锁指针。
 func g_rec_mutex_new() *sync.Mutex {
 	return new(sync.Mutex)
 }
@@ -878,7 +908,7 @@ func g_get_num_processors() uint {
 func m_query(o *OptionEntries, conn *client.Conn, query string, log_fun func(fmt string, a ...any), fmt string) *mysql.Result {
 	res, err := conn.Execute(query)
 	if err != nil {
-		if !slices.Contains(o.global.ignore_errors_list, mysqlError(err).Code) {
+		if !listContains(o.global.ignore_errors_list, mysqlError(err).Code) {
 			log_fun("%v", err)
 			return res
 		} else {
@@ -890,4 +920,13 @@ func m_query(o *OptionEntries, conn *client.Conn, query string, log_fun func(fmt
 
 func m_critical(fmt string, a ...any) {
 
+}
+
+func listContains(l *list.List, value any) bool {
+	for e := l.Front(); e != nil; e = e.Next() {
+		if e.Value == value {
+			return true
+		}
+	}
+	return false
 }

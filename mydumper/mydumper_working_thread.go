@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -517,29 +518,32 @@ func process_queue(o *OptionEntries, queue *asyncQueue, td *thread_data, do_buil
 }
 
 func build_lock_tables_statement(o *OptionEntries, conf *configuration) {
-	o.global.non_innodb_table_mutex.Lock()
+	o.global.non_innodb_table.mutex.Lock()
 	var dbt *db_table
-	var i int
-	for i, dbt = range o.global.non_innodb_table.list {
-		if i == 0 {
-			conf.lock_tables_statement = fmt.Sprintf("LOCK TABLES %s%s%s.%s%s%s READ LOCAL", o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
-				o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str)
-			continue
-		}
-		conf.lock_tables_statement += fmt.Sprintf(", %s%s%s.%s%s%s READ LOCAL", o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
+	var iter *list.List = o.global.non_innodb_table.list
+	if iter != nil {
+		dbt = iter.Front().Value.(*db_table)
+		conf.lock_tables_statement = fmt.Sprintf("LOCK TABLES %s%s%s.%s%s%s READ LOCAL", o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
 			o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str)
+		for e := iter.Front().Next(); e.Value != nil; e.Next() {
+			dbt = e.Value.(*db_table)
+			conf.lock_tables_statement += fmt.Sprintf(", %s%s%s.%s%s%s READ LOCAL", o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
+				o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str)
+		}
 	}
-	o.global.non_innodb_table_mutex.Unlock()
+	o.global.non_innodb_table.mutex.Unlock()
 }
 
 func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 	var total uint64
-	for _, l := range dbt.chunks {
-		switch l.(*chunk_step_item).chunk_type {
+	for l := dbt.chunks.Front(); l != nil; l = l.Next() {
+		switch l.Value.(*chunk_step_item).chunk_type {
 		case INTEGER:
-			total += l.(*chunk_step).integer_step.estimated_remaining_steps
+			data := l.Value.(*chunk_step_item)
+			total += data.chunk_step.integer_step.estimated_remaining_steps
 		case CHAR:
-			total += l.(*chunk_step).char_step.estimated_remaining_steps
+			data := l.Value.(*chunk_step_item)
+			total += data.chunk_step.char_step.estimated_remaining_steps
 		default:
 			total++
 		}
@@ -908,20 +912,20 @@ func new_table_to_dump(o *OptionEntries, conn *client.Conn, conf *configuration,
 					if o.Lock.TrxConsistencyOnly || (ecol != "" && (ecol == "InnoDB" || ecol == "TokuDB")) {
 						dbt.is_innodb = true
 						o.global.innodb_table.mutex.Lock()
-						o.global.innodb_table.list = append(o.global.innodb_table.list, dbt)
+						o.global.innodb_table.list.PushFront(dbt)
 						o.global.innodb_table.mutex.Unlock()
 
 					} else {
 						dbt.is_innodb = false
 						o.global.non_innodb_table.mutex.Lock()
-						o.global.non_innodb_table.list = append(o.global.non_innodb_table.list, dbt)
+						o.global.non_innodb_table.list.PushFront(dbt)
 						o.global.non_innodb_table.mutex.Unlock()
 					}
 				} else {
 					if is_view {
 						dbt.is_innodb = false
 						o.global.non_innodb_table.mutex.Lock()
-						o.global.non_innodb_table.list = append(o.global.non_innodb_table.list, dbt)
+						o.global.non_innodb_table.list.PushFront(dbt)
 						o.global.non_innodb_table.mutex.Unlock()
 					}
 				}

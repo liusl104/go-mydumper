@@ -1,6 +1,8 @@
 package mydumper
 
 import (
+	"container/list"
+	"math"
 	"strings"
 )
 
@@ -144,6 +146,7 @@ func before_arguments_callback(o *OptionEntries) bool {
 	o.global.insert_statement = INSERT
 	o.global.filename_regex = "^[\\w\\-_ ]+$"
 	o.global.product = SERVER_TYPE_UNKNOWN
+	o.global.ignore_errors_list = list.New()
 
 	return true
 }
@@ -164,7 +167,7 @@ func after_arguments_callback(o *OptionEntries) bool {
 	// o.Daemon.SnapshotCount = 2
 	// o.Daemon.SnapshotInterval = 60
 	if o.Chunks.MaxThreadsPerTable == 0 {
-		// o.Chunks.MaxThreadsPerTable = math.MaxUint
+		o.Chunks.MaxThreadsPerTable = math.MaxUint32
 	}
 	if o.Chunks.MaxRows == 0 {
 		o.Chunks.MaxRows = 100000

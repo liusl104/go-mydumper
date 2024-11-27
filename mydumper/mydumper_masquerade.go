@@ -10,8 +10,8 @@ func finalize_masquerade(o *OptionEntries) {
 
 func get_estimated_remaining_chunks_on_dbt(dbt *db_table) uint64 {
 	var total uint64
-	for _, l := range dbt.chunks {
-		total += l.(*chunk_step).integer_step.estimated_remaining_steps
+	for e := dbt.chunks.Front(); e != nil; e = e.Next() {
+		total += e.Value.(*chunk_step).integer_step.estimated_remaining_steps
 	}
 	return total
 }

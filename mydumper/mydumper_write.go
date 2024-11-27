@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"container/list"
 	"encoding/hex"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
@@ -27,7 +28,7 @@ func message_dumping_data_short(o *OptionEntries, tj *table_job) {
 		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str,
 		tj.dbt.table, o.global.identifier_quote_character_str,
 		total,
-		len(o.global.innodb_table.list)+len(o.global.non_innodb_table.list), len(o.global.all_dbts))
+		o.global.innodb_table.list.Len()+o.global.non_innodb_table.list.Len(), len(o.global.all_dbts))
 }
 
 func message_dumping_data_long(o *OptionEntries, tj *table_job) {
@@ -77,7 +78,7 @@ func message_dumping_data_long(o *OptionEntries, tj *table_job) {
 		where_and_opt_1, where_and_val_1,
 		order_by, order_by_val,
 		tj.rows.filename, total,
-		len(o.global.innodb_table.list)+len(o.global.non_innodb_table.list), len(o.global.all_dbts))
+		o.global.innodb_table.list.Len()+o.global.non_innodb_table.list.Len(), len(o.global.all_dbts))
 }
 
 func initialize_write(o *OptionEntries) {
@@ -491,9 +492,10 @@ func write_header(tj *table_job) bool {
 
 func get_estimated_remaining_of(mlist *MList) uint64 {
 	mlist.mutex.Lock()
+	var tl *list.List = mlist.list
 	var total uint64
-	for _, tl := range mlist.list {
-		total += tl.estimated_remaining_steps
+	for e := tl.Front(); e != nil; e = e.Next() {
+		total += e.Value.(*db_table).estimated_remaining_steps
 	}
 	mlist.mutex.Unlock()
 	return total

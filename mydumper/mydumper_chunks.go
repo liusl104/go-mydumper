@@ -1,11 +1,11 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
-	"slices"
+	"github.com/siddontang/go-log/log"
 	"strings"
 	"sync"
 	"time"
@@ -18,8 +18,8 @@ func initialize_chunk(o *OptionEntries) {
 }
 
 func finalize_chunk(o *OptionEntries) {
-	o.global.give_me_another_innodb_chunk_step_queue.unref()
-	o.global.give_me_another_non_innodb_chunk_step_queue.unref()
+	g_async_queue_unref(o.global.give_me_another_innodb_chunk_step_queue)
+	g_async_queue_unref(o.global.give_me_another_non_innodb_chunk_step_queue)
 }
 
 func process_none_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
@@ -75,7 +75,7 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 	var fields []*mysql.Field = minmax.Fields
 	var diff_btwn_max_min, unmin, unmax uint64
 	var nmin, nmax int64
-	var lengths = minmax.Fields
+	// var lengths = minmax.Fields
 	for _, row = range minmax.Values {
 		if row[0].Value() == nil {
 			log.Infof("It is NONE with minmax == NULL")
@@ -89,9 +89,9 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 			nmin = row[0].AsInt64()
 			nmax = row[1].AsInt64()
 			if (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0 {
-				diff_btwn_max_min = uint64(gint64_abs(int64(unmax - unmin)))
+				diff_btwn_max_min = gint64_abs(int64(unmax - unmin))
 			} else {
-				diff_btwn_max_min = uint64(gint64_abs(nmax - nmin))
+				diff_btwn_max_min = gint64_abs(nmax - nmin)
 			}
 			var unsign bool = (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0
 			if diff_btwn_max_min > dbt.min_chunk_step_size {
@@ -114,7 +114,8 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 				csi = new_integer_step_item(o, true, prefix, field, unsign, types, 0, is_step_fixed_length, starting_css, min_css, max_css, 0, false, false, nil, position)
 
 				if dbt.multicolumn && csi.position == 0 {
-					if (csi.chunk_step.integer_step.is_unsigned && (rows/(csi.chunk_step.integer_step.types.unsign.max-csi.chunk_step.integer_step.types.unsign.min) > dbt.min_chunk_step_size)) || (!csi.chunk_step.integer_step.is_unsigned && (int64(rows)/gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.min) > int64(dbt.min_chunk_step_size))) {
+					if (csi.chunk_step.integer_step.is_unsigned && (rows/(csi.chunk_step.integer_step.types.unsign.max-csi.chunk_step.integer_step.types.unsign.min) > dbt.min_chunk_step_size)) ||
+						(!csi.chunk_step.integer_step.is_unsigned && (rows/gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.min) > dbt.min_chunk_step_size)) {
 						csi.chunk_step.integer_step.min_chunk_step_size = 1
 						csi.chunk_step.integer_step.is_step_fixed_length = true
 						csi.chunk_step.integer_step.max_chunk_step_size = 1
@@ -147,8 +148,9 @@ func initialize_chunk_step_item(o *OptionEntries, conn *client.Conn, dbt *db_tab
 				          mysql_free_result(minmax);
 				        return new_none_chunk_step();
 			*/
-			csi = new_char_step_item(o, conn, true, prefix, dbt.primary_key[0], 0, 0, row, lengths, nil)
-			return csi
+			return new_none_chunk_step()
+			/*csi = new_char_step_item(o, conn, true, prefix, dbt.primary_key[0], 0, 0, row, lengths, nil)
+			return csi */
 		default:
 			log.Infof("It is NONE: default")
 			return new_none_chunk_step()
@@ -168,7 +170,7 @@ func get_rows_from_explain(o *OptionEntries, conn *client.Conn, dbt *db_table, w
 	}
 	var q, field_column, where_column string
 	if field != "" {
-		q = o.Common.IdentifierQuoteCharacter
+		q = o.global.identifier_quote_character_str
 		field_column = field
 	} else {
 		field_column = "*"
@@ -177,8 +179,8 @@ func get_rows_from_explain(o *OptionEntries, conn *client.Conn, dbt *db_table, w
 		where_column = " WHERE "
 	}
 	query = fmt.Sprintf("EXPLAIN SELECT %s %s%s%s FROM %s%s%s.%s%s%s%s%s", cache, q, field_column, q,
-		o.Common.IdentifierQuoteCharacter, dbt.database.name, o.Common.IdentifierQuoteCharacter,
-		o.Common.IdentifierQuoteCharacter, dbt.table, o.Common.IdentifierQuoteCharacter, where_column, where)
+		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
+		o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str, where_column, where)
 	res, err = conn.Execute(query)
 	if err != nil {
 		log.Fatalf("Error executing EXPLAIN query `%s`: %s", query, err)
@@ -203,8 +205,8 @@ func get_rows_from_count(o *OptionEntries, conn *client.Conn, dbt *db_table) uin
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	query = fmt.Sprintf("SELECT %s COUNT(*) FROM %s%s%s.%s%s%s", cache,
-		o.Common.IdentifierQuoteCharacter, dbt.database.name, o.Common.IdentifierQuoteCharacter,
-		o.Common.IdentifierQuoteCharacter, dbt.table, o.Common.IdentifierQuoteCharacter)
+		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
+		o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str)
 	res, err := conn.Execute(query)
 	if err != nil {
 		log.Errorf("Error executing EXPLAIN query `%s`: %s", query, err)
@@ -246,7 +248,7 @@ func set_chunk_strategy_for_dbt(o *OptionEntries, conn *client.Conn, dbt *db_tab
 	} else {
 		csi = new_none_chunk_step()
 	}
-	dbt.chunks = append(dbt.chunks, csi)
+	dbt.chunks.PushFront(csi)
 	dbt.chunks_queue.push(csi)
 	dbt.status = READY
 	dbt.chunks_mutex.Unlock()
@@ -256,7 +258,6 @@ func get_primary_key(o *OptionEntries, conn *client.Conn, dbt *db_table, conf *c
 	var indexes *mysql.Result
 	var row []mysql.FieldValue
 	var err error
-	dbt.primary_key = make([]string, 0)
 	var query string = fmt.Sprintf("SHOW INDEX FROM %s%s%s.%s%s%s", o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
 		o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str)
 	indexes, err = conn.Execute(query)
@@ -303,13 +304,15 @@ func get_primary_key(o *OptionEntries, conn *client.Conn, dbt *db_table, conf *c
 func get_next_dbt_and_chunk_step_item(o *OptionEntries, dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
 	dbt_list.mutex.Lock()
 	var dbt *db_table
+	var iter *list.List = dbt_list.list
 	var are_there_jobs_defining bool
 	var lcs *chunk_step_item
-	for _, dbt = range dbt_list.list {
+	for v := iter.Front(); v != nil; v = v.Next() {
+		dbt = v.Value.(*db_table)
 		dbt.chunks_mutex.Lock()
 		if dbt.status != DEFINING {
 			if dbt.status == UNDEFINED {
-				*dbt_pointer = dbt
+				*dbt_pointer = v.Value.(*db_table)
 				dbt.status = DEFINING
 				are_there_jobs_defining = true
 				dbt.chunks_mutex.Unlock()
@@ -322,12 +325,11 @@ func get_next_dbt_and_chunk_step_item(o *OptionEntries, dbt_pointer **db_table, 
 				dbt.chunks_mutex.Unlock()
 				continue
 			}
-			lcs = dbt.chunks[0].(*chunk_step_item)
+			lcs = dbt.chunks.Front().Value.(*chunk_step_item)
 			if lcs.chunk_type == NONE {
-				*dbt_pointer = dbt
+				*dbt_pointer = v.Value.(*db_table)
 				*csi = lcs
-				index := slices.Index(dbt_list.list, dbt)
-				dbt_list.list = append(dbt_list.list[:index], dbt_list.list[index+1:]...)
+				dbt_list.list.Remove(v)
 				dbt.chunks_mutex.Unlock()
 				break
 			}
@@ -338,13 +340,13 @@ func get_next_dbt_and_chunk_step_item(o *OptionEntries, dbt_pointer **db_table, 
 			dbt.current_threads_running++
 			lcs = lcs.chunk_functions.get_next(o, dbt)
 			if lcs != nil {
-				*dbt_pointer = dbt
+				*dbt_pointer = v.Value.(*db_table)
 				*csi = lcs
 				dbt.chunks_mutex.Unlock()
 				break
 			} else {
-				index := slices.Index(dbt_list.list, dbt)
-				dbt_list.list = append(dbt_list.list[:index], dbt_list.list[index+1:]...)
+				dbt_list.list.Remove(v)
+				iter.Front().Next()
 				dbt.chunks_mutex.Unlock()
 				continue
 			}
@@ -377,7 +379,7 @@ func table_job_enqueue(o *OptionEntries, q *table_queuing) {
 	var are_there_jobs_defining bool
 	log.Infof("Starting %s tables", q.descr)
 	for {
-		q.request_chunk.pop()
+		g_async_queue_pop(q.request_chunk)
 		if o.global.shutdown_triggered {
 			break
 		}

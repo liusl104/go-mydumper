@@ -47,8 +47,8 @@ func get_next_partition_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item 
 	var l = dbt.chunks
 	var csi *chunk_step_item
 	_ = o
-	for _, data := range l {
-		csi = data.(*chunk_step_item)
+	for e := l.Front(); e != nil; e = e.Next() {
+		csi = e.Value.(*chunk_step_item)
 		csi.mutex.Lock()
 		if csi.status == UNASSIGNED {
 			csi.status = ASSIGNED
@@ -61,7 +61,7 @@ func get_next_partition_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item 
 			var new_csi = new_real_partition_step_item(new_list, csi.deep+1, uint(csi.number)+uint(math.Pow(2, float64(csi.deep))))
 			csi.deep++
 			new_csi.status = ASSIGNED
-			dbt.chunks = append(dbt.chunks, new_csi)
+			dbt.chunks.PushBack(new_csi)
 			csi.mutex.Unlock()
 			return new_csi
 		}

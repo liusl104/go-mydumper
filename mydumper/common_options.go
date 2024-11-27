@@ -1,12 +1,12 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-ini/ini"
 	"github.com/go-mysql-org/go-mysql/client"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
-	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -40,7 +40,6 @@ func NewDefaultEntries() *OptionEntries {
 	o.QueryRunning.Longquery = 60
 	// o.Daemon.SnapshotCount = 2
 	// o.Daemon.SnapshotInterval = 60
-	o.Chunks.MaxThreadsPerTable = math.MaxUint
 	o.Chunks.MaxRows = 100000
 	o.Statement.StatementSize = 1000000
 	o.Connection.Port = 3306
@@ -48,13 +47,15 @@ func NewDefaultEntries() *OptionEntries {
 	o.Common.Verbose = 2
 	o.Statement.SetNamesStr = BINARY
 	o.global.insert_statement = INSERT
+	identifier_quote_character_arguments_callback(o)
 	arguments_callback(o)
 	common_arguments_callback(o)
-	identifier_quote_character_arguments_callback(o)
-	stream_arguments_callback(o)
 	format_arguments_callback(o)
 	row_arguments_callback(o)
+	stream_arguments_callback(o)
 	connection_arguments_callback(o)
+	after_arguments_callback(o)
+	main_callback(o)
 	return o
 }
 
@@ -222,7 +223,7 @@ type globalEntries struct {
 	source_control_command                      int
 	server_version                              uint
 	clickhouse                                  bool
-	ignore_errors_list                          []uint16
+	ignore_errors_list                          *list.List
 	filename_regex                              string
 	m_open                                      func(*OptionEntries, *string, string) (*file_write, error)
 	m_close                                     func(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error
