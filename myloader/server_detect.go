@@ -1,19 +1,18 @@
 package myloader
 
 import (
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 )
 
-func detect_server_version(o *OptionEntries, conn *client.Conn) error {
+func (o *OptionEntries) detect_server_version(conn *db_connection) error {
 	var ascii_version_comment, ascii_version string
 	var err error
 	var res *mysql.Result
-	res, err = conn.Execute("SELECT @@version_comment, @@version")
-	if err != nil {
+	res = conn.Execute("SELECT @@version_comment, @@version")
+	if conn.err != nil {
 		log.Errorf("get server version fail:%v", err)
 	}
 	for _, row := range res.Values {

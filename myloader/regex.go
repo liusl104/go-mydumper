@@ -24,10 +24,10 @@ func init_regex(rule string) (*regexp.Regexp, error) {
 	return r, nil
 }
 
-func initialize_regex(o *OptionEntries, partition_regex string) error {
+func (o *OptionEntries) initialize_regex(partition_regex string) error {
 	var err error
-	if o.Regex.Regex != "" {
-		o.global.re, err = init_regex(o.Regex.Regex)
+	if o.Regex != "" {
+		o.global.re, err = init_regex(o.Regex)
 		if err != nil {
 			return err
 		}

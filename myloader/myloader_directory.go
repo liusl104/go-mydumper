@@ -7,36 +7,42 @@ import (
 	"strings"
 )
 
-func process_directory(o *OptionEntries, conf *configuration) {
+func (o *OptionEntries) process_directory(conf *configuration) {
 	var err error
 	var filename string
-	if o.Common.Resume {
+	if o.Resume {
 		log.Info("Using resume file")
 		var file *os.File
-		file, err = os.Open("resume")
+		file, err = os.OpenFile("resume", os.O_RDONLY, 0660)
 		if err != nil {
 			log.Fatalf("open resume file fail:%v", err)
 		}
 		var i int
-		var data string
+		var data *GString = new(GString)
 		var eof bool
-		var line uint
-		reader := bufio.NewReader(file)
-		read_data(reader, &data, &eof, &line)
+		var line int
+		reader := bufio.NewScanner(file)
+		read_data(reader, data, &eof, &line)
 		var split []string
 		for !eof {
-			read_data(reader, &data, &eof, &line)
-			split = strings.Split(data, "\n")
+			read_data(reader, data, &eof, &line)
+			split = strings.Split(data.str, "\n")
 			for i = 0; i < len(split); i++ {
 				if len(split[i]) > 2 {
 					filename = split[i]
-					log.Debugf("Resuming file: %s", filename)
-					intermediate_queue_new(o, filename)
+					o.intermediate_queue_new(filename)
 				}
 			}
+			data = nil
 		}
 		err = file.Close()
 	} else {
+		var fileInfo os.FileInfo
+		if fileInfo, err = os.Stat("metadata"); err == nil {
+			if fileInfo.Mode().IsRegular() {
+				o.process_metadata_global("metadata")
+			}
+		}
 		var dir []os.DirEntry
 		dir, err = os.ReadDir(o.global.directory)
 		if err != nil {
@@ -44,14 +50,16 @@ func process_directory(o *OptionEntries, conf *configuration) {
 		}
 		for _, f := range dir {
 			filename = f.Name()
-			intermediate_queue_new(o, filename)
+			if strings.Compare(filename, "metadata") != 0 {
+				o.intermediate_queue_new(filename)
+			}
 		}
 	}
-	intermediate_queue_end(o)
+	o.intermediate_queue_end()
 	var n uint = 0
-	for n = 0; n < o.Common.NumThreads; n++ {
-		conf.data_queue.push(new_job(JOB_SHUTDOWN, nil, ""))
-		conf.post_table_queue.push(new_job(JOB_SHUTDOWN, nil, ""))
-		conf.view_queue.push(new_job(JOB_SHUTDOWN, nil, ""))
+	for n = 0; n < o.NumThreads; n++ {
+		g_async_queue_push(conf.data_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		g_async_queue_push(conf.post_table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		g_async_queue_push(conf.view_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 	}
 }

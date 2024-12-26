@@ -14,7 +14,7 @@ func check_skiplist(o *OptionEntries, database string, table string) bool {
 	return slices.Contains(o.global.tables_skiplist, k)
 }
 
-func read_tables_skiplist(o *OptionEntries, filename string) error {
+func (o *OptionEntries) read_tables_skiplist(filename string) error {
 	var err error
 	var read_open *os.File
 	read_open, err = os.Open(filename)

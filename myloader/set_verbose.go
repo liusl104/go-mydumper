@@ -36,22 +36,22 @@ func set_format(isJson bool) {
 
 func (o *OptionEntries) set_verbose() error {
 	var err error
-	if o.Common.Logger == nil {
-		if o.Common.LogFile != "" {
-			o.global.log_output, err = os.OpenFile(o.Common.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if o.Logger == nil {
+		if o.LogFile != "" {
+			o.global.log_output, err = os.OpenFile(o.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 			if err != nil {
-				log.Errorf("Could not open log file '%s' for writing: %v", o.Common.LogFile, err)
+				log.Errorf("Could not open log file '%s' for writing: %v", o.LogFile, err)
 				return err
 			}
 		} else {
 			o.global.log_output = os.Stdout
 		}
 	} else {
-		o.global.log_output = o.Common.Logger
+		o.global.log_output = o.Logger
 	}
 
 	log.SetOutput(o.global.log_output)
-	switch o.Common.Verbose {
+	switch o.Verbose {
 	case 0:
 		log.SetLevel(log.FatalLevel)
 	case 1:
@@ -88,7 +88,7 @@ func (o *OptionEntries) set_verbose() error {
 }
 
 func set_debug(o *OptionEntries) {
-	o.Common.Verbose = 4
+	o.Verbose = 4
 	log.SetLevel(log.DebugLevel)
 	log.SetReportCaller(true)
 }

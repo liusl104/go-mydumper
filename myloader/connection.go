@@ -1,9 +1,10 @@
 package myloader
 
 import (
+	"errors"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
-	_ "github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/term"
 	"os"
@@ -16,22 +17,22 @@ func set_connection_defaults_file_and_group(o *OptionEntries, cdf string, group 
 	o.global.connection_default_file_group = group
 }
 
-func initialize_connection(o *OptionEntries, app string) {
+func (o *OptionEntries) initialize_connection(app string) {
 	o.global.program_name = app
 	o.global.print_connection_details = 1
 }
 
 func connection_arguments_callback(o *OptionEntries) error {
-	if o.Connection.Protocol == "" {
-		o.Connection.Protocol = "tcp"
+	if o.Protocol == "" {
+		o.Protocol = "tcp"
 	}
-	if o.Connection.Protocol != "" {
-		if strings.ToLower(o.Connection.Protocol) == "tcp" {
-			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
+	if o.Protocol != "" {
+		if strings.ToLower(o.Protocol) == "tcp" {
+			o.Protocol = strings.ToLower(o.Protocol)
 			return nil
 		}
-		if strings.ToLower(o.Connection.Protocol) == "socket" {
-			o.Connection.Protocol = strings.ToLower(o.Connection.Protocol)
+		if strings.ToLower(o.Protocol) == "socket" {
+			o.Protocol = strings.ToLower(o.Protocol)
 			return nil
 		}
 		log.Errorf("option --protocol value error")
@@ -42,37 +43,38 @@ func connection_arguments_callback(o *OptionEntries) error {
 
 }
 
-func configure_connection(o *OptionEntries) (conn *client.Conn, err error) {
+func (o *OptionEntries) configure_connection() *db_connection {
+	var conn = new(db_connection)
 	var host string
-	if o.Connection.Protocol == "tcp" {
-		host = fmt.Sprintf("%s:%d", o.Connection.Hostname, o.Connection.Port)
+	if o.Protocol == "tcp" {
+		host = fmt.Sprintf("%s:%d", o.Hostname, o.Port)
 	}
-	if o.Connection.Protocol == "socket" {
-		host = o.Connection.Socket
+	if o.Protocol == "socket" {
+		host = o.SocketPath
 	}
-	if o.CommonConnection.Ssl {
-		tlsConfig := client.NewClientTLSConfig([]byte(o.CommonConnection.Ca), []byte(o.CommonConnection.Cert), []byte(o.CommonConnection.Key),
+	if o.Ssl {
+		tlsConfig := client.NewClientTLSConfig([]byte(o.Ca), []byte(o.Cert), []byte(o.Key),
 			false, o.global.program_name)
-		conn, err = client.Connect(host, o.Connection.Username, o.Connection.Password, "", func(c *client.Conn) {
+		conn.conn, conn.err = client.Connect(host, o.Username, o.Password, "", func(c *client.Conn) {
 			c.SetTLSConfig(tlsConfig)
 
 		})
-		if err != nil {
-			return
+		if conn.err != nil {
+			return conn
 		}
 	} else {
-		conn, err = client.Connect(host, o.Connection.Username, o.Connection.Password, "", func(c *client.Conn) {
+		conn.conn, conn.err = client.Connect(host, o.Username, o.Password, "", func(c *client.Conn) {
 			return
 		})
-		if err != nil {
-			return
+		if conn.err != nil {
+			return conn
 		}
 	}
-	err = conn.Ping()
-	if err != nil {
-		return
+	conn.err = conn.conn.Ping()
+	if conn.err != nil {
+		return conn
 	}
-	return
+	return conn
 }
 
 func print_connection_details_once(o *OptionEntries) {
@@ -81,26 +83,26 @@ func print_connection_details_once(o *OptionEntries) {
 	}
 	var print_head, print_body string
 	print_head += "Connection"
-	switch o.Connection.Protocol {
+	switch o.Protocol {
 	case "tcp":
 		print_head += " via TCP/IP"
 	case "socker":
 		print_head += " via UNIX socket"
 	}
-	if o.Connection.Password != "" || o.Connection.AskPassword {
+	if o.Password != "" || o.AskPassword {
 		print_head += " using password"
 	}
-	if o.Connection.Hostname != "" {
-		print_body += fmt.Sprintf(" Host: %s", o.Connection.Hostname)
+	if o.Hostname != "" {
+		print_body += fmt.Sprintf(" Host: %s", o.Hostname)
 	}
-	if o.Connection.Port > 0 {
-		print_body += fmt.Sprintf(" Port: %d", o.Connection.Port)
+	if o.Port > 0 {
+		print_body += fmt.Sprintf(" Port: %d", o.Port)
 	}
-	if o.Connection.Socket != "" {
-		print_body += fmt.Sprintf(" Socket: %s", o.Connection.Socket)
+	if o.SocketPath != "" {
+		print_body += fmt.Sprintf(" SocketPath: %s", o.SocketPath)
 	}
-	if o.Connection.Username != "" {
-		print_body += fmt.Sprintf(" User: %s", o.Connection.Username)
+	if o.Username != "" {
+		print_body += fmt.Sprintf(" User: %s", o.Username)
 	}
 	if len(print_body) > 1 {
 		print_head += ":"
@@ -109,27 +111,27 @@ func print_connection_details_once(o *OptionEntries) {
 	log.Infof(print_head)
 }
 
-func m_connect(o *OptionEntries) (*client.Conn, error) {
-	conn, err := configure_connection(o)
-	if err != nil {
-		log.Fatalf("Error connection to database server: %v", err)
-		return conn, err
+func (o *OptionEntries) m_connect() *db_connection {
+	var conn = o.configure_connection()
+	if conn.conn == nil {
+		log.Fatalf("Error connection to database server: %v", conn.err)
+		return conn
 	}
-	err = conn.Ping()
-	if err != nil {
-		log.Fatalf("Error connection to database: %v", err)
+	conn.err = conn.conn.Ping()
+	if conn.err != nil {
+		log.Fatalf("Error connection to database: %v", conn.err)
 	}
 	print_connection_details_once(o)
 
 	if o.global.set_names_statement != "" {
-		_, err = conn.Execute(o.global.set_names_statement)
+		_, conn.err = conn.conn.Execute(o.global.set_names_statement)
 	}
-	return conn, err
+	return conn
 }
 
 func hide_password(o *OptionEntries) {
-	if o.Connection.Password != "" {
-		var tmpPasswd []byte = []byte(o.Connection.Password)
+	if o.Password != "" {
+		var tmpPasswd []byte = []byte(o.Password)
 		for index := 1; index <= len(os.Args)-1; index++ {
 			if os.Args[index] == string(tmpPasswd) {
 				p := *(*unsafe.Pointer)(unsafe.Pointer(&os.Args[index]))
@@ -138,7 +140,7 @@ func hide_password(o *OptionEntries) {
 				}
 			}
 		}
-		o.Connection.Password = string(tmpPasswd)
+		o.Password = string(tmpPasswd)
 	}
 }
 
@@ -166,20 +168,47 @@ func terminalInput() string {
 }
 
 func ask_password(o *OptionEntries) {
-	if o.Connection.Password == "" && o.Connection.AskPassword {
-		o.Connection.Password = passwordPrompt()
+	if o.Password == "" && o.AskPassword {
+		o.Password = passwordPrompt()
 	}
 }
 
-func execute_gstring(conn *client.Conn, ss string) {
-	if ss != "" {
-		lines := strings.Split(ss, ";\n")
+func (d *db_connection) Execute(command string, args ...any) (result *mysql.Result) {
+	result, d.err = d.conn.Execute(command, args...)
+	if d.err != nil {
+		var myError *mysql.MyError
+		errors.As(d.err, &myError)
+		d.code = myError.Code
+	} else {
+		d.code = 0
+	}
+	d.warning = result.Warnings
+	return
+}
+func (d *db_connection) ping() error {
+	d.err = d.conn.Ping()
+	if d.err != nil {
+		var myError *mysql.MyError
+		errors.As(d.err, &myError)
+		d.code = myError.Code
+	} else {
+		d.code = 0
+	}
+	return d.err
+}
+func (d *db_connection) close() error {
+	return d.conn.Close()
+}
+
+func execute_gstring(conn *db_connection, ss *GString) {
+	if ss != nil {
+		lines := strings.Split(ss.str, ";\n")
 		for _, line := range lines {
 			if len(line) <= 3 {
 				continue
 			}
-			_, err := conn.Execute(line)
-			if err != nil {
+			_ = conn.Execute(line)
+			if conn.err != nil {
 				log.Warnf("Set session failed: %s", line)
 			}
 		}

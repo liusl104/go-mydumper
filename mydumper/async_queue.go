@@ -74,6 +74,9 @@ func (a *asyncQueue) try_pop() any {
 	task := <-a.queue
 	return task
 }
+func g_async_queue_length(a *asyncQueue) int64 {
+	return a.length
+}
 func (a *asyncQueue) timeout_pop(timeout uint64) any {
 	for {
 		select {

@@ -5,7 +5,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	log "github.com/sirupsen/logrus"
 	"os"
-	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,12 +19,32 @@ const (
 	DIRECTORY          = "import"
 )
 
-func myloader_initialize_hash_of_session_variables(o *OptionEntries) map[string]string {
+type io_restore_result struct {
+	restore *asyncQueue
+	result  *asyncQueue
+}
+type db_connection struct {
+	conn    *client.Conn
+	err     error
+	code    uint16
+	warning uint16
+}
+type connection_data struct {
+	thrconn          *db_connection
+	current_database *database
+	thread_id        uint64
+	queue            *io_restore_result
+	ready            *asyncQueue
+	transaction      bool
+	in_use           *sync.Mutex
+}
+
+func (o *OptionEntries) myloader_initialize_hash_of_session_variables() map[string]string {
 	var set_session_hash = o.initialize_hash_of_session_variables()
-	if !o.Execution.EnableBinlog {
+	if !o.EnableBinlog {
 		set_session_hash["SQL_LOG_BIN"] = "0"
 	}
-	if o.Statement.CommitCount > 1 {
+	if o.CommitCount > 1 {
 		set_session_hash["AUTOCOMMIT"] = "0"
 	}
 	return set_session_hash
@@ -51,28 +70,22 @@ func show_dbt(key any, dbt any, total any) {
 	log.Infof("Table %s", key.(string))
 }
 
-func create_database(o *OptionEntries, td *thread_data, database string) {
-	var query string
-	var filename = fmt.Sprintf("%s-schema-create.sql", database)
-	var filenamegz = fmt.Sprintf("%s-schema-create.sql%s", database, o.Threads.ExecPerThreadExtension)
-	var filepath = fmt.Sprintf("%s/%s-schema-create.sql", o.global.directory, database)
-	var filepathgz = fmt.Sprintf("%s/%s-schema-create.sql%s", o.global.directory, database, o.Threads.ExecPerThreadExtension)
+func (o *OptionEntries) create_database(td *thread_data, database string) {
+	var filename = fmt.Sprintf("%s-schema-create.sql%s", database, o.ExecPerThreadExtension)
+	var filepath = fmt.Sprintf("%s/%s-schema-create.sql%s", o.global.directory, database, o.ExecPerThreadExtension)
 	if g_file_test(filepath) {
-		atomic.AddUint64(&o.global.detailed_errors.schema_errors, uint64(restore_data_from_file(o, td, database, "", filename, true)))
-	} else if g_file_test(filepathgz) {
-		atomic.AddUint64(&o.global.detailed_errors.schema_errors, uint64(restore_data_from_file(o, td, database, "", filenamegz, true)))
+		atomic.AddUint64(&o.global.detailed_errors.schema_errors, uint64(o.restore_data_from_file(td, filename, true, nil)))
 	} else {
-		query = fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", database)
-		if !m_query(td.thrconn, query, m_warning, fmt.Sprintf("Fail to create database: %s", database)) {
+		var data *GString = g_string_new("CREATE DATABASE IF NOT EXISTS %s%s%s", o.global.identifier_quote_character, database, o.global.identifier_quote_character)
+		if o.restore_data_in_gstring_extended(td, data, true, nil, m_critical, "Failed to create database: %s", database) != 0 {
 			atomic.AddUint64(&o.global.detailed_errors.schema_errors, 1)
 		}
+		data = nil
 	}
 	return
 }
 
 func print_errors(o *OptionEntries) {
-	o.global.post_threads.Wait()
-
 	log.Infof("Errors found:")
 	log.Infof("- Tablespace: %d", o.global.detailed_errors.tablespace_errors)
 	log.Infof("- Schema:     %d", o.global.detailed_errors.schema_errors)
@@ -81,6 +94,7 @@ func print_errors(o *OptionEntries) {
 	log.Infof("- Sequence:   %d", o.global.detailed_errors.sequence_errors)
 	log.Infof("- Index:      %d", o.global.detailed_errors.index_errors)
 	log.Infof("- Trigger:    %d", o.global.detailed_errors.trigger_errors)
+	log.Infof("- Constraint: %d", o.global.detailed_errors.constraints_errors)
 	log.Infof("- Post:       %d", o.global.detailed_errors.post_errors)
 	log.Infof("Retries: %d", o.global.detailed_errors.retries)
 }
@@ -89,108 +103,129 @@ func StartLoad() {
 	var err error
 	context := newOptionEntries()
 	context.global.conf = new(configuration)
-	loadOptionContext(context)
-	if context.Common.DB == "" && context.Filter.SourceDb != "" {
-		context.Common.DB = context.Filter.SourceDb
+	context.initialize_share_common()
+	context.loadOptionContext()
+	if context.DB == "" && context.SourceDb != "" {
+		context.DB = context.SourceDb
 	}
-	if context.Common.Help {
-		pring_help()
-	}
-	if context.Common.Debug {
+
+	if context.Debug {
 		set_debug(context)
 		err = context.set_verbose()
 	} else {
 		err = context.set_verbose()
 	}
-	initialize_common_options(context, MYLOADER)
-	if context.Common.ProgramVersion {
+	if context.OverwriteUnsafe {
+		context.OverwriteTables = true
+	}
+	context.check_num_threads()
+	if context.NumThreads > context.MaxThreadsPerTable {
+		log.Infof("Using %d loader threads (%d per table)", context.NumThreads, context.MaxThreadsPerTable)
+	} else {
+		log.Infof("Using %d loader threads", context.NumThreads)
+	}
+
+	context.initialize_common_options(MYLOADER)
+	if context.ProgramVersion {
 		print_version(MYLOADER)
 		os.Exit(EXIT_SUCCESS)
 	}
 	hide_password(context)
 	ask_password(context)
-	initialize_set_names(context)
+	context.initialize_set_names()
 	context.global.load_data_list_mutex = g_mutex_new()
 	context.global.load_data_list = make(map[string]*sync.Mutex)
-	if context.Pmm.PmmPath != "" {
+	if context.PmmPath != "" {
 		context.global.pmm = true
-		if context.Pmm.PmmResolution == "" {
-			context.Pmm.PmmResolution = "high"
+		if context.PmmResolution == "" {
+			context.PmmResolution = "high"
 		}
-	} else if context.Pmm.PmmPath != "" {
+	} else if context.PmmPath != "" {
 		context.global.pmm = true
-		context.Pmm.PmmPath = fmt.Sprintf("/usr/local/percona/pmm2/collectors/textfile-collector/%s-resolution", context.Pmm.PmmResolution)
+		context.PmmPath = fmt.Sprintf("/usr/local/percona/pmm2/collectors/textfile-collector/%s-resolution", context.PmmResolution)
 	}
 	if context.global.pmm {
 		// TODO
 	}
-	initialize_restore_job(context, context.Execution.PurgeModeStr)
+	context.initialize_restore_job(context.PurgeModeStr)
 	var current_dir = g_get_current_dir()
-	if context.Common.InputDirectory == "" {
-		if context.Execution.Stream {
+	if context.InputDirectory == "" {
+		if context.Stream {
 			var datetime = time.Now()
 			var datetimestr string
 			datetimestr = datetime.Format("20060102-150405")
 			context.global.directory = fmt.Sprintf("%s/%s-%s", current_dir, DIRECTORY, datetimestr)
-			create_backup_dir(context.global.directory, context.Common.FifoDirectory)
+			create_backup_dir(context.global.directory)
 		} else {
-			log.Fatalf("a directory needs to be specified, see --help")
-		}
-	} else {
-		if strings.HasPrefix(context.Common.InputDirectory, "/") {
-			context.global.directory = context.Common.InputDirectory
-		} else {
-			context.global.directory = fmt.Sprintf("%s/%s", current_dir, context.Common.InputDirectory)
-		}
-		if !g_file_test(context.Common.InputDirectory) {
-			if context.Execution.Stream {
-				create_backup_dir(context.global.directory, context.Common.FifoDirectory)
-			} else {
-				log.Fatalf("the specified directory doesn't exists")
+			if !context.Help {
+				log.Fatalf("a directory needs to be specified, see --help")
 			}
 		}
-		if !context.Execution.Stream {
+	} else {
+		if strings.HasPrefix(context.InputDirectory, "/") {
+			context.global.directory = context.InputDirectory
+		} else {
+			context.global.directory = fmt.Sprintf("%s/%s", current_dir, context.InputDirectory)
+		}
+		if context.Stream {
+			if !g_file_test(context.InputDirectory) {
+				create_backup_dir(context.global.directory)
+
+			} else {
+				if !context.global.no_stream {
+					log.Fatalf("Backup directory (-d) must not exist when --stream / --stream=TRADITIONAL")
+				}
+			}
+		} else {
+			if !g_file_test(context.InputDirectory) {
+				log.Fatalf("the specified directory doesn't exists")
+			}
 			var p = fmt.Sprintf("%s/metadata", context.global.directory)
 			if !g_file_test(p) {
 				log.Fatalf("the specified directory %s is not a mydumper backup", context.global.directory)
 			}
 		}
 	}
-	if context.Common.FifoDirectory != "" {
-		if !strings.HasPrefix(context.Common.FifoDirectory, "/") {
-			var tmp_fifo_directory = context.Common.FifoDirectory
-			context.Common.FifoDirectory = fmt.Sprintf("%s/%s", current_dir, tmp_fifo_directory)
+	/*if context.FifoDirectory != "" {
+		if !strings.HasPrefix(context.FifoDirectory, "/") {
+			var tmp_fifo_directory = context.FifoDirectory
+			context.FifoDirectory = fmt.Sprintf("%s/%s", current_dir, tmp_fifo_directory)
 		}
-		create_fifo_dir(context.Common.FifoDirectory)
+		create_fifo_dir(context.FifoDirectory)
+	}*/
+	if context.Help {
+		pring_help(context)
 	}
 	err = os.Chdir(context.global.directory)
-	if context.Filter.TablesSkiplistFile != "" {
-		err = read_tables_skiplist(context, context.Filter.TablesSkiplistFile)
+	if context.TablesSkiplistFile != "" {
+		err = context.read_tables_skiplist(context.TablesSkiplistFile)
 	}
-	initialize_process(context, context.global.conf)
-	initialize_common(context)
-	initialize_connection(context, MYLOADER)
-	err = initialize_regex(context, "")
-	go signal_thread(context, context.global.conf)
-	var conn *client.Conn
-	conn, err = m_connect(context)
-	context.global.set_session = ""
-	context.global.set_global = ""
-	context.global.set_global_back = ""
-	err = detect_server_version(context, conn)
+	context.initialize_process(context.global.conf)
+	context.initialize_common()
+	context.initialize_connection(MYLOADER)
+	err = context.initialize_regex("")
+	go context.signal_thread(context.global.conf)
+	var conn *db_connection
+	conn = context.m_connect()
+	context.global.set_session = g_string_new("")
+	context.global.set_global = g_string_new("")
+	context.global.set_global_back = g_string_new("")
+	err = context.detect_server_version(conn)
 	context.global.detected_server = context.get_product()
-	context.global.set_session_hash = myloader_initialize_hash_of_session_variables(context)
+	context.global.set_session_hash = context.myloader_initialize_hash_of_session_variables()
 	context.global.set_global_hash = make(map[string]string)
 	if context.global.key_file != nil {
 		context.global.set_global_hash = load_hash_of_all_variables_perproduct_from_key_file(context.global.key_file, context, context.global.set_global_hash, "myloader_global_variables")
 		context.global.set_global_hash = load_hash_of_all_variables_perproduct_from_key_file(context.global.key_file, context, context.global.set_global_hash, "myloader_session_variables")
 	}
-	context.global.set_session = refresh_set_session_from_hash(context.global.set_session, context.global.set_session_hash)
-	refresh_set_global_from_hash(&context.global.set_global, &context.global.set_global_back, context.global.set_global_hash)
+	refresh_set_session_from_hash(context.global.set_session, context.global.set_session_hash)
+	refresh_set_global_from_hash(context.global.set_global, context.global.set_global_back, context.global.set_global_hash)
 	execute_gstring(conn, context.global.set_session)
 	execute_gstring(conn, context.global.set_global)
-	context.global.identifier_quote_character_str = context.Common.IdentifierQuoteCharacter
-	if context.Execution.DisableRedoLog {
+	initialize_conf_per_table(context.global.conf_per_table)
+	load_per_table_info_from_key_file(context.global.key_file, context.global.conf_per_table, nil)
+	// context.global.identifier_quote_character_str = context.IdentifierQuoteCharacter
+	if context.DisableRedoLog {
 		if context.get_major() == 8 && context.get_secondary() == 0 && context.get_revision() > 21 {
 			log.Infof("Disabling redologs")
 			m_query(conn, "ALTER INSTANCE DISABLE INNODB REDO_LOG", m_critical, "DISABLE INNODB REDO LOG failed")
@@ -198,94 +233,116 @@ func StartLoad() {
 			log.Errorf("Disabling redologs is not supported for version %d.%d.%d", context.get_major(), context.get_secondary(), context.get_revision())
 		}
 	}
-	context.global.conf.database_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.table_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.data_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.post_table_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.post_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.index_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.view_queue = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.ready = g_async_queue_new(context.Common.BufferSize)
-	context.global.conf.pause_resume = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.database_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.table_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.retry_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.data_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.post_table_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.post_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.index_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.view_queue = g_async_queue_new(context.BufferSize)
+	context.global.conf.ready = g_async_queue_new(context.BufferSize)
+	context.global.conf.pause_resume = g_async_queue_new(context.BufferSize)
 	context.global.conf.table_list_mutex = g_mutex_new()
-	context.global.conf.stream_queue = g_async_queue_new(context.Common.BufferSize)
+	context.global.conf.stream_queue = g_async_queue_new(context.BufferSize)
 	context.global.conf.table_hash = make(map[string]*db_table)
 	context.global.conf.table_hash_mutex = g_mutex_new()
-	context.global.db_hash = make(map[string]*database)
 	if g_file_test("resume") {
-		if !context.Common.Resume {
+		if !context.Resume {
 			log.Fatalf("Resume file found but --resume has not been provided")
 		}
 	} else {
-		if context.Common.Resume {
+		if context.Resume {
 			log.Fatalf("Resume file not found")
 		}
 	}
+	context.initialize_connection_pool(conn)
 	var t *thread_data = new(thread_data)
-	t.thread_id = 0
-	t.conf = context.global.conf
-	t.thrconn = conn
-	t.current_database = ""
-	t.status = WAITING
-	if context.Filter.TablesList != "" {
-		context.global.tables = get_table_list(context, context.Filter.TablesList)
+	initialize_thread_data(t, context.global.conf, WAITING, 0, nil)
+	if context.global.database_db != nil {
+		if !context.NoSchemas {
+			create_database(t, context.global.database_db.real_database)
+		}
+		context.global.database_db.schema_state = CREATED
 	}
-	if context.Common.DB != "" {
-		var d = get_db_hash(context, context.Common.DB, context.Common.DB)
-		create_database(context, t, context.Common.DB)
-		d.schema_state = CREATED
+	if context.TablesList != "" {
+		context.global.tables = get_table_list(context.TablesList)
 	}
-
-	if context.Execution.SerialTblCreation {
-		context.Threads.MaxThreadsForSchemaCreation = 1
+	if context.SerialTblCreation {
+		context.MaxThreadsForSchemaCreation = 1
 	}
-
-	initialize_worker_schema(context, context.global.conf)
-	initialize_worker_index(context, context.global.conf)
-	initialize_intermediate_queue(context, context.global.conf)
-	if context.Execution.Stream {
-		if context.Common.Resume {
+	context.initialize_worker_schema(context.global.conf)
+	context.initialize_worker_index(context.global.conf)
+	context.initialize_intermediate_queue(context.global.conf)
+	if context.Stream {
+		if context.Resume {
 			log.Fatalf("We don't expect to find resume files in a stream scenario")
 		}
 		initialize_stream(context, context.global.conf)
-		wait_until_first_metadata(context)
 	}
-	initialize_loader_threads(context, context.global.conf)
-	if context.Execution.Stream {
+	context.initialize_loader_threads(context.global.conf)
+	if context.Stream {
 		wait_stream_to_finish(context)
 	} else {
-		process_directory(context, context.global.conf)
+		context.process_directory(context.global.conf)
 	}
-	wait_schema_worker_to_finish(context)
-	wait_loader_threads_to_finish(context)
-	create_index_shutdown_job(context, context.global.conf)
-	wait_index_worker_to_finish(context)
-	initialize_post_loding_threads(context, context.global.conf)
-	create_post_shutdown_job(context, context.global.conf)
-	wait_post_worker_to_finish(context)
-	context.global.conf.ready.unref()
-	if context.Execution.DisableRedoLog {
+	var dbt *db_table
+	for _, dbt = range context.global.conf.table_list {
+		if dbt.max_connections_per_job == 1 {
+			dbt.max_connections_per_job = 0
+		}
+	}
+
+	context.wait_schema_worker_to_finish()
+	context.wait_loader_threads_to_finish()
+	context.wait_control_job()
+	context.create_index_shutdown_job(context.global.conf)
+	context.wait_index_worker_to_finish()
+	context.initialize_post_loding_threads(context.global.conf)
+	context.create_post_shutdown_job(context.global.conf)
+	context.wait_post_worker_to_finish()
+	g_async_queue_unref(context.global.conf.ready)
+	context.global.conf.ready = nil
+	g_async_queue_unref(context.global.conf.data_queue)
+	context.global.conf.data_queue = nil
+	var cd *connection_data = context.close_restore_thread(true)
+	cd.in_use.Lock()
+	if context.DisableRedoLog {
 		m_query(conn, "ALTER INSTANCE ENABLE INNODB REDO_LOG", m_critical, "ENABLE INNODB REDO LOG failed")
 	}
 	context.global.conf.data_queue.unref()
-	var tl = context.global.conf.table_list
-	for _, dbt := range tl {
-		checksum_dbt(dbt, conn)
+	for _, dbt = range context.global.conf.table_list {
+		context.global.checksum_ok = context.checksum_dbt(dbt, conn)
 	}
-	var d *database
-	for _, d = range context.global.db_hash {
-		if d.schema_checksum != "" {
-			checksum_database_template(d.name, d.schema_checksum, conn, "Schema create checksum", checksum_database_defaults)
-		}
-		if d.post_checksum != "" {
-			checksum_database_template(d.name, d.post_checksum, conn, "Post checksum", checksum_process_structure)
-		}
-		if d.triggers_checksum != "" {
-			checksum_database_template(d.name, d.triggers_checksum, conn, "Triggers checksum", checksum_trigger_structure_from_database)
+
+	if context.global.checksum_mode != CHECKSUM_SKIP {
+		var d *database
+		for _, d = range context.global.db_hash {
+			if d.schema_checksum != "" && !context.NoSchemas {
+				context.global.checksum_ok = context.checksum_database_template(d.real_database, d.schema_checksum, cd.thrconn, "Schema create checksum", checksum_database_defaults)
+			}
+			if d.post_checksum != "" && !context.SkipPost {
+				context.global.checksum_ok = context.checksum_database_template(d.real_database, d.post_checksum, cd.thrconn, "Post checksum", checksum_process_structure)
+			}
+			if d.triggers_checksum != "" && !context.SkipTriggers {
+				context.global.checksum_ok = context.checksum_database_template(d.real_database, d.triggers_checksum, cd.thrconn, "Triggers checksum", checksum_trigger_structure_from_database)
+			}
 		}
 	}
-	if context.Execution.Stream && context.global.no_delete == false && context.Common.InputDirectory == "" {
-		err = os.Remove(path.Join(context.global.directory, "metadata"))
+	var i uint
+	for i = 1; i < context.NumThreads; i++ {
+		context.close_restore_thread(false)
+	}
+	context.wait_restore_threads_to_close()
+	if !context.global.checksum_ok {
+		if context.global.checksum_mode == CHECKSUM_WARN {
+			log.Warnf("Checksum failed")
+		} else {
+			log.Errorf("Checksum failed")
+		}
+	}
+
+	if context.Stream && context.global.no_delete == false {
 		err = os.RemoveAll(context.global.directory)
 		if err != nil {
 			log.Fatalf("Restore directory not removed: %s", context.global.directory)
@@ -296,26 +353,38 @@ func StartLoad() {
 		var line = strings.Split(context.global.change_master_statement, ";\n")
 		for i = 0; i < len(line); i++ {
 			if len(line[i]) > 2 {
-				var str = line[i]
-				str += ";"
-				m_query(conn, str, m_warning, fmt.Sprintf("Sending CHANGE MASTER: %s", str))
+				var str = g_string_new(line[i])
+				g_string_append(str, ";")
+				m_query(cd.thrconn, str.str, m_warning, fmt.Sprintf("Sending CHANGE MASTER: %s", str.str))
+				g_string_free(str, true)
 			}
 		}
 	}
-	context.global.conf.database_queue.unref()
-	context.global.conf.table_queue.unref()
-	context.global.conf.pause_resume.unref()
-	context.global.conf.post_table_queue.unref()
-	context.global.conf.post_queue.unref()
+	g_async_queue_unref(context.global.conf.database_queue)
+	g_async_queue_unref(context.global.conf.table_queue)
+	g_async_queue_unref(context.global.conf.retry_queue)
+	g_async_queue_unref(context.global.conf.pause_resume)
+	g_async_queue_unref(context.global.conf.post_table_queue)
+	g_async_queue_unref(context.global.conf.post_queue)
 	execute_gstring(conn, context.global.set_global_back)
-	err = conn.Close()
-	free_loader_threads(context)
+	err = cd.thrconn.close()
+	context.free_loader_threads()
 	if context.global.pmm {
 		kill_pmm_thread()
 	}
 	print_errors(context)
 	stop_signal_thread(context)
-	if context.Common.LogFile != "" {
-		err = context.global.log_output.Close()
+
+	if context.Logger != nil {
+		context.Logger.Close()
 	}
+	if context.global.errors > 0 {
+		os.Exit(EXIT_FAILURE)
+	} else {
+		os.Exit(EXIT_SUCCESS)
+	}
+}
+
+func create_database(td *thread_data, database string) {
+
 }

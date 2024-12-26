@@ -1,7 +1,6 @@
 package myloader
 
 import (
-	"strings"
 	"sync"
 )
 
@@ -21,12 +20,12 @@ func flush() {
 
 }
 
-func has_mydumper_suffix(o *OptionEntries, line string) bool {
+/*func has_mydumper_suffix(o *OptionEntries, line string) bool {
 	return m_filename_has_suffix(o, line, ".dat") ||
 		m_filename_has_suffix(o, line, ".sql") ||
 		line == "metadata.partial" ||
 		strings.HasPrefix(line, "metadata")
-}
+}*/
 
 func process_stream(o *OptionEntries, stream_conf *configuration) {
 	o.global.stream_thread.Add(1)
