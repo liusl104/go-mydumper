@@ -70,7 +70,3 @@ func Common_filter_entries() {
 	pflag.StringVarP(&TablesSkiplistFile, "omit-from-file", "O", "", "File containing a list of database.table entries to skip, one per line (skips before applying regex option)")
 	pflag.StringVarP(&TablesList, "tables-list", "T", "", "Comma delimited table list to dump (does not exclude regex option). Table name must include database name. For instance: test.t1,test.t2")
 }
-func LoadOptionContext() {
-
-	pflag.Parse()
-}

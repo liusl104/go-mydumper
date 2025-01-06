@@ -27,34 +27,34 @@ var (
 )
 
 var (
-	EnableBinlog                bool
-	InnodbOptimizeKeys          string
-	NoSchemas                   bool
-	PurgeModeStr                string
-	DisableRedoLog              bool
-	CheckSum                    string
-	OverwriteTables             bool
-	OverwriteUnsafe             bool
-	RetryCount                  uint
-	SerialTblCreation           bool
-	RefreshTableListInterval    uint = 100
-	IgnoreErrors                string
-	SetGtidPurge                bool
-	Rows                        int
-	CommitCount                 uint
-	AppendIfNotExist            bool
-	SetNamesStr                 string
-	SkipDefiner                 bool
-	IgnoreSet                   string
-	Help                        bool
-	InputDirectory              string
-	DB                          string
-	QuoteCharacter              string
-	ShowWarnings                bool
-	Resume                      bool
-	KillAtOnce                  bool
-	BufferSize                  uint
-	MaxThreadsPerTable          uint
+	EnableBinlog       bool
+	InnodbOptimizeKeys string
+	// NoSchemas                bool
+	PurgeModeStr             string
+	DisableRedoLog           bool
+	CheckSum                 string
+	OverwriteTables          bool
+	OverwriteUnsafe          bool
+	RetryCount               uint
+	SerialTblCreation        bool
+	RefreshTableListInterval uint = 100
+	IgnoreErrors             string
+	SetGtidPurge             bool
+	Rows                     int
+	CommitCount              uint
+	AppendIfNotExist         bool
+	// SetNamesStr              string
+	SkipDefiner    bool
+	IgnoreSet      string
+	Help           bool
+	InputDirectory string
+	// DB                          string
+	QuoteCharacter string
+	ShowWarnings   bool
+	Resume         bool
+	KillAtOnce     bool
+	BufferSize     uint
+	// MaxThreadsPerTable          uint
 	MaxThreadsForIndexCreation  uint
 	MaxThreadsForPostCreation   uint
 	MaxThreadsForSchemaCreation uint
@@ -65,9 +65,9 @@ var (
 	SkipPost                    bool
 	SkipConstraints             bool
 	SkipIndexes                 bool
-	NoData                      bool
-	PmmPath                     string
-	PmmResolution               string
+	// NoData                      bool
+	PmmPath       string
+	PmmResolution string
 )
 
 func arguments_callback() bool {
@@ -186,5 +186,15 @@ func statement_entries() {
 }
 
 func load_contex_entries() {
+	entries()
+	Common_entries()
+	filter_entries()
+	Common_filter_entries()
+	pmm_entries()
+	execution_entries()
+	threads_entries()
+	statement_entries()
 	pflag.Parse()
+	arguments_callback()
+	Stream_arguments_callback()
 }

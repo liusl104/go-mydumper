@@ -12,6 +12,10 @@ var (
 	SnapshotCount    int = 2
 )
 
+func initialize_daemon_thread() {
+
+}
+
 func runDaemon() *daemon.Context {
 	cntxt := &daemon.Context{
 		PidFileName: PidFile,

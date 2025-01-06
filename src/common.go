@@ -744,10 +744,13 @@ func widthCompletion(width int, key string) string {
 func Print_int(key string, val int) {
 	fmt.Printf("%s= %d\n", widthCompletion(WIDTH, key), val)
 }
+
 func Print_uint(key string, val uint) {
 	fmt.Printf("%s= %d\n", widthCompletion(WIDTH, key), val)
 }
-
+func Print_uint64(key string, val uint64) {
+	fmt.Printf("%s= %d\n", widthCompletion(WIDTH, key), val)
+}
 func Print_string(key string, val string) {
 	if val != "" {
 		fmt.Printf("%s= %s\n", widthCompletion(WIDTH, key), val)

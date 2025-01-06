@@ -542,7 +542,7 @@ func StartLoad() {
 
 func print_help() {
 	fmt.Printf("Usage:\n")
-	fmt.Printf("  %s [OPTION…] multi-threaded MySQL dumping\n", "mydumper")
+	fmt.Printf("  %s [OPTION…] multi-threaded MySQL dumping\n", MYLOADER)
 	pflag.PrintDefaults()
 	Print_string("host", Hostname)
 	Print_string("user", Username)
