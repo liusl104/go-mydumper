@@ -5,13 +5,24 @@ import (
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 	"github.com/siddontang/go-log/log"
+	. "go-mydumper/src"
 	"os"
 	"strings"
 	"sync"
 )
 
-func m_open_file(o *OptionEntries, filename *string, t string) (f *file_write, err error) {
-	_ = o
+var (
+	close_file_queue *GAsyncQueue
+	available_pids   *GAsyncQueue
+	fifo_table_mutex *sync.Mutex
+	pipe_creation    *sync.Mutex
+	open_pipe        int64
+	cft              *GThreadFunc
+	fifo_hash        map[string]string
+)
+
+func m_open_file(filename *string, t string) (f *file_write, err error) {
+
 	f = new(file_write)
 	var ff *os.File
 	if strings.ToLower(t) == "w" {
@@ -35,16 +46,16 @@ func m_open_file(o *OptionEntries, filename *string, t string) (f *file_write, e
 	return
 }
 
-// o *OptionEntries, thread_id uint, file *os.File, filename string, size uint, dbt *db_table
-func m_close_file(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
+// , thread_id uint, file *os.File, filename string, size uint, dbt *DB_Table
+func m_close_file(thread_id uint, file *file_write, filename string, size float64, dbt *DB_Table) error {
 	var err error
 	err = file.close()
 	file.status = 0
 	if size > 0 {
-		if o.Stream.Stream {
-			stream_queue_push(o, dbt, filename)
+		if Stream != "" {
+			stream_queue_push(dbt, filename)
 		}
-	} else if !o.Extra.BuildEmptyFiles {
+	} else if !BuildEmptyFiles {
 		err = os.Remove(filename)
 		if err != nil {
 			log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
@@ -55,18 +66,18 @@ func m_close_file(o *OptionEntries, thread_id uint, file *file_write, filename s
 	return err
 }
 
-func close_file_queue_push(o *OptionEntries, f *fifo) {
-	o.global.close_file_queue.push(f)
+func close_file_queue_push(f *fifo) {
+	G_async_queue_push(close_file_queue, f)
 	if f.child_pid > 0 {
 		// var status int
 		var pid int
 		var b bool = true
 		for b {
 			for pid == -1 {
-				o.global.pipe_creation.Lock()
+				pipe_creation.Lock()
 				// TODO
 				pid = 1
-				o.global.pipe_creation.Unlock()
+				pipe_creation.Unlock()
 				if pid > 0 {
 					b = false
 					break
@@ -80,17 +91,17 @@ func close_file_queue_push(o *OptionEntries, f *fifo) {
 	return
 }
 
-func wait_close_files(o *OptionEntries) {
+func wait_close_files() {
 	var f *fifo = new(fifo)
 	f.gpid = -10
 	f.child_pid = -10
 	f.filename = ""
-	close_file_queue_push(o, f)
-	o.global.cft.Wait()
+	close_file_queue_push(f)
+	cft.Thread.Wait()
 }
 
-func release_pid(o *OptionEntries) {
-	o.global.available_pids.push(1)
+func release_pid() {
+	G_async_queue_push(available_pids, 1)
 }
 
 func execute_file_per_thread(sql_fn string, sql_fn3 string) int {
@@ -143,8 +154,8 @@ func execute_file_per_thread(sql_fn string, sql_fn3 string) int {
 	return 0
 }
 
-func m_open_pipe(o *OptionEntries, filename *string, mode string) (*file_write, error) {
-	*filename = fmt.Sprintf("%s%s", *filename, o.Exec.ExecPerThreadExtension)
+func m_open_pipe(filename *string, mode string) (*file_write, error) {
+	*filename = fmt.Sprintf("%s%s", *filename, ExecPerThreadExtension)
 	var flag int
 	if strings.ToLower(mode) == "w" {
 		flag = os.O_CREATE | os.O_WRONLY
@@ -159,7 +170,7 @@ func m_open_pipe(o *OptionEntries, filename *string, mode string) (*file_write, 
 	var compressEncode *zstd.Encoder
 	var f = new(file_write)
 	f.status = 1
-	switch strings.ToUpper(o.Extra.CompressMethod) {
+	switch strings.ToUpper(compress_method) {
 	case GZIP:
 		compressFile, err = gzip.NewWriterLevel(file, gzip.DefaultCompression)
 		if err != nil {
@@ -192,16 +203,16 @@ func m_open_pipe(o *OptionEntries, filename *string, mode string) (*file_write, 
 
 }
 
-func m_close_pipe(o *OptionEntries, thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
-	release_pid(o)
+func m_close_pipe(thread_id uint, file *file_write, filename string, size float64, dbt *DB_Table) error {
+	release_pid()
 	var err error
 	err = file.close()
 	file.status = 0
 	if size > 0 {
-		if o.Stream.Stream {
-			stream_queue_push(o, dbt, "")
+		if Stream != "" {
+			stream_queue_push(dbt, "")
 		}
-	} else if !o.Extra.BuildEmptyFiles {
+	} else if !BuildEmptyFiles {
 		err = os.Remove(filename)
 		if err != nil {
 			log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
@@ -213,12 +224,12 @@ func m_close_pipe(o *OptionEntries, thread_id uint, file *file_write, filename s
 	return err
 }
 
-func final_step_close_file(o *OptionEntries, thread_id uint, filename string, f *fifo, size float64, dbt *db_table) error {
+func final_step_close_file(thread_id uint, filename string, f *fifo, size float64, dbt *DB_Table) error {
 	if size > 0 {
-		if o.Stream.Stream {
-			stream_queue_push(o, dbt, f.stdout_filename)
+		if Stream != "" {
+			stream_queue_push(dbt, f.stdout_filename)
 		}
-	} else if !o.Extra.BuildEmptyFiles {
+	} else if !BuildEmptyFiles {
 		if os.Remove(f.stdout_filename) != nil {
 			log.Warnf("Thread %d: Failed to remove empty file: %s", thread_id, f.stdout_filename)
 		} else {
@@ -228,25 +239,20 @@ func final_step_close_file(o *OptionEntries, thread_id uint, filename string, f 
 	return nil
 }
 
-func close_file_thread(o *OptionEntries) {
-	if o.global.cft == nil {
-		o.global.cft = new(sync.WaitGroup)
-	}
-	o.global.cft.Add(1)
-	defer o.global.cft.Done()
-	_ = o
+func close_file_thread() {
+	defer cft.Thread.Done()
 	var f *fifo
 	var err error
 	for {
-		f = o.global.close_file_queue.pop().(*fifo)
+		f = G_async_queue_pop(close_file_queue).(*fifo)
 		if f.gpid == -10 {
 			// TODO
 			break
 		}
-		o.global.pipe_creation.Lock()
+		pipe_creation.Lock()
 		f.pipe[1].close()
 		f.pipe[0].close()
-		o.global.pipe_creation.Unlock()
+		pipe_creation.Unlock()
 		f.out_mutes.Lock()
 		// TODO
 		err = f.fout.flush()
@@ -254,30 +260,30 @@ func close_file_thread(o *OptionEntries) {
 			log.Errorf("\"while syncing file %s (%v)", f.stdout_filename, err)
 		}
 		f.fout.close()
-		release_pid(o)
-		final_step_close_file(o, 0, f.filename, f, f.size, f.dbt)
-		g_atomic_int_dec_and_test(&o.global.open_pipe)
+		release_pid()
+		final_step_close_file(0, f.filename, f, f.size, f.dbt)
+		G_atomic_int_dec_and_test(&open_pipe)
 	}
 	return
 
 }
 
-func initialize_file_handler(o *OptionEntries, is_pipe bool) {
+func initialize_file_handler(is_pipe bool) {
 	if is_pipe {
-		o.global.m_open = m_open_pipe
-		o.global.m_close = m_close_pipe
+		m_open = m_open_pipe
+		m_close = m_close_pipe
 	} else {
-		o.global.m_open = m_open_file
-		o.global.m_close = m_close_file
+		m_open = m_open_file
+		m_close = m_close_file
 	}
-	o.global.available_pids = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.close_file_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
+	available_pids = G_async_queue_new(BufferSize)
+	close_file_queue = G_async_queue_new(BufferSize)
 	var i uint = 0
-	for i = 0; i < o.Common.NumThreads*2; i++ {
-		release_pid(o)
+	for i = 0; i < NumThreads*2; i++ {
+		release_pid()
 	}
-	o.global.pipe_creation = g_mutex_new()
-	o.global.file_hash = make(map[string]map[string][]string)
-	o.global.fifo_table_mutex = g_mutex_new()
-	go close_file_thread(o)
+	pipe_creation = G_mutex_new()
+	file_hash = make(map[string]map[string][]string)
+	fifo_table_mutex = G_mutex_new()
+	go close_file_thread()
 }

@@ -4,9 +4,9 @@ import (
 	"container/list"
 	"encoding/hex"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"math"
 	"path"
 	"strconv"
@@ -14,24 +14,51 @@ import (
 	"time"
 )
 
+var (
+	ChunkFilesize           uint
+	LoadData                bool
+	Csv                     bool
+	OutputFormat            string
+	IncludeHeader           bool
+	FieldsTerminatedByLd    string
+	FieldsEnclosedByLd      string
+	FieldsEscapedBy         string
+	LinesStartingByLd       string
+	LinesTerminatedByLd     string
+	StatementTerminatedByLd string
+	InsertIgnore            bool
+	Replace                 bool
+	CompleteInsert          bool
+	HexBlob                 bool
+	StatementSize           int = 100000
+	clickhouse              bool
+	fields_enclosed_by      string
+	fields_terminated_by    string
+	lines_terminated_by     string
+	lines_starting_by       string
+	statement_terminated_by string
+	insert_statement        string = INSERT
+	message_dumping_data    func(tj *table_job)
+)
+
 const LOAD_DATA_PREFIX = "LOAD DATA LOCAL INFILE '"
 
 // var m_write func(file *file_write, buff string) (int, error)
 
-func message_dumping_data_short(o *OptionEntries, tj *table_job) {
+func message_dumping_data_short(tj *table_job) {
 	var total uint64 = 0
 	if tj.dbt.rows_total != 0 {
 		total = 100 * (tj.dbt.rows / tj.dbt.rows_total)
 	}
 	log.Infof("Thread %d: %s%s%s.%s%s%s [ %d%% ] | Tables: %d/%d",
 		tj.td.thread_id,
-		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str,
-		tj.dbt.table, o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, tj.dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str,
+		tj.dbt.table, Identifier_quote_character_str,
 		total,
-		o.global.innodb_table.list.Len()+o.global.non_innodb_table.list.Len(), len(o.global.all_dbts))
+		innodb_table.list.Len()+non_innodb_table.list.Len(), len(all_dbts))
 }
 
-func message_dumping_data_long(o *OptionEntries, tj *table_job) {
+func message_dumping_data_long(tj *table_job) {
 	var total uint64 = 0
 	if tj.dbt.rows_total != 0 {
 		total = 100 * tj.dbt.rows / uint64(tj.dbt.rows_total)
@@ -45,19 +72,19 @@ func message_dumping_data_long(o *OptionEntries, tj *table_job) {
 		partition_opt = " "
 		partition_val = tj.partition
 	}
-	if len(tj.where) > 0 || o.Filter.WhereOption != "" || tj.dbt.where != "" {
+	if len(tj.where) > 0 || WhereOption != "" || tj.dbt.where != "" {
 		where_opt = " WHERE "
 	}
 	if len(tj.where) > 0 {
 		where_val = tj.where
 	}
-	if len(tj.where) > 0 && o.Filter.WhereOption != "" {
+	if len(tj.where) > 0 && WhereOption != "" {
 		where_and_opt = " AND "
 	}
-	if o.Filter.WhereOption != "" {
-		where_and_val = o.Filter.WhereOption
+	if WhereOption != "" {
+		where_and_val = WhereOption
 	}
-	if (len(tj.where) > 0 || o.Filter.WhereOption != "") && tj.dbt.where != "" {
+	if (len(tj.where) > 0 || WhereOption != "") && tj.dbt.where != "" {
 		where_and_opt_1 = " AND "
 	}
 	if tj.dbt.where != "" {
@@ -70,208 +97,207 @@ func message_dumping_data_long(o *OptionEntries, tj *table_job) {
 
 	log.Infof("Thread %d: dumping data from %s%s%s.%s%s%s%s%s%s%s%s%s%s%s%s%s into %s | Completed: %d%% | Remaining tables: %d / %d",
 		tj.td.thread_id,
-		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str,
-		tj.dbt.table, o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, tj.dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str,
+		tj.dbt.table, Identifier_quote_character_str,
 		partition_opt, partition_val,
 		where_opt, where_val,
 		where_and_opt, where_and_val,
 		where_and_opt_1, where_and_val_1,
 		order_by, order_by_val,
 		tj.rows.filename, total,
-		o.global.innodb_table.list.Len()+o.global.non_innodb_table.list.Len(), len(o.global.all_dbts))
+		innodb_table.list.Len()+non_innodb_table.list.Len(), len(all_dbts))
 }
 
-func initialize_write(o *OptionEntries) {
-	if o.Common.Verbose > 3 {
-		o.global.message_dumping_data = message_dumping_data_long
+func initialize_write() {
+	if Verbose > 3 {
+		message_dumping_data = message_dumping_data_long
 	} else {
-		o.global.message_dumping_data = message_dumping_data_short
+		message_dumping_data = message_dumping_data_short
 	}
 
-	if o.global.starting_chunk_step_size > 0 && o.Extra.ChunkFilesize > 0 {
+	if starting_chunk_step_size > 0 && ChunkFilesize > 0 {
 		log.Warnf("We are going to chunk by row and by filesize when possible")
 	}
-	if o.global.fields_enclosed_by == "" {
+	if fields_enclosed_by == "" {
 		log.Fatalf("detect_quote_character not exectue")
 	}
-	if o.Statement.FieldsEnclosedByLd == "" && len(o.Statement.FieldsEnclosedByLd) > 1 {
+	if FieldsEnclosedByLd == "" && len(FieldsEnclosedByLd) > 1 {
 		log.Fatalf("--fields-enclosed-by must be a single character")
 	}
-	if o.global.fields_escaped_by == "" && len(o.global.fields_escaped_by) > 1 {
+	if FieldsEscapedBy == "" && len(FieldsEscapedBy) > 1 {
 		log.Fatalf("--fields-enclosed-by must be a single character")
 	}
 
-	switch o.global.output_format {
+	switch output_format {
 	case CLICKHOUSE, SQL_INSERT:
-		if o.Statement.FieldsEnclosedByLd != "" {
-			o.global.fields_enclosed_by = o.Statement.FieldsEnclosedByLd
+		if FieldsEnclosedByLd != "" {
+			fields_enclosed_by = FieldsEnclosedByLd
 		}
-		if o.Statement.FieldsTerminatedByLd == "" {
-			o.global.fields_terminated_by = ","
-		} else if strings.Compare(o.Statement.FieldsTerminatedByLd, "\\t") == 0 {
-			o.global.fields_terminated_by = "\t"
+		if FieldsTerminatedByLd == "" {
+			fields_terminated_by = ","
+		} else if strings.Compare(FieldsTerminatedByLd, "\\t") == 0 {
+			fields_terminated_by = "\t"
 		} else {
-			o.global.fields_terminated_by = replace_escaped_strings(o.Statement.FieldsTerminatedByLd)
+			fields_terminated_by = Replace_escaped_strings(FieldsTerminatedByLd)
 		}
-		if o.Statement.LinesStartingByLd == "" {
-			o.global.lines_starting_by = "("
+		if LinesStartingByLd == "" {
+			lines_starting_by = "("
 		} else {
-			o.global.lines_starting_by = replace_escaped_strings(o.Statement.LinesStartingByLd)
+			lines_starting_by = Replace_escaped_strings(LinesStartingByLd)
 		}
-		if o.Statement.LinesTerminatedByLd == "" {
-			o.global.lines_terminated_by = ")\n"
+		if LinesTerminatedByLd == "" {
+			lines_terminated_by = ")\n"
 		} else {
-			o.global.lines_terminated_by = replace_escaped_strings(o.Statement.LinesTerminatedByLd)
+			lines_terminated_by = Replace_escaped_strings(LinesTerminatedByLd)
 		}
-		if o.Statement.StatementTerminatedByLd == "" {
-			o.global.statement_terminated_by = ";"
+		if StatementTerminatedByLd == "" {
+			statement_terminated_by = ";"
 		} else {
-			o.global.statement_terminated_by = replace_escaped_strings(o.Statement.StatementTerminatedByLd)
+			statement_terminated_by = Replace_escaped_strings(StatementTerminatedByLd)
 		}
 	case LOAD_DATA:
-		if o.Statement.FieldsEnclosedByLd == "" {
-			o.global.fields_enclosed_by = ""
-			o.Statement.FieldsEnclosedByLd = o.global.fields_enclosed_by
+		if FieldsEnclosedByLd == "" {
+			fields_enclosed_by = ""
+			FieldsEnclosedByLd = fields_enclosed_by
 		} else {
-			o.global.fields_enclosed_by = o.Statement.FieldsEnclosedByLd
+			fields_enclosed_by = FieldsEnclosedByLd
 		}
-		if o.global.fields_escaped_by != "" {
-			if strings.Compare(o.global.fields_escaped_by, "\\") == 0 {
-				o.global.fields_escaped_by = "\\\\"
+		if FieldsEscapedBy != "" {
+			if strings.Compare(FieldsEscapedBy, "\\") == 0 {
+				FieldsEscapedBy = "\\\\"
 			}
 		} else {
-			o.global.fields_escaped_by = "\\\\"
+			FieldsEscapedBy = "\\\\"
 		}
-		if o.Statement.FieldsTerminatedByLd == "" {
-			o.global.fields_terminated_by = "\t"
-			o.Statement.FieldsTerminatedByLd = "\\t"
-		} else if strings.Compare(o.Statement.FieldsTerminatedByLd, "\\t") == 0 {
-			o.global.fields_terminated_by = "\t"
-			o.Statement.FieldsTerminatedByLd = "\\t"
+		if FieldsTerminatedByLd == "" {
+			fields_terminated_by = "\t"
+			FieldsTerminatedByLd = "\\t"
+		} else if strings.Compare(FieldsTerminatedByLd, "\\t") == 0 {
+			fields_terminated_by = "\t"
+			FieldsTerminatedByLd = "\\t"
 		} else {
-			o.global.fields_terminated_by = replace_escaped_strings(o.Statement.FieldsTerminatedByLd)
+			fields_terminated_by = Replace_escaped_strings(FieldsTerminatedByLd)
 		}
-		if o.Statement.LinesStartingByLd == "" {
-			o.Statement.LinesStartingByLd = ""
-			o.Statement.LinesStartingByLd = o.global.lines_starting_by
+		if LinesStartingByLd == "" {
+			LinesStartingByLd = ""
+			LinesStartingByLd = lines_starting_by
 		} else {
-			o.global.lines_starting_by = replace_escaped_strings(o.Statement.LinesStartingByLd)
+			lines_starting_by = Replace_escaped_strings(LinesStartingByLd)
 		}
-		if o.Statement.LinesTerminatedByLd == "" {
-			o.global.lines_terminated_by = "\n"
-			o.Statement.LinesTerminatedByLd = "\\n"
+		if LinesTerminatedByLd == "" {
+			lines_terminated_by = "\n"
+			LinesTerminatedByLd = "\\n"
 		} else {
-			o.global.lines_terminated_by = replace_escaped_strings(o.Statement.LinesTerminatedByLd)
+			lines_terminated_by = Replace_escaped_strings(LinesTerminatedByLd)
 		}
-		if o.Statement.StatementTerminatedByLd == "" {
-			o.global.statement_terminated_by = ""
-			o.Statement.StatementTerminatedByLd = o.global.statement_terminated_by
+		if StatementTerminatedByLd == "" {
+			statement_terminated_by = ""
+			StatementTerminatedByLd = statement_terminated_by
 		} else {
-			o.global.statement_terminated_by = replace_escaped_strings(o.Statement.StatementTerminatedByLd)
+			statement_terminated_by = Replace_escaped_strings(StatementTerminatedByLd)
 		}
 
 	case CSV:
-		if o.Statement.FieldsEnclosedByLd == "" {
-			o.global.fields_enclosed_by = "\""
-			o.Statement.FieldsEnclosedByLd = o.global.fields_enclosed_by
+		if FieldsEnclosedByLd == "" {
+			fields_enclosed_by = "\""
+			FieldsEnclosedByLd = fields_enclosed_by
 		} else {
-			o.global.fields_enclosed_by = o.Statement.FieldsEnclosedByLd
+			fields_enclosed_by = FieldsEnclosedByLd
 		}
-		if o.global.fields_escaped_by != "" {
-			if strings.Compare(o.global.fields_escaped_by, "\\") == 0 {
-				o.global.fields_escaped_by = "\\\\"
+		if FieldsEscapedBy != "" {
+			if strings.Compare(FieldsEscapedBy, "\\") == 0 {
+				FieldsEscapedBy = "\\\\"
 			}
 		} else {
-			o.global.fields_escaped_by = "\\\\"
+			FieldsEscapedBy = "\\\\"
 		}
-		if o.Statement.FieldsTerminatedByLd == "" {
-			o.global.fields_terminated_by = ","
-			o.Statement.FieldsTerminatedByLd = o.global.fields_terminated_by
-		} else if strings.Compare(o.Statement.FieldsTerminatedByLd, "\\t") == 0 {
-			o.global.fields_terminated_by = "\t"
-			o.Statement.FieldsTerminatedByLd = "\\t"
+		if FieldsTerminatedByLd == "" {
+			fields_terminated_by = ","
+			FieldsTerminatedByLd = fields_terminated_by
+		} else if strings.Compare(FieldsTerminatedByLd, "\\t") == 0 {
+			fields_terminated_by = "\t"
+			FieldsTerminatedByLd = "\\t"
 		} else {
-			o.global.fields_terminated_by = replace_escaped_strings(o.Statement.FieldsTerminatedByLd)
+			fields_terminated_by = Replace_escaped_strings(FieldsTerminatedByLd)
 		}
-		if o.Statement.LinesStartingByLd == "" {
-			o.global.lines_starting_by = ""
-			o.Statement.LinesStartingByLd = o.global.lines_starting_by
+		if LinesStartingByLd == "" {
+			lines_starting_by = ""
+			LinesStartingByLd = lines_starting_by
 		} else {
-			o.global.lines_starting_by = replace_escaped_strings(o.Statement.LinesStartingByLd)
+			lines_starting_by = Replace_escaped_strings(LinesStartingByLd)
 		}
-		if o.Statement.LinesTerminatedByLd == "" {
-			o.global.lines_terminated_by = "\n"
-			o.Statement.LinesTerminatedByLd = "\\n"
+		if LinesTerminatedByLd == "" {
+			lines_terminated_by = "\n"
+			LinesTerminatedByLd = "\\n"
 		} else {
-			o.global.lines_terminated_by = replace_escaped_strings(o.Statement.LinesTerminatedByLd)
+			lines_terminated_by = Replace_escaped_strings(LinesTerminatedByLd)
 		}
-		if o.Statement.StatementTerminatedByLd == "" {
-			o.global.statement_terminated_by = ""
-			o.Statement.StatementTerminatedByLd = o.global.statement_terminated_by
+		if StatementTerminatedByLd == "" {
+			statement_terminated_by = ""
+			StatementTerminatedByLd = statement_terminated_by
 		} else {
-			o.global.statement_terminated_by = replace_escaped_strings(o.Statement.StatementTerminatedByLd)
+			statement_terminated_by = Replace_escaped_strings(StatementTerminatedByLd)
 
 		}
 	}
 
-	if o.Statement.InsertIgnore && o.Statement.Replace {
+	if InsertIgnore && Replace {
 		log.Errorf("You can't use --insert-ignore and --replace at the same time")
 	}
 
-	if o.Statement.InsertIgnore {
-		o.global.insert_statement = INSERT_IGNORE
+	if InsertIgnore {
+		insert_statement = INSERT_IGNORE
 	}
-	if o.Statement.Replace {
-		o.global.insert_statement = REPLACE
+	if Replace {
+		insert_statement = REPLACE
 	}
 }
 
-func finalize_write(o *OptionEntries) {
-	o.global.fields_terminated_by = ""
-	o.global.lines_starting_by = ""
-	o.global.lines_terminated_by = ""
-	o.global.statement_terminated_by = ""
+func finalize_write() {
+	fields_terminated_by = ""
+	lines_starting_by = ""
+	lines_terminated_by = ""
+	statement_terminated_by = ""
 }
 
-func append_load_data_columns(o *OptionEntries, statement *strings.Builder, fields []*mysql.Field, num_fields uint) *strings.Builder {
+func append_load_data_columns(statement *GString, fields []*mysql.Field, num_fields uint) *GString {
 	var i uint
-	var str *strings.Builder = new(strings.Builder)
+	var str = G_string_new("SET ")
 	var appendable bool
-	str.WriteString("SET ")
 	for i = 0; i < num_fields; i++ {
 		if i > 0 {
-			statement.WriteString(",")
+			G_string_append(statement, ",")
 		}
 		if fields[i].Type == mysql.MYSQL_TYPE_JSON {
-			statement.WriteString("@")
-			statement.WriteString(string(fields[i].Name))
-			if str.Len() > 4 {
-				str.WriteString(",")
+			G_string_append(statement, "@")
+			G_string_append_c(statement, fields[i].Name)
+			if str.Len > 4 {
+				G_string_append(str, ",")
 			}
-			str.WriteString(o.global.identifier_quote_character_str)
-			str.Write(fields[i].Name)
-			str.WriteString(o.global.identifier_quote_character_str)
-			str.WriteString("=CONVERT(@")
-			str.Write(fields[i].Name)
-			str.WriteString(" USING UTF8MB4)")
+			G_string_append(str, Identifier_quote_character_str)
+			G_string_append_c(str, fields[i].Name)
+			G_string_append(str, Identifier_quote_character_str)
+			G_string_append(str, "=CONVERT(@")
+			G_string_append_c(str, fields[i].Name)
+			G_string_append(str, " USING UTF8MB4)")
 			appendable = true
-		} else if o.Statement.HexBlob && fields[i].Type == mysql.MYSQL_TYPE_BLOB {
-			statement.WriteString("@")
-			statement.Write(fields[i].Name)
-			if str.Len() > 4 {
-				str.WriteString(",")
+		} else if HexBlob && fields[i].Type == mysql.MYSQL_TYPE_BLOB {
+			G_string_append(statement, "@")
+			G_string_append_c(statement, fields[i].Name)
+			if str.Len > 4 {
+				G_string_append(str, ",")
 			}
-			str.WriteString(o.global.identifier_quote_character_str)
-			str.Write(fields[i].Name)
-			str.WriteString(o.global.identifier_quote_character_str)
-			str.WriteString("=UNHEX(@")
-			str.Write(fields[i].Name)
-			str.WriteString(")")
+			G_string_append(str, Identifier_quote_character_str)
+			G_string_append_c(statement, fields[i].Name)
+			G_string_append(str, Identifier_quote_character_str)
+			G_string_append(str, "=UNHEX(@")
+			G_string_append_c(statement, fields[i].Name)
+			G_string_append(statement, ")")
 			appendable = true
 		} else {
-			str.WriteString(o.global.identifier_quote_character_str)
-			str.Write(fields[i].Name)
-			str.WriteString(o.global.identifier_quote_character_str)
+			G_string_append(str, Identifier_quote_character_str)
+			G_string_append_c(statement, fields[i].Name)
+			G_string_append(str, Identifier_quote_character_str)
 		}
 	}
 	if appendable {
@@ -281,48 +307,48 @@ func append_load_data_columns(o *OptionEntries, statement *strings.Builder, fiel
 	}
 }
 
-func append_columns(o *OptionEntries, statement *strings.Builder, fields []*mysql.Field, num_fields uint) {
+func append_columns(statement *GString, fields []*mysql.Field, num_fields uint) {
 	var i uint
 	for i = 0; i < num_fields; i++ {
 		if i > 0 {
-			statement.WriteString(",")
+			G_string_append(statement, ",")
 		}
-		statement.WriteString(o.Common.IdentifierQuoteCharacter)
-		statement.Write(fields[i].Name)
-		statement.WriteString(o.Common.IdentifierQuoteCharacter)
+		G_string_append(statement, Identifier_quote_character)
+		G_string_append(statement, string(fields[i].Name))
+		G_string_append(statement, Identifier_quote_character)
 	}
 
 }
 
-func build_insert_statement(o *OptionEntries, dbt *db_table, fields []*mysql.Field, num_fields uint) {
-	var i_s *strings.Builder = new(strings.Builder)
-	i_s.WriteString(o.global.insert_statement)
-	i_s.WriteString(" INTO ")
-	i_s.WriteString(o.Common.IdentifierQuoteCharacter)
-	i_s.WriteString(dbt.table)
-	i_s.WriteString(o.Common.IdentifierQuoteCharacter)
+func build_insert_statement(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+	var i_s = G_string_new(insert_statement)
+	G_string_append(i_s, insert_statement)
+	G_string_append(i_s, " INTO ")
+	G_string_append(i_s, Identifier_quote_character)
+	G_string_append(i_s, dbt.table)
+	G_string_append(i_s, Identifier_quote_character)
 	if dbt.columns_on_insert != "" {
-		i_s.WriteString(" (")
-		i_s.WriteString(dbt.columns_on_insert)
-		i_s.WriteString(")")
+		G_string_append(i_s, " (")
+		G_string_append(i_s, dbt.columns_on_insert)
+		G_string_append(i_s, ")")
 	} else {
 		if dbt.complete_insert {
-			i_s.WriteString(" (")
-			append_columns(o, i_s, fields, num_fields)
-			i_s.WriteString(")")
+			G_string_append(i_s, " (")
+			append_columns(i_s, fields, num_fields)
+			G_string_append(i_s, ")")
 		}
 	}
-	i_s.WriteString(" VALUES ")
-	dbt.insert_statement = i_s
+	G_string_append(i_s, " VALUES ")
+	dbt.insert_statement = nil
 }
 
-func real_write_data(file *file_write, filesize *float64, data *strings.Builder) bool {
+func real_write_data(file *file_write, filesize *float64, data *GString) bool {
 	var written int
 	var r int
 	var err error
 	var second_write_zero bool
-	for written < data.Len() {
-		r, err = file.write([]byte(data.String()))
+	for written < data.Len {
+		r, err = file.write([]byte(data.Str.String()))
 		if err != nil {
 			log.Errorf("Couldn't write data to a file: %v", err)
 			return false
@@ -343,140 +369,139 @@ func real_write_data(file *file_write, filesize *float64, data *strings.Builder)
 	return true
 }
 
-func write_data(file *file_write, data *strings.Builder) bool {
+func write_data(file *file_write, data *GString) bool {
 	var f float64
 	return real_write_data(file, &f, data)
 }
 
-func initialize_load_data_statement_suffix(o *OptionEntries, dbt *db_table, fields []*mysql.Field, num_fields uint) {
+func initialize_load_data_statement_suffix(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
 	var character_set string
-	if o.Statement.SetNamesStr != "" {
-		character_set = o.Statement.SetNamesStr
+	if SetNamesStr != "" {
+		character_set = SetNamesStr
 	} else {
 		character_set = dbt.character_set
 	}
-	var load_data_suffix *strings.Builder = new(strings.Builder)
-	load_data_suffix.WriteString(fmt.Sprintf("%s' INTO TABLE %s%s%s ", o.Exec.ExecPerThreadExtension, o.global.identifier_quote_character_str, dbt.table,
-		o.global.identifier_quote_character_str))
+	var load_data_suffix = G_string_sized_new(StatementSize)
+	G_string_append_printf(load_data_suffix, "%s' INTO TABLE %s%s%s ", ExecPerThreadExtension, Identifier_quote_character_str, dbt.table,
+		Identifier_quote_character_str)
 	if character_set != "" && len(character_set) != 0 {
-		load_data_suffix.WriteString(fmt.Sprintf("CHARACTER SET %s ", character_set))
+		G_string_append_printf(load_data_suffix, "CHARACTER SET %s ", character_set)
 	}
-	if o.Statement.FieldsTerminatedByLd != "" {
-		load_data_suffix.WriteString(fmt.Sprintf("FIELDS TERMINATED BY '%s' ", o.Statement.FieldsTerminatedByLd))
+	if FieldsTerminatedByLd != "" {
+		G_string_append_printf(load_data_suffix, "FIELDS TERMINATED BY '%s' ", FieldsTerminatedByLd)
 	}
-	if o.Statement.FieldsEnclosedByLd != "" {
-		load_data_suffix.WriteString(fmt.Sprintf("ENCLOSED BY '%s' ", o.Statement.FieldsEnclosedByLd))
+	if FieldsEnclosedByLd != "" {
+		G_string_append_printf(load_data_suffix, "ENCLOSED BY '%s' ", FieldsEnclosedByLd)
 	}
-	if o.global.fields_escaped_by != "" {
-		load_data_suffix.WriteString(fmt.Sprintf("ESCAPED BY '%s' ", o.global.fields_escaped_by))
+	if FieldsEscapedBy != "" {
+		G_string_append_printf(load_data_suffix, "ESCAPED BY '%s' ", FieldsEscapedBy)
 	}
-	load_data_suffix.WriteString("LINES ")
-	if o.Statement.LinesStartingByLd != "" {
-		load_data_suffix.WriteString(fmt.Sprintf("STARTING BY '%s' ", o.Statement.LinesStartingByLd))
+	G_string_append(load_data_suffix, "LINES ")
+	if LinesStartingByLd != "" {
+		G_string_append_printf(load_data_suffix, "STARTING BY '%s' ", LinesStartingByLd)
 	}
-	load_data_suffix.WriteString(fmt.Sprintf("TERMINATED BY '%s' ", o.Statement.LinesTerminatedByLd))
-	if o.Statement.IncludeHeader {
-		load_data_suffix.WriteString("IGNORE 1 LINES ")
+	G_string_append_printf(load_data_suffix, "TERMINATED BY '%s' ", LinesTerminatedByLd)
+	if IncludeHeader {
+		G_string_append(load_data_suffix, "IGNORE 1 LINES ")
 	}
-	load_data_suffix.WriteString("(")
+	G_string_append(load_data_suffix, "(")
 	if dbt.columns_on_insert != "" {
-		load_data_suffix.WriteString(dbt.columns_on_insert)
-		load_data_suffix.WriteString(")")
+		G_string_append(load_data_suffix, dbt.columns_on_insert)
+		G_string_append(load_data_suffix, ")")
 	} else {
-		var set_statement = append_load_data_columns(o, load_data_suffix, fields, num_fields)
-		load_data_suffix.WriteString(")")
+		var set_statement = append_load_data_columns(load_data_suffix, fields, num_fields)
+		G_string_append(load_data_suffix, ")")
 		if set_statement != nil {
-			load_data_suffix.WriteString(set_statement.String())
+			G_string_append(load_data_suffix, set_statement.Str.String())
 		}
 	}
-	load_data_suffix.WriteString(";\n")
+	G_string_append(load_data_suffix, ";\n")
 	dbt.load_data_suffix = load_data_suffix
 }
 
-func initialize_clickhouse_statement_suffix(o *OptionEntries, dbt *db_table, fields []*mysql.Field, num_fields uint) {
+func initialize_clickhouse_statement_suffix(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
 	var character_set string
-	if o.Statement.SetNamesStr != "" {
-		character_set = o.Statement.SetNamesStr
+	if SetNamesStr != "" {
+		character_set = SetNamesStr
 	} else {
 		character_set = dbt.character_set
 	}
-	dbt.insert_statement = new(strings.Builder)
-	dbt.load_data_suffix.WriteString(fmt.Sprintf("%s' INTO TABLE %s%s%s ", o.Exec.ExecPerThreadExtension, o.global.identifier_quote_character_str, dbt.table,
-		o.global.identifier_quote_character_str))
+	dbt.insert_statement = G_string_sized_new(StatementSize)
+	G_string_append_printf(dbt.load_data_suffix, "%s' INTO TABLE %s%s%s ", ExecPerThreadExtension, Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
 	if character_set != "" && len(character_set) != 0 {
-		dbt.load_data_suffix.WriteString(fmt.Sprintf("CHARACTER SET %s ", character_set))
+		G_string_append_printf(dbt.load_data_suffix, "CHARACTER SET %s ", character_set)
 	}
-	if o.Statement.FieldsTerminatedByLd != "" {
-		dbt.load_data_suffix.WriteString(fmt.Sprintf("FIELDS TERMINATED BY '%s' ", o.Statement.FieldsTerminatedByLd))
+	if FieldsTerminatedByLd != "" {
+		G_string_append_printf(dbt.load_data_suffix, "FIELDS TERMINATED BY '%s' ", FieldsTerminatedByLd)
 	}
-	if o.Statement.FieldsEnclosedByLd != "" {
-		dbt.load_data_suffix.WriteString(fmt.Sprintf("ENCLOSED BY '%s' ", o.Statement.FieldsEnclosedByLd))
+	if FieldsEnclosedByLd != "" {
+		G_string_append_printf(dbt.load_data_suffix, "ENCLOSED BY '%s' ", FieldsEnclosedByLd)
 	}
-	if o.global.fields_escaped_by != "" {
-		dbt.load_data_suffix.WriteString(fmt.Sprintf("ESCAPED BY '%s' ", o.global.fields_escaped_by))
+	if FieldsEscapedBy != "" {
+		G_string_append_printf(dbt.load_data_suffix, "ESCAPED BY '%s' ", FieldsEscapedBy)
 	}
-	dbt.load_data_suffix.WriteString("LINES ")
-	if o.Statement.LinesStartingByLd != "" {
-		dbt.load_data_suffix.WriteString(fmt.Sprintf("STARTING BY '%s' ", o.Statement.LinesStartingByLd))
+	G_string_append(dbt.load_data_suffix, "LINES ")
+	if LinesStartingByLd != "" {
+		G_string_append_printf(dbt.load_data_suffix, "STARTING BY '%s' ", LinesStartingByLd)
 	}
-	dbt.load_data_suffix.WriteString(fmt.Sprintf("TERMINATED BY '%s' ", o.Statement.LinesTerminatedByLd))
-	if o.Statement.IncludeHeader {
-		dbt.load_data_suffix.WriteString("IGNORE 1 LINES ")
+	G_string_append_printf(dbt.load_data_suffix, "TERMINATED BY '%s' ", LinesTerminatedByLd)
+	if IncludeHeader {
+		G_string_append(dbt.load_data_suffix, "IGNORE 1 LINES ")
 	}
-	dbt.load_data_suffix.WriteString("(")
+	G_string_append(dbt.load_data_suffix, "(")
 	if dbt.columns_on_insert != "" {
-		dbt.load_data_suffix.WriteString(dbt.columns_on_insert)
-		dbt.load_data_suffix.WriteString(")")
+		G_string_append(dbt.load_data_suffix, dbt.columns_on_insert)
+		G_string_append(dbt.load_data_suffix, ")")
 	} else {
-		var set_statement = append_load_data_columns(o, dbt.load_data_suffix, fields, num_fields)
-		dbt.load_data_suffix.WriteString(")")
+		var set_statement = append_load_data_columns(dbt.load_data_suffix, fields, num_fields)
+		G_string_append(dbt.load_data_suffix, ")")
 		if set_statement != nil {
-			dbt.load_data_suffix.WriteString(set_statement.String())
+			G_string_append(dbt.load_data_suffix, set_statement.Str.String())
 		}
 	}
-	dbt.load_data_suffix.WriteString(";\n")
+	G_string_append(dbt.load_data_suffix, ";\n")
 }
 
-func initialize_load_data_header(o *OptionEntries, dbt *db_table, fields []*mysql.Field, num_fields uint) {
-	dbt.load_data_header = new(strings.Builder)
+func initialize_load_data_header(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+	dbt.load_data_header = G_string_sized_new(StatementSize)
 	var i uint
 	for i = 0; i < num_fields-1; i++ {
-		dbt.load_data_header.WriteString(o.global.fields_enclosed_by)
-		dbt.load_data_header.Write(fields[i].Name)
-		dbt.load_data_header.WriteString(o.global.fields_enclosed_by)
-		dbt.load_data_header.WriteString(o.global.fields_terminated_by)
+		G_string_append(dbt.load_data_header, fields_enclosed_by)
+		G_string_append_c(dbt.load_data_header, fields[i].Name)
+		G_string_append(dbt.load_data_header, fields_enclosed_by)
+		G_string_append(dbt.load_data_header, fields_terminated_by)
 	}
-	dbt.load_data_header.WriteString(o.global.fields_enclosed_by)
-	dbt.load_data_header.Write(fields[i].Name)
-	dbt.load_data_header.WriteString(o.global.fields_enclosed_by)
-	dbt.load_data_header.WriteString(o.global.fields_terminated_by)
+	G_string_append(dbt.load_data_header, fields_enclosed_by)
+	G_string_append_c(dbt.load_data_header, fields[i].Name)
+	G_string_append(dbt.load_data_header, fields_enclosed_by)
+	G_string_append(dbt.load_data_header, fields_terminated_by)
 }
 
-func write_statement(load_data_file *file_write, filessize *float64, statement *strings.Builder, dbt *db_table) bool {
+func write_statement(load_data_file *file_write, filessize *float64, statement *GString, dbt *DB_Table) bool {
 	if !real_write_data(load_data_file, filessize, statement) {
 		log.Errorf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 		return false
 	}
-	statement.Reset()
+	G_string_set_size(statement, 0)
 	return true
 }
 
-func write_load_data_statement(o *OptionEntries, tj *table_job) {
-	var statement *strings.Builder = new(strings.Builder)
+func write_load_data_statement(tj *table_job) {
+	var statement = G_string_sized_new(StatementSize)
 	var basename = path.Base(tj.rows.filename)
-	initialize_sql_statement(o, statement)
-	statement.WriteString(fmt.Sprintf("%s%s%s", LOAD_DATA_PREFIX, basename, tj.dbt.load_data_suffix.String()))
+	initialize_sql_statement(statement)
+	G_string_append_printf(statement, "%s%s%s", LOAD_DATA_PREFIX, basename, tj.dbt.load_data_suffix.Str.String())
 	if !write_data(tj.sql.file, statement) {
 		log.Fatalf("Could not write out data for %s.%s", tj.dbt.database.name, tj.dbt.table)
 	}
 }
 
-func write_clickhouse_statement(o *OptionEntries, tj *table_job) {
-	var statement *strings.Builder = new(strings.Builder)
+func write_clickhouse_statement(tj *table_job) {
+	var statement = G_string_sized_new(StatementSize)
 	var basename = path.Base(tj.rows.filename)
-	initialize_sql_statement(o, statement)
-	statement.WriteString(fmt.Sprintf("%s INTO %s%s%s FROM INFILE '%s' FORMAT MySQLDump;", o.global.insert_statement, o.global.identifier_quote_character_str,
-		tj.dbt.table, o.global.identifier_quote_character_str, basename))
+	initialize_sql_statement(statement)
+	G_string_append_printf(statement, "%s INTO %s%s%s FROM INFILE '%s' FORMAT MySQLDump;", insert_statement, Identifier_quote_character_str,
+		tj.dbt.table, Identifier_quote_character_str, basename)
 	if !write_data(tj.sql.file, statement) {
 		log.Fatalf("Could not write out data for %s.%s", tj.dbt.database.name, tj.dbt.table)
 	}
@@ -495,78 +520,80 @@ func get_estimated_remaining_of(mlist *MList) uint64 {
 	var tl *list.List = mlist.list
 	var total uint64
 	for e := tl.Front(); e != nil; e = e.Next() {
-		total += e.Value.(*db_table).estimated_remaining_steps
+		total += e.Value.(*DB_Table).estimated_remaining_steps
 	}
 	mlist.mutex.Unlock()
 	return total
 }
 
-func get_estimated_remaining_of_all_chunks(o *OptionEntries) uint64 {
-	return get_estimated_remaining_of(o.global.non_innodb_table) + get_estimated_remaining_of(o.global.innodb_table)
+func get_estimated_remaining_of_all_chunks() uint64 {
+	return get_estimated_remaining_of(non_innodb_table) + get_estimated_remaining_of(innodb_table)
 }
 
-func write_load_data_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer) {
+func write_load_data_column_into_string(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer) {
 	_ = conn
 	if column.Value() != nil {
 		fun_ptr_i = nil
 		// TODO
 	}
 	if column.Value() == nil {
-		statement_row.WriteString("\\N")
-	} else if field.Type == mysql.MYSQL_TYPE_BLOB && o.Statement.HexBlob {
-		*escaped = hex.EncodeToString([]byte(*escaped))
-		statement_row.WriteString(*escaped)
+		G_string_append(statement_row, "\\N")
+	} else if field.Type == mysql.MYSQL_TYPE_BLOB && HexBlob {
+		G_string_printf(escaped, hex.EncodeToString([]byte(escaped.Str.String())))
+		G_string_append(statement_row, escaped.Str.String())
 	} else if field.Type != mysql.MYSQL_TYPE_LONG && field.Type != mysql.MYSQL_TYPE_LONGLONG && field.Type != mysql.MYSQL_TYPE_INT24 && field.Type != mysql.MYSQL_TYPE_SHORT {
-		statement_row.WriteString(o.global.fields_enclosed_by)
-		*escaped = mysql.Escape(string(column.AsString()))
-		// *escaped = strings.ReplaceAll(*escaped, "\\", o.Statement.Fields_escaped_by)
-		*escaped = m_replace_char_with_char('\\', []rune(o.global.fields_escaped_by)[0], []rune(*escaped))
-		*escaped = string(m_escape_char_with_char([]byte(o.global.fields_terminated_by), []byte(o.global.fields_escaped_by), []byte(*escaped)))
-		statement_row.WriteString(*escaped)
-		statement_row.WriteString(o.global.fields_enclosed_by)
+		G_string_append(statement_row, fields_enclosed_by)
+		// *escaped = mysql.Escape(string(column.AsString()))
+		// *escaped = strings.ReplaceAll(*escaped, "\\", Fields_escaped_by)
+		m_replace_char_with_char('\\', []rune(FieldsEscapedBy)[0], []rune(escaped.Str.String()))
+		m_escape_char_with_char([]byte(fields_terminated_by), []byte(FieldsEscapedBy), []byte(escaped.Str.String()))
+		G_string_append(statement_row, escaped.Str.String())
+		G_string_append(statement_row, fields_enclosed_by)
 	} else {
 		// statement_row.WriteString(strconv.FormatInt(column.AsInt64(), 10))
-		statement_row.WriteString(string(column.AsString()))
+		G_string_append_c(statement_row, column.AsString())
 	}
 }
 
-func write_sql_column_into_string(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer) {
+func write_sql_column_into_string(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer) {
 	if &column != nil {
 		fun_ptr_i = nil
 	}
 	_ = conn
 	if column.Value() == nil {
-		statement_row.WriteString("NULL")
+		G_string_append(statement_row, "NULL")
 	} else if field.Type <= mysql.MYSQL_TYPE_INT24 {
-		statement_row.WriteString(strconv.FormatInt(column.AsInt64(), 10))
+		G_string_append(statement_row, strconv.FormatInt(column.AsInt64(), 10))
 	} else if length.ColumnLength == 0 {
-		statement_row.WriteString(o.global.fields_enclosed_by)
-		statement_row.WriteString(o.global.fields_enclosed_by)
-	} else if field.Type == mysql.MYSQL_TYPE_BLOB || o.Statement.HexBlob {
-		statement_row.WriteString("0x")
-		*escaped = hex.EncodeToString(column.AsString())
-		statement_row.WriteString(*escaped)
+		G_string_append(statement_row, fields_enclosed_by)
+		G_string_append(statement_row, fields_enclosed_by)
+	} else if field.Type == mysql.MYSQL_TYPE_BLOB && HexBlob {
+		G_string_set_size(escaped, int(length.ColumnLength*2+1))
+		G_string_append(statement_row, "0x")
+		G_string_printf(escaped, hex.EncodeToString(column.AsString()))
+		G_string_append(statement_row, escaped.Str.String())
 	} else {
-		*escaped = mysql.Escape(string(column.AsString()))
+		G_string_set_size(escaped, int(length.ColumnLength*2+1))
+		G_string_printf(escaped, mysql.Escape(string(column.AsString())))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
-			statement_row.WriteString("CONVERT(")
+			G_string_append(statement_row, "CONVERT(")
 		}
-		statement_row.WriteString(o.global.fields_enclosed_by)
-		statement_row.WriteString(*escaped)
-		statement_row.WriteString(o.global.fields_enclosed_by)
-		// statement_row.WriteString(fmt.Sprintf("%s%s%s", o.global.fields_enclosed_by, *escaped, o.global.fields_enclosed_by))
+		G_string_append(statement_row, fields_enclosed_by)
+		G_string_append(statement_row, escaped.Str.String())
+		G_string_append(statement_row, fields_enclosed_by)
+		// statement_row.WriteString(fmt.Sprintf("%s%s%s", fields_enclosed_by, *escaped, fields_enclosed_by))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
-			statement_row.WriteString(" USING UTF8MB4)")
+			G_string_append(statement_row, " USING UTF8MB4)")
 		}
 	}
 }
 
-func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *string, statement_row *strings.Builder, write_column_into_string func(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer)) {
+func write_row_into_string(conn *DBConnection, dbt *DB_Table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *GString, statement_row *GString, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)) {
 	var i uint
-	statement_row.WriteString(o.global.lines_starting_by)
+	G_string_append(statement_row, lines_starting_by)
 	_ = dbt
 	// var f = dbt.anonymized_function
-	var p *function_pointer
+	var p *Function_pointer
 
 	for i = 0; i < num_fields-1; i++ {
 		/*if f == nil {
@@ -574,39 +601,39 @@ func write_row_into_string(o *OptionEntries, conn *client.Conn, dbt *db_table, r
 		} else {
 			p = f[i]
 		}*/
-		write_column_into_string(o, conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
-		statement_row.WriteString(o.global.fields_terminated_by)
+		write_column_into_string(conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
+		G_string_append(statement_row, fields_terminated_by)
 
 	}
-	write_column_into_string(o, conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
-	statement_row.WriteString(o.global.lines_terminated_by)
+	write_column_into_string(conn, row[i], fields[i], lengths[i], escaped, statement_row, p)
+	G_string_append(statement_row, lines_terminated_by)
 }
 
-func update_dbt_rows(dbt *db_table, num_rows uint64) {
+func update_dbt_rows(dbt *DB_Table, num_rows uint64) {
 	dbt.rows_lock.Lock()
 	dbt.rows += num_rows
 	dbt.rows_lock.Unlock()
 }
 
-func initiliaze_load_data_files(o *OptionEntries, tj *table_job, dbt *db_table) {
-	o.global.m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+func initiliaze_load_data_files(tj *table_job, dbt *DB_Table) {
+	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
 	tj.sql.file.status = 0
 	tj.rows.file = nil
 	tj.rows.file.status = 0
 	tj.sql.filename = ""
 	tj.rows.filename = ""
-	if update_files_on_table_job(o, tj) {
-		write_load_data_statement(o, tj)
+	if update_files_on_table_job(tj) {
+		write_load_data_statement(tj)
 		write_header(tj)
 	}
 
 }
 
-func initiliaze_clickhouse_files(o *OptionEntries, tj *table_job, dbt *db_table) {
-	o.global.m_close(o, tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+func initiliaze_clickhouse_files(tj *table_job, dbt *DB_Table) {
+	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
 	tj.sql.file.status = 0
 	tj.rows.file = nil
@@ -615,95 +642,94 @@ func initiliaze_clickhouse_files(o *OptionEntries, tj *table_job, dbt *db_table)
 	tj.sql.filename = ""
 	tj.rows.filename = ""
 
-	if update_files_on_table_job(o, tj) {
-		write_clickhouse_statement(o, tj)
+	if update_files_on_table_job(tj) {
+		write_clickhouse_statement(tj)
 		write_header(tj)
 	}
 }
 
-func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, result mysql.Result, tj *table_job) error {
-	var dbt *db_table = tj.dbt
+func write_result_into_file(conn *DBConnection, query string, result mysql.Result, tj *table_job) error {
+	var dbt *DB_Table = tj.dbt
 	var num_fields uint
-	var escaped string
+	var escaped *GString = G_string_sized_new(3000)
 	var err error
 	var fields []*mysql.Field
-	var statement *strings.Builder = new(strings.Builder)
-	var statement_row *strings.Builder = new(strings.Builder)
+	var statement = G_string_sized_new(2 * StatementSize)
+	var statement_row = G_string_sized_new(0)
 	var lengths []*mysql.Field
 	var num_rows uint64
 	var num_row_st uint64
-	var write_column_into_string func(o *OptionEntries, conn *client.Conn, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *string, statement_row *strings.Builder, fun_ptr_i *function_pointer)
-	switch o.global.output_format {
+	var write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)
+	switch output_format {
 	case LOAD_DATA, CSV:
 		write_column_into_string = write_load_data_column_into_string
 		if dbt.load_data_suffix == nil {
 			dbt.chunks_mutex.Lock()
 			if dbt.load_data_suffix == nil {
-				initialize_load_data_statement_suffix(o, tj.dbt, fields, num_fields)
+				initialize_load_data_statement_suffix(tj.dbt, fields, num_fields)
 			}
-			if o.Statement.IncludeHeader {
-				initialize_load_data_header(o, tj.dbt, fields, num_fields)
+			if IncludeHeader {
+				initialize_load_data_header(tj.dbt, fields, num_fields)
 			}
 			dbt.chunks_mutex.Unlock()
 		}
-		if update_files_on_table_job(o, tj) {
-			write_load_data_statement(o, tj)
+		if update_files_on_table_job(tj) {
+			write_load_data_statement(tj)
 			write_header(tj)
 		}
 	case CLICKHOUSE:
 		write_column_into_string = write_sql_column_into_string
 		if tj.rows.file.status == 0 {
-			update_files_on_table_job(o, tj)
+			update_files_on_table_job(tj)
 		}
 		if dbt.load_data_suffix == nil {
 			dbt.chunks_mutex.Lock()
 			if dbt.load_data_suffix == nil {
-				initialize_clickhouse_statement_suffix(o, tj.dbt, fields, num_fields)
+				initialize_clickhouse_statement_suffix(tj.dbt, fields, num_fields)
 			}
 			dbt.chunks_mutex.Unlock()
 		}
 		if dbt.insert_statement == nil {
 			dbt.chunks_mutex.Lock()
 			if dbt.insert_statement == nil {
-				build_insert_statement(o, dbt, fields, num_fields)
+				build_insert_statement(dbt, fields, num_fields)
 			}
 			dbt.chunks_mutex.Unlock()
 		}
 		if tj.st_in_file == 0 {
-			initialize_sql_statement(o, statement)
-			write_clickhouse_statement(o, tj)
+			initialize_sql_statement(statement)
+			write_clickhouse_statement(tj)
 		}
-		statement.WriteString(dbt.insert_statement.String())
+		G_string_append(statement, dbt.insert_statement.Str.String())
 	case SQL_INSERT:
 		write_column_into_string = write_sql_column_into_string
 		if tj.rows.file.status == 0 {
-			update_files_on_table_job(o, tj)
+			update_files_on_table_job(tj)
 		}
 		if dbt.insert_statement == nil {
 			dbt.chunks_mutex.Lock()
 			if dbt.insert_statement == nil {
-				build_insert_statement(o, dbt, fields, num_fields)
+				build_insert_statement(dbt, fields, num_fields)
 			}
 			dbt.chunks_mutex.Unlock()
 		}
 		if tj.st_in_file == 0 {
-			initialize_sql_statement(o, statement)
+			initialize_sql_statement(statement)
 		}
-		statement.WriteString(dbt.insert_statement.String())
+		G_string_append(statement, dbt.insert_statement.Str.String())
 	}
-	o.global.message_dumping_data(o, tj)
+	message_dumping_data(tj)
 	var from = time.Now()
-
-	err = conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
+	err = conn.Conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
 		num_rows++
-		write_row_into_string(o, conn, dbt, row, fields, lengths, num_fields, &escaped, statement_row, write_column_into_string)
-		if statement.Len()*statement_row.Len()+1 > o.Statement.StatementSize {
+		write_row_into_string(conn, dbt, row, fields, lengths, num_fields, escaped, statement_row, write_column_into_string)
+		if statement.Len*statement_row.Len+1 > StatementSize {
 			if num_row_st == 0 {
-				statement.WriteString(statement_row.String())
-				statement_row.Reset()
+				G_string_append(statement, statement_row.Str.String())
+				G_string_set_size(statement_row, 0)
 				log.Warnf("Row bigger than statement_size for %s.%s", dbt.database.name, dbt.table)
 			}
-			statement.WriteString(o.global.statement_terminated_by)
+			G_string_append(statement, statement_terminated_by)
 			if !write_statement(tj.rows.file, &tj.filesize, statement, dbt) {
 				return nil
 			}
@@ -711,45 +737,45 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 			num_rows = 0
 			num_row_st = 0
 			tj.st_in_file++
-			if o.global.output_format == SQL_INSERT || o.global.output_format == CLICKHOUSE {
-				statement.WriteString(dbt.insert_statement.String())
+			if output_format == SQL_INSERT || output_format == CLICKHOUSE {
+				G_string_append(statement, dbt.insert_statement.Str.String())
 			}
 			to := time.Now()
 			diff := to.Sub(from).Seconds()
 			if diff > 4 {
 				from = to
-				o.global.message_dumping_data(o, tj)
+				message_dumping_data(tj)
 			}
 			check_pause_resume(tj.td)
-			if o.global.shutdown_triggered {
+			if shutdown_triggered {
 				return nil
 			}
 		}
 		if dbt.chunk_filesize != 0 && uint(math.Ceil(tj.filesize/1024/1024)) > dbt.chunk_filesize {
 			tj.sub_part++
-			switch o.global.output_format {
+			switch output_format {
 			case LOAD_DATA, CSV:
-				initiliaze_load_data_files(o, tj, dbt)
+				initiliaze_load_data_files(tj, dbt)
 			case CLICKHOUSE:
-				initiliaze_clickhouse_files(o, tj, dbt)
+				initiliaze_clickhouse_files(tj, dbt)
 			case SQL_INSERT:
-				o.global.m_close(o, tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+				m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 				tj.rows.file = nil
 				tj.rows.file.status = 0
-				update_files_on_table_job(o, tj)
-				initiliaze_clickhouse_files(o, tj, dbt)
+				update_files_on_table_job(tj)
+				initiliaze_clickhouse_files(tj, dbt)
 			}
 		}
 		tj.st_in_file = 0
 		tj.filesize = 0
-		if num_row_st != 0 && (o.global.output_format == SQL_INSERT || o.global.output_format == CLICKHOUSE) {
-			statement.WriteString(",")
+		if num_row_st != 0 && (output_format == SQL_INSERT || output_format == CLICKHOUSE) {
+			G_string_append(statement, ",")
 		}
-		statement.WriteString(statement_row.String())
-		if statement_row.Len() > 0 {
+		G_string_append(statement, statement_row.Str.String())
+		if statement_row.Len > 0 {
 			num_row_st++
 		}
-		statement_row.Reset()
+		G_string_set_size(statement_row, 0)
 		return nil
 	}, func(result *mysql.Result) error {
 		lengths = result.Fields
@@ -758,22 +784,22 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 		return nil
 	})
 	if err != nil {
-		if !o.global.it_is_a_consistent_backup {
+		if !it_is_a_consistent_backup {
 			log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s",
 				tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, err, query)
 			// try connection
 			// TODO
 			err = conn.Ping()
 			if err != nil {
-				conn, err = m_connect(o)
-				if err != nil {
+				M_connect(conn)
+				if conn.Err != nil {
 					return err
 				} else {
-					execute_gstring(conn, o.global.set_session)
+					Execute_gstring(conn, Set_session)
 				}
 			}
 			log.Warnf("Thread %d: Retrying last failed executed statement", tj.td.thread_id)
-			if o.Extra.SuccessOn1146 && mysqlError(err).Code == 1146 {
+			if SuccessOn1146 && conn.Code == 1146 {
 				log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s",
 					tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, err, query)
 			} else {
@@ -782,7 +808,7 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 				return err
 			}
 		} else {
-			if o.Extra.SuccessOn1146 && mysqlError(err).Code == 1146 {
+			if SuccessOn1146 && conn.Code == 1146 {
 				log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s",
 					tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, err, query)
 			} else {
@@ -793,28 +819,28 @@ func write_result_into_file(o *OptionEntries, conn *client.Conn, query string, r
 		}
 	}
 	update_dbt_rows(dbt, num_rows)
-	if num_row_st > 0 && statement.Len() > 0 {
-		if o.global.output_format == SQL_INSERT || o.global.output_format == CLICKHOUSE {
-			statement.WriteString(o.global.statement_terminated_by)
+	if num_row_st > 0 && statement.Len > 0 {
+		if output_format == SQL_INSERT || output_format == CLICKHOUSE {
+			G_string_append(statement, statement_terminated_by)
 		}
 		if !write_statement(tj.rows.file, &tj.filesize, statement, dbt) {
 			return err
 		}
 		tj.st_in_file++
 	}
-	statement.Reset()
-	escaped = ""
-	statement_row.Reset()
+	G_string_free(statement, true)
+	G_string_free(escaped, true)
+	G_string_free(statement_row, true)
 	return err
 }
 
-func write_table_job_into_file(o *OptionEntries, tj *table_job) {
+func write_table_job_into_file(tj *table_job) {
 	var conn = tj.td.thrconn
 	var err error
 	var result mysql.Result
 	var query string
 	var cache, fields, where1, where_option1, where2, where_option2, where3, where_option3, order, limit string
-	if o.is_mysql_like() {
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	if tj.dbt.columns_on_select != "" {
@@ -822,19 +848,19 @@ func write_table_job_into_file(o *OptionEntries, tj *table_job) {
 	} else {
 		fields = tj.dbt.select_fields
 	}
-	if tj.where != "" || o.Filter.WhereOption != "" || tj.dbt.where != "" {
+	if tj.where != "" || WhereOption != "" || tj.dbt.where != "" {
 		where1 = "WHERE"
 	}
 	if tj.where != "" {
 		where_option1 = tj.where
 	}
-	if tj.where != "" && o.Filter.WhereOption != "" {
+	if tj.where != "" && WhereOption != "" {
 		where2 = "AND"
 	}
-	if o.Filter.WhereOption != "" {
-		where_option2 = o.Filter.WhereOption
+	if WhereOption != "" {
+		where_option2 = WhereOption
 	}
-	if (tj.where != "" || o.Filter.WhereOption != "") && tj.dbt.where != "" {
+	if (tj.where != "" || WhereOption != "") && tj.dbt.where != "" {
 		where3 = "AND"
 	}
 	if tj.dbt.where != "" {
@@ -849,22 +875,22 @@ func write_table_job_into_file(o *OptionEntries, tj *table_job) {
 	query = fmt.Sprintf("SELECT %s %s FROM %s%s%s.%s%s%s %s %s %s %s %s %s %s %s %s %s %s",
 		cache,
 		fields,
-		o.global.identifier_quote_character_str, tj.dbt.database.name, o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, tj.dbt.table, o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, tj.dbt.database.name, Identifier_quote_character_str,
+		Identifier_quote_character_str, tj.dbt.table, Identifier_quote_character_str,
 		tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, tj.order_by, limit, tj.dbt.limit)
-	err = write_result_into_file(o, conn, query, result, tj)
+	err = write_result_into_file(conn, query, result, tj)
 	if err != nil {
 		log.Errorf("Thread %d: Could not read data from %s.%s to write on %s at byte %.0f: %v",
 			tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, tj.rows.filename, tj.filesize, err)
 		err = conn.Ping()
 		if err != nil {
-			if !o.global.it_is_a_consistent_backup {
+			if !it_is_a_consistent_backup {
 				log.Warnf("Thread %d: Reconnecting due errors", tj.td.thread_id)
-				tj.td.thrconn, err = m_connect(o)
-				if err != nil {
-					log.Fatalf("Reconnect file: %v", err)
+				M_connect(tj.td.thrconn)
+				if tj.td.thrconn.Err != nil {
+					log.Fatalf("Reconnect file: %v", tj.td.thrconn.Err)
 				}
-				execute_gstring(tj.td.thrconn, o.global.set_session)
+				Execute_gstring(tj.td.thrconn, Set_session)
 			}
 		}
 	}

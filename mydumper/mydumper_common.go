@@ -3,15 +3,26 @@ package mydumper
 import (
 	"bytes"
 	"fmt"
+	"github.com/go-mysql-org/go-mysql/mysql"
+	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+)
 
-	"github.com/go-mysql-org/go-mysql/client"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
+var (
+	Compact         bool
+	Compress        string
+	headers         *GString
+	ref_table_mutex *sync.Mutex
+	ref_table       map[string]string
+	table_number    uint
+	nroutines       uint = 4
+	server_version  uint
+	routine_type    []string = []string{"FUNCTION", "PROCEDURE", "PACKAGE", "PACKAGE BODY"}
 )
 
 type file_write struct {
@@ -21,39 +32,35 @@ type file_write struct {
 	status int
 }
 
-func g_mutex_new() *sync.Mutex {
-	return new(sync.Mutex)
+func initialize_common() {
+	ref_table_mutex = G_mutex_new()
+	ref_table = make(map[string]string)
 }
 
-func initialize_common(o *OptionEntries) {
-	o.global.ref_table_mutex = g_mutex_new()
-	o.global.ref_table = make(map[string]string)
+func free_common() {
+	ref_table_mutex = nil
+	ref_table = nil
 }
 
-func free_common(o *OptionEntries) {
-	o.global.ref_table_mutex = nil
-	o.global.ref_table = nil
-}
-
-func determine_filename(o *OptionEntries, table string) string {
-	if check_filename_regex(o, table) && !strings.Contains(table, ".") && !strings.HasSuffix(table, "mydumper_") {
+func determine_filename(table string) string {
+	if Check_filename_regex(table) && !strings.Contains(table, ".") && !strings.HasSuffix(table, "mydumper_") {
 		return table
 	} else {
-		r := fmt.Sprintf("mydumper_%d", o.global.table_number)
-		o.global.table_number++
+		r := fmt.Sprintf("mydumper_%d", table_number)
+		table_number++
 		return r
 	}
 }
 
-func get_ref_table(o *OptionEntries, k string) string {
-	o.global.ref_table_mutex.Lock()
-	var val string = o.global.ref_table[k]
+func get_ref_table(k string) string {
+	ref_table_mutex.Lock()
+	var val string = ref_table[k]
 	if val == "" {
 		var t = k
-		val = determine_filename(o, t)
-		o.global.ref_table[t] = val
+		val = determine_filename(t)
+		ref_table[t] = val
 	}
-	o.global.ref_table_mutex.Unlock()
+	ref_table_mutex.Unlock()
 	return val
 }
 
@@ -90,21 +97,20 @@ func build_meta_filename(dump_directory, database string, table string, suffix s
 	return r
 }
 
-func set_charset(statement *strings.Builder, character_set []byte, collation_connection []byte) {
-	statement.Reset()
-	statement.WriteString("SET @PREV_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT;\n")
-	statement.WriteString("SET @PREV_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS;\n")
-	statement.WriteString("SET @PREV_COLLATION_CONNECTION=@@COLLATION_CONNECTION;\n")
-	statement.WriteString(fmt.Sprintf("SET character_set_client = %s;\n", character_set))
-	statement.WriteString(fmt.Sprintf("SET character_set_results = %s;\n", character_set))
-	statement.WriteString(fmt.Sprintf("SET collation_connection = %s;\n", collation_connection))
+func set_charset(statement *GString, character_set []byte, collation_connection []byte) {
+	G_string_printf(statement, "SET @PREV_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT;\n")
+	G_string_append(statement, "SET @PREV_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS;\n")
+	G_string_append(statement, "SET @PREV_COLLATION_CONNECTION=@@COLLATION_CONNECTION;\n")
+	G_string_append_printf(statement, "SET character_set_client = %s;\n", character_set)
+	G_string_append_printf(statement, "SET character_set_results = %s;\n", character_set)
+	G_string_append_printf(statement, "SET collation_connection = %s;\n", collation_connection)
 
 }
 
-func restore_charset(statement *strings.Builder) {
-	statement.WriteString("SET character_set_client = @PREV_CHARACTER_SET_CLIENT;\n")
-	statement.WriteString("SET character_set_results = @PREV_CHARACTER_SET_RESULTS;\n")
-	statement.WriteString("SET collation_connection = @PREV_COLLATION_CONNECTION;\n")
+func restore_charset(statement *GString) {
+	G_string_append(statement, "SET character_set_client = @PREV_CHARACTER_SET_CLIENT;\n")
+	G_string_append(statement, "SET character_set_results = @PREV_CHARACTER_SET_RESULTS;\n")
+	G_string_append(statement, "SET collation_connection = @PREV_COLLATION_CONNECTION;\n")
 }
 
 func clear_dump_directory(directory string) error {
@@ -146,10 +152,10 @@ func is_empty_dir(directory string) bool {
 	return false
 }
 
-func set_transaction_isolation_level_repeatable_read(conn *client.Conn) {
-	_, err := conn.Execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-	if err != nil {
-		log.Errorf("Failed to set isolation level: %v", err)
+func set_transaction_isolation_level_repeatable_read(conn *DBConnection) {
+	_ = conn.Execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+	if conn.Err != nil {
+		log.Errorf("Failed to set isolation level: %v", conn.Err)
 		os.Exit(EXIT_FAILURE)
 	}
 }
@@ -171,12 +177,12 @@ func build_filename(dump_directory, database string, table string, part uint64, 
 	return r
 }
 
-func build_sql_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
-	return build_filename(o.global.dump_directory, database, table, part, sub_part, SQL, "")
+func build_sql_filename(database string, table string, part uint64, sub_part uint) string {
+	return build_filename(dump_directory, database, table, part, sub_part, SQL, "")
 }
 
-func build_rows_filename(o *OptionEntries, database string, table string, part uint64, sub_part uint) string {
-	return build_filename(o.global.dump_directory, database, table, part, sub_part, o.global.rows_file_extension, "")
+func build_rows_filename(database string, table string, part uint64, sub_part uint) string {
+	return build_filename(dump_directory, database, table, part, sub_part, rows_file_extension, "")
 }
 
 func m_real_escape_string(from string) string {
@@ -279,40 +285,41 @@ func determine_charset_and_coll_columns_from_show(result *mysql.Result, charcol 
 	}
 }
 
-func initialize_headers(o *OptionEntries) {
-	if o.is_mysql_like() {
-		if o.global.set_names_statement != "" {
-			o.global.headers.WriteString(fmt.Sprintf("%s;\n", o.global.set_names_statement))
+func initialize_headers() {
+	headers = G_string_new("")
+	if Is_mysql_like() {
+		if Set_names_statement != "" {
+			G_string_printf(headers, "%s;\n", Set_names_statement)
 		}
-		o.global.headers.WriteString("/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
-		if o.global.sql_mode != "" && !o.Extra.Compact {
-			o.global.headers.WriteString(fmt.Sprintf("/*!40101 SET SQL_MODE='%s'*/;\n", o.global.sql_mode))
+		G_string_append(headers, "/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
+		if Sql_mode != "" && !Compact {
+			G_string_append_printf(headers, "/*!40101 SET Sql_mode='%s'*/;\n", Sql_mode)
 		}
-		if !o.Statement.SkipTz {
-			o.global.headers.WriteString("/*!40103 SET TIME_ZONE='+00:00' */;\n")
+		if !SkipTz {
+			G_string_append(headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
-	} else if o.global.detected_server == SERVER_TYPE_TIDB {
-		if !o.Statement.SkipTz {
-			o.global.headers.WriteString("/*!40103 SET TIME_ZONE='+00:00' */;\n")
+	} else if Detected_server == SERVER_TYPE_TIDB {
+		if !SkipTz {
+			G_string_printf(headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
 	} else {
-		o.global.headers.WriteString("SET FOREIGN_KEY_CHECKS=0;\n")
-		if o.global.sql_mode != "" && !o.Extra.Compact {
-			o.global.headers.WriteString(fmt.Sprintf("SET SQL_MODE='%s';\n", o.global.sql_mode))
+		G_string_printf(headers, "SET FOREIGN_KEY_CHECKS=0;\n")
+		if Sql_mode != "" && !Compact {
+			G_string_append_printf(headers, "SET sql_mode='%s';\n", Sql_mode)
 		}
 	}
 
 }
-func initialize_sql_statement(o *OptionEntries, statement *strings.Builder) {
-	statement.WriteString(o.global.headers.String())
+func initialize_sql_statement(statement *GString) {
+	G_string_printf(statement, headers.Str.String())
 }
 
-func set_tidb_snapshot(o *OptionEntries, conn *client.Conn) error {
-	var query string = fmt.Sprintf("SET SESSION tidb_snapshot = '%s'", o.Lock.TidbSnapshot)
-	_, err := conn.Execute(query)
-	if err != nil {
-		log.Errorf("Failed to set tidb_snapshot: %v.\nThis might be related to https://github.com/pingcap/tidb/issues/8887", err)
-		return err
+func set_tidb_snapshot(conn *DBConnection) error {
+	var query string = fmt.Sprintf("SET SESSION tidb_snapshot = '%s'", TidbSnapshot)
+	_ = conn.Execute(query)
+	if conn.Err != nil {
+		log.Errorf("Failed to set tidb_snapshot: %v.\nThis might be related to https://github.com/pingcap/tidb/issues/8887", conn.Err)
+		return conn.Err
 	}
 	return nil
 }

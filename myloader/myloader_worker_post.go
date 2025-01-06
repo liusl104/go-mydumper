@@ -2,34 +2,45 @@ package myloader
 
 import (
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"sync"
 )
 
-func (o *OptionEntries) initialize_post_loding_threads(conf *configuration) {
+var (
+	sync_mutex              *sync.Mutex
+	sync_mutex1             *sync.Mutex
+	sync_mutex2             *sync.Mutex
+	sync_threads_remaining  int64
+	sync_threads_remaining1 int64
+	sync_threads_remaining2 int64
+	post_td                 []*thread_data
+	post_threads            []*GThreadFunc
+)
+
+func initialize_post_loding_threads(conf *configuration) {
 	var n uint
-	o.global.init_connection_mutex = g_mutex_new()
-	// o.global.post_threads = make([]*sync.WaitGroup, o.Threads.MaxThreadsForPostCreation)
-	o.global.post_td = make([]*thread_data, o.MaxThreadsForPostCreation)
-	o.global.sync_threads_remaining = int64(o.MaxThreadsForPostCreation)
-	o.global.sync_threads_remaining1 = int64(o.MaxThreadsForPostCreation)
-	o.global.sync_threads_remaining2 = int64(o.MaxThreadsForPostCreation)
-	o.global.sync_mutex = g_mutex_new()
-	o.global.sync_mutex1 = g_mutex_new()
-	o.global.sync_mutex2 = g_mutex_new()
-	o.global.sync_mutex.Lock()
-	o.global.sync_mutex1.Lock()
-	o.global.sync_mutex2.Lock()
-	o.global.post_threads = make([]*GThreadFunc, 0)
-	for n = 0; n < o.MaxThreadsForPostCreation; n++ {
-		o.global.post_threads[n] = g_thread_new("myloader_post", new(sync.WaitGroup), n)
-		o.global.post_td[n] = new(thread_data)
-		initialize_thread_data(o.global.post_td[n], conf, WAITING, n+1+o.NumThreads+o.MaxThreadsForSchemaCreation+o.MaxThreadsForIndexCreation, nil)
-		go o.worker_post_thread(o.global.post_td[n], n)
+	// post_threads = make([]*sync.WaitGroup, Threads.MaxThreadsForPostCreation)
+	post_td = make([]*thread_data, MaxThreadsForPostCreation)
+	sync_threads_remaining = int64(MaxThreadsForPostCreation)
+	sync_threads_remaining1 = int64(MaxThreadsForPostCreation)
+	sync_threads_remaining2 = int64(MaxThreadsForPostCreation)
+	sync_mutex = G_mutex_new()
+	sync_mutex1 = G_mutex_new()
+	sync_mutex2 = G_mutex_new()
+	sync_mutex.Lock()
+	sync_mutex1.Lock()
+	sync_mutex2.Lock()
+	post_threads = make([]*GThreadFunc, 0)
+	for n = 0; n < MaxThreadsForPostCreation; n++ {
+		post_threads[n] = G_thread_new("myloader_post", new(sync.WaitGroup), n)
+		post_td[n] = new(thread_data)
+		initialize_thread_data(post_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation+MaxThreadsForIndexCreation, nil)
+		go worker_post_thread(post_td[n], n)
 	}
 }
 
 func sync_threads(counter *int64, mutex *sync.Mutex) {
-	if g_atomic_int_dec_and_test(counter) {
+	if G_atomic_int_dec_and_test(counter) {
 		mutex.Unlock()
 	} else {
 		mutex.Lock()
@@ -37,53 +48,53 @@ func sync_threads(counter *int64, mutex *sync.Mutex) {
 	}
 }
 
-func (o *OptionEntries) worker_post_thread(td *thread_data, thread_id uint) {
-	defer o.global.post_threads[thread_id].thread.Done()
+func worker_post_thread(td *thread_data, thread_id uint) {
+	defer post_threads[thread_id].Thread.Done()
 	var conf *configuration = td.conf
 
-	g_async_queue_push(conf.ready, 1)
+	G_async_queue_push(conf.ready, 1)
 	var cont bool = true
 	var job *control_job
 
 	log.Infof("Thread %d: Starting post import task over table", td.thread_id)
 	cont = true
 	for cont {
-		job = g_async_queue_pop(conf.post_table_queue).(*control_job)
-		cont = o.process_job(td, job, nil)
+		job = G_async_queue_pop(conf.post_table_queue).(*control_job)
+		cont = process_job(td, job, nil)
 	}
 
 	cont = true
 	for cont {
-		job = g_async_queue_pop(conf.post_queue).(*control_job)
-		cont = o.process_job(td, job, nil)
+		job = G_async_queue_pop(conf.post_queue).(*control_job)
+		cont = process_job(td, job, nil)
 	}
-	sync_threads(&o.global.sync_threads_remaining2, o.global.sync_mutex2)
+	sync_threads(&sync_threads_remaining2, sync_mutex2)
 	cont = true
 	for cont {
-		job = g_async_queue_pop(conf.view_queue).(*control_job)
-		cont = o.process_job(td, job, nil)
+		job = G_async_queue_pop(conf.view_queue).(*control_job)
+		cont = process_job(td, job, nil)
 	}
 
 	log.Tracef("Thread %d: ending", td.thread_id)
 }
 
-func (o *OptionEntries) create_post_shutdown_job(conf *configuration) {
+func create_post_shutdown_job(conf *configuration) {
 	var n uint
-	for n = 0; n < o.MaxThreadsForPostCreation; n++ {
-		g_async_queue_push(conf.post_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
-		g_async_queue_push(conf.post_table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
-		g_async_queue_push(conf.view_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+	for n = 0; n < MaxThreadsForPostCreation; n++ {
+		G_async_queue_push(conf.post_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		G_async_queue_push(conf.post_table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		G_async_queue_push(conf.view_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 	}
 }
 
-func (o *OptionEntries) wait_post_worker_to_finish() {
+func wait_post_worker_to_finish() {
 	var n uint
-	for n = 0; n < o.MaxThreadsForPostCreation; n++ {
-		o.global.post_threads[n].thread.Wait()
+	for n = 0; n < MaxThreadsForPostCreation; n++ {
+		post_threads[n].Thread.Wait()
 	}
 }
 
-func (o *OptionEntries) free_post_worker_threads() {
-	o.global.post_td = nil
-	o.global.post_threads = nil
+func free_post_worker_threads() {
+	post_td = nil
+	post_threads = nil
 }

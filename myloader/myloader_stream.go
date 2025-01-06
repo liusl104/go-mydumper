@@ -1,15 +1,20 @@
 package myloader
 
 import (
+	. "go-mydumper/src"
 	"sync"
 )
 
-func initialize_stream(o *OptionEntries, c *configuration) {
-	o.global.stream_thread = new(sync.WaitGroup)
-	go process_stream(o, c)
+var (
+	stream_thread *GThreadFunc
+)
+
+func initialize_stream(c *configuration) {
+	stream_thread = G_thread_new("myloader_stream", new(sync.WaitGroup), 0)
+	go process_stream(c)
 }
-func wait_stream_to_finish(o *OptionEntries) {
-	o.global.stream_thread.Wait()
+func wait_stream_to_finish() {
+	stream_thread.Thread.Wait()
 }
 
 func read_stream_line() {
@@ -27,7 +32,7 @@ func flush() {
 		strings.HasPrefix(line, "metadata")
 }*/
 
-func process_stream(o *OptionEntries, stream_conf *configuration) {
-	o.global.stream_thread.Add(1)
-	defer o.global.stream_thread.Done()
+func process_stream(stream_conf *configuration) {
+	stream_thread.Thread.Add(1)
+	defer stream_thread.Thread.Done()
 }

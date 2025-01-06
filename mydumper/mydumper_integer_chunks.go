@@ -2,9 +2,9 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"math"
 	"sync/atomic"
 	"time"
@@ -16,7 +16,7 @@ func gint64_abs(a int64) uint64 {
 	}
 	return uint64(-a)
 }
-func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool, types *int_types, is_step_fixed_length bool,
+func initialize_integer_step(cs *chunk_step, is_unsigned bool, types *int_types, is_step_fixed_length bool,
 	step uint64, min_css uint64, max_css uint64, check_min bool, check_max bool) {
 	cs.integer_step.is_unsigned = is_unsigned
 	cs.integer_step.min_chunk_step_size = min_css
@@ -28,7 +28,7 @@ func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool,
 		if step != 0 {
 			cs.integer_step.step = step
 		} else {
-			cs.integer_step.step = (cs.integer_step.types.unsign.max - cs.integer_step.types.unsign.min) / uint64(o.Common.NumThreads)
+			cs.integer_step.step = (cs.integer_step.types.unsign.max - cs.integer_step.types.unsign.min) / uint64(NumThreads)
 		}
 		if cs.integer_step.step > 0 {
 			cs.integer_step.estimated_remaining_steps = (cs.integer_step.types.unsign.max - cs.integer_step.types.unsign.min) / cs.integer_step.step
@@ -42,7 +42,7 @@ func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool,
 		if step != 0 {
 			cs.integer_step.step = step
 		} else {
-			cs.integer_step.step = gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min)/uint64(o.Common.NumThreads) + 1
+			cs.integer_step.step = gint64_abs(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min)/uint64(NumThreads) + 1
 		}
 		if cs.integer_step.step > 0 {
 			cs.integer_step.estimated_remaining_steps = uint64(cs.integer_step.types.sign.max-cs.integer_step.types.sign.min) / cs.integer_step.step
@@ -55,20 +55,20 @@ func initialize_integer_step(o *OptionEntries, cs *chunk_step, is_unsigned bool,
 	cs.integer_step.check_min = check_min
 }
 
-func new_integer_step(o *OptionEntries, is_unsigned bool, types *int_types, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64, check_min bool, check_max bool) *chunk_step {
+func new_integer_step(is_unsigned bool, types *int_types, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64, check_min bool, check_max bool) *chunk_step {
 	var cs = new(chunk_step)
 	cs.integer_step = new(integer_step)
 	cs.integer_step.types = new(int_types)
 	cs.integer_step.types.unsign = new(unsigned_int)
 	cs.integer_step.types.sign = new(signed_int)
-	initialize_integer_step(o, cs, is_unsigned, types, is_step_fixed_length, step, min_css, max_css, check_min, check_max)
+	initialize_integer_step(cs, is_unsigned, types, is_step_fixed_length, step, min_css, max_css, check_min, check_max)
 	return cs
 }
 
-func initialize_integer_step_item(o *OptionEntries, csi *chunk_step_item, include_null bool, prefix string, field string, is_unsigned bool,
+func initialize_integer_step_item(csi *chunk_step_item, include_null bool, prefix string, field string, is_unsigned bool,
 	types *int_types, deep uint, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64,
 	number uint64, check_min bool, check_max bool, next *chunk_step_item, position uint) {
-	csi.chunk_step = new_integer_step(o, is_unsigned, types, is_step_fixed_length, step, min_css, max_css, check_min, check_max)
+	csi.chunk_step = new_integer_step(is_unsigned, types, is_step_fixed_length, step, min_css, max_css, check_min, check_max)
 	csi.chunk_type = INTEGER
 	csi.position = position
 	csi.next = next
@@ -82,17 +82,17 @@ func initialize_integer_step_item(o *OptionEntries, csi *chunk_step_item, includ
 	csi.include_null = include_null
 	csi.prefix = prefix
 	csi.field = field
-	csi.mutex = g_mutex_new()
+	csi.mutex = G_mutex_new()
 	csi.number = number
 	csi.deep = deep
 	csi.needs_refresh = false
 }
 
-func new_integer_step_item(o *OptionEntries, include_null bool, prefix string, field string, is_unsigned bool,
+func new_integer_step_item(include_null bool, prefix string, field string, is_unsigned bool,
 	types *int_types, deep uint, is_step_fixed_length bool, step uint64, min_css uint64, max_css uint64,
 	number uint64, check_min bool, check_max bool, next *chunk_step_item, position uint) *chunk_step_item {
 	var csi = new(chunk_step_item)
-	initialize_integer_step_item(o, csi, include_null, prefix, field, is_unsigned, types, deep, is_step_fixed_length,
+	initialize_integer_step_item(csi, include_null, prefix, field, is_unsigned, types, deep, is_step_fixed_length,
 		step, min_css, max_css, number, check_min, check_max, next, position)
 	return csi
 }
@@ -108,7 +108,7 @@ func free_integer_step_item(csi *chunk_step_item) {
 	}
 }
 
-func split_chunk_step(o *OptionEntries, csi *chunk_step_item) *chunk_step_item {
+func split_chunk_step(csi *chunk_step_item) *chunk_step_item {
 	var new_csi *chunk_step_item
 	var number uint = uint(csi.number)
 	var new_minmax_signed int64 = 0
@@ -174,7 +174,7 @@ func split_chunk_step(o *OptionEntries, csi *chunk_step_item) *chunk_step_item {
 		}
 	}
 
-	new_csi = new_integer_step_item(o, false, "", csi.field, csi.chunk_step.integer_step.is_unsigned,
+	new_csi = new_integer_step_item(false, "", csi.field, csi.chunk_step.integer_step.is_unsigned,
 		types, csi.deep+1, csi.chunk_step.integer_step.is_step_fixed_length, csi.chunk_step.integer_step.step,
 		csi.chunk_step.integer_step.min_chunk_step_size, csi.chunk_step.integer_step.max_chunk_step_size,
 		uint64(number), true, csi.chunk_step.integer_step.check_max, nil, csi.position)
@@ -205,15 +205,15 @@ func is_splitable(csi *chunk_step_item) bool {
 		(csi.chunk_step.integer_step.is_step_fixed_length && ((csi.chunk_step.integer_step.is_unsigned && csi.chunk_step.integer_step.types.unsign.max/csi.chunk_step.integer_step.step > csi.chunk_step.integer_step.types.unsign.min/csi.chunk_step.integer_step.step+1) || (!csi.chunk_step.integer_step.is_unsigned && csi.chunk_step.integer_step.types.sign.max/int64(csi.chunk_step.integer_step.step) > csi.chunk_step.integer_step.types.sign.min/int64(csi.chunk_step.integer_step.step)+1)))
 }
 
-func clone_chunk_step_item(o *OptionEntries, csi *chunk_step_item) *chunk_step_item {
-	return new_integer_step_item(o, csi.include_null, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, csi.deep, csi.chunk_step.integer_step.is_step_fixed_length, csi.chunk_step.integer_step.step, csi.chunk_step.integer_step.min_chunk_step_size, csi.chunk_step.integer_step.max_chunk_step_size, csi.number, csi.chunk_step.integer_step.check_min, csi.chunk_step.integer_step.check_max, nil, csi.position)
+func clone_chunk_step_item(csi *chunk_step_item) *chunk_step_item {
+	return new_integer_step_item(csi.include_null, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, csi.deep, csi.chunk_step.integer_step.is_step_fixed_length, csi.chunk_step.integer_step.step, csi.chunk_step.integer_step.min_chunk_step_size, csi.chunk_step.integer_step.max_chunk_step_size, csi.number, csi.chunk_step.integer_step.check_min, csi.chunk_step.integer_step.check_max, nil, csi.position)
 }
 
-func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
+func get_next_integer_chunk(dbt *DB_Table) *chunk_step_item {
 	var csi, new_csi *chunk_step_item
 	var task any
 	if dbt.chunks != nil {
-		task = dbt.chunks_queue.try_pop()
+		task = G_async_queue_try_pop(dbt.chunks_queue)
 		if task != nil {
 			csi = task.(*chunk_step_item)
 		}
@@ -221,17 +221,17 @@ func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 			csi.mutex.Lock()
 			if csi.status == UNASSIGNED {
 				csi.status = ASSIGNED
-				dbt.chunks_queue.push(csi)
+				G_async_queue_push(dbt.chunks_queue, csi)
 				csi.mutex.Unlock()
 				return csi
 			}
 			if csi.status != COMPLETED {
 				if is_splitable(csi) {
-					new_csi = split_chunk_step(o, csi)
+					new_csi = split_chunk_step(csi)
 					if new_csi != nil {
 						dbt.chunks.PushBack(new_csi)
-						dbt.chunks_queue.push(csi)
-						dbt.chunks_queue.push(new_csi)
+						G_async_queue_push(dbt.chunks_queue, csi)
+						G_async_queue_push(dbt.chunks_queue, new_csi)
 						csi.mutex.Unlock()
 						return new_csi
 					}
@@ -240,17 +240,17 @@ func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 						csi.next.mutex.Lock()
 						if csi.next.status != COMPLETED && has_only_one_level(csi) && is_splitable(csi.next) {
 							csi.deep = csi.deep + 1
-							new_csi = clone_chunk_step_item(o, csi)
+							new_csi = clone_chunk_step_item(csi)
 							if csi.chunk_step.integer_step.is_step_fixed_length {
 								new_csi.number += uint64(math.Pow(2, float64(csi.deep)))
 							}
-							update_where_on_integer_step(o, new_csi)
-							new_csi.next = split_chunk_step(o, csi.next)
+							update_where_on_integer_step(new_csi)
+							new_csi.next = split_chunk_step(csi.next)
 							if new_csi.next != nil {
 								new_csi.next.prefix = new_csi.where
 								dbt.chunks.PushBack(new_csi)
-								dbt.chunks_queue.push(csi)
-								dbt.chunks_queue.push(new_csi)
+								G_async_queue_push(dbt.chunks_queue, csi)
+								G_async_queue_push(dbt.chunks_queue, new_csi)
 								csi.next.mutex.Unlock()
 								csi.mutex.Unlock()
 								return new_csi
@@ -267,20 +267,20 @@ func get_next_integer_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 				free_integer_step_item(csi)
 			}
 			dbt.chunks_mutex.Unlock()
-			csi = dbt.chunks_queue.try_pop().(*chunk_step_item)
+			csi = G_async_queue_try_pop(dbt.chunks_queue).(*chunk_step_item)
 		}
 	}
 	return nil
 }
 
-func refresh_integer_min_max(o *OptionEntries, conn *client.Conn, dbt *db_table, csi *chunk_step_item) {
+func refresh_integer_min_max(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
 	var ics *integer_step = csi.chunk_step.integer_step
 	var query string
 	var cache string
 	var row []mysql.FieldValue
 	var minmax *mysql.Result
-	var err error
-	if o.is_mysql_like() {
+
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var where_prefix string
@@ -290,14 +290,14 @@ func refresh_integer_min_max(o *OptionEntries, conn *client.Conn, dbt *db_table,
 		prefix = csi.prefix
 	}
 	query = fmt.Sprintf("SELECT %s MIN(%s%s%s),MAX(%s%s%s) FROM %s%s%s.%s%s%s%s%s", cache,
-		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, csi.field,
-		o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, dbt.table,
-		o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, csi.field, Identifier_quote_character_str, Identifier_quote_character_str, csi.field,
+		Identifier_quote_character_str,
+		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table,
+		Identifier_quote_character_str,
 		where_prefix, prefix)
 	log.Debugf("query sql: %s", query)
-	minmax, err = conn.Execute(query)
-	if err != nil {
+	minmax = conn.Execute(query)
+	if conn.Err != nil {
 		return
 	}
 	for _, row = range minmax.Values {
@@ -318,27 +318,26 @@ func refresh_integer_min_max(o *OptionEntries, conn *client.Conn, dbt *db_table,
 
 }
 
-func update_integer_min(o *OptionEntries, conn *client.Conn, dbt *db_table, csi *chunk_step_item) {
+func update_integer_min(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
 	var ics = csi.chunk_step.integer_step
 	var query string
 	var minmax *mysql.Result
 	var cache string
-	var err error
-	if o.is_mysql_like() {
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var where string = ""
-	update_integer_where_on_gstring(o, &where, false, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
+	update_integer_where_on_gstring(&where, false, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
 	query = fmt.Sprintf("SELECT %s %s%s%s FROM %s%s%s.%s%s%s WHERE %s ORDER BY %s%s%s ASC LIMIT 1",
 		cache,
-		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, dbt.table, o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, csi.field, Identifier_quote_character_str,
+		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
+		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
 		where,
-		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str)
+		Identifier_quote_character_str, csi.field, Identifier_quote_character_str)
 
-	minmax, err = conn.Execute(query)
-	if err != nil {
+	minmax = conn.Execute(query)
+	if conn.Err != nil {
 		return
 	}
 	if len(minmax.Values) == 0 {
@@ -360,26 +359,25 @@ func update_integer_min(o *OptionEntries, conn *client.Conn, dbt *db_table, csi 
 
 }
 
-func update_integer_max(o *OptionEntries, conn *client.Conn, dbt *db_table, csi *chunk_step_item) {
+func update_integer_max(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
 	var ics *integer_step = csi.chunk_step.integer_step
 	var query, cache string
 	var minmax *mysql.Result
 	var row []mysql.FieldValue
-	var err error
-	if o.is_mysql_like() {
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var where string = ""
-	update_integer_where_on_gstring(o, &where, false, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
+	update_integer_where_on_gstring(&where, false, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
 	query = fmt.Sprintf("SELECT %s %s%s%s FROM %s%s%s.%s%s%s WHERE %s ORDER BY %s%s%s DESC LIMIT 1",
 		cache,
-		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str,
-		o.global.identifier_quote_character_str, dbt.database.name, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, dbt.table,
-		o.global.identifier_quote_character_str,
+		Identifier_quote_character_str, csi.field, Identifier_quote_character_str,
+		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table,
+		Identifier_quote_character_str,
 		where,
-		o.global.identifier_quote_character_str, csi.field, o.global.identifier_quote_character_str)
-	minmax, err = conn.Execute(query)
-	if err != nil {
+		Identifier_quote_character_str, csi.field, Identifier_quote_character_str)
+	minmax = conn.Execute(query)
+	if conn.Err != nil {
 		return
 	}
 	if len(minmax.Values) == 0 {
@@ -402,11 +400,11 @@ func update_integer_max(o *OptionEntries, conn *client.Conn, dbt *db_table, csi 
 	return
 }
 
-func process_integer_chunk_step(o *OptionEntries, tj *table_job, csi *chunk_step_item) bool {
+func process_integer_chunk_step(tj *table_job, csi *chunk_step_item) bool {
 	var td *thread_data = tj.td
 	var cs *chunk_step = csi.chunk_step
 	check_pause_resume(td)
-	if o.global.shutdown_triggered {
+	if shutdown_triggered {
 		return true
 	}
 	csi.mutex.Lock()
@@ -442,21 +440,21 @@ func process_integer_chunk_step(o *OptionEntries, tj *table_job, csi *chunk_step
 	}
 	csi.mutex.Unlock()
 	update_estimated_remaining_chunks_on_dbt(tj.dbt)
-	update_where_on_integer_step(o, csi)
+	update_where_on_integer_step(csi)
 	if csi.next != nil {
 		if csi.next.needs_refresh {
-			refresh_integer_min_max(o, td.thrconn, tj.dbt, csi.next)
+			refresh_integer_min_max(td.thrconn, tj.dbt, csi.next)
 		}
-		csi.next.chunk_functions.process(o, tj, csi.next)
+		csi.next.chunk_functions.process(tj, csi.next)
 		csi.next.needs_refresh = true
 	} else {
 		tj.where = ""
 		tj.where += csi.where
 		if cs.integer_step.is_step_fixed_length {
-			write_table_job_into_file(o, tj)
+			write_table_job_into_file(tj)
 		} else {
 			var from = time.Now()
-			write_table_job_into_file(o, tj)
+			write_table_job_into_file(tj)
 			var to = time.Now()
 			var diff = to.Sub(from).Seconds()
 			if diff > 2 {
@@ -480,17 +478,17 @@ func process_integer_chunk_step(o *OptionEntries, tj *table_job, csi *chunk_step
 	return false
 }
 
-func process_integer_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
+func process_integer_chunk(tj *table_job, csi *chunk_step_item) {
 	var td = tj.td
 	var dbt = tj.dbt
 	var cs *chunk_step = csi.chunk_step
 	var multicolumn_process bool
 	if csi.next == nil && dbt.multicolumn && uint(len(dbt.primary_key))-1 > csi.position {
 		csi.where = ""
-		update_integer_where_on_gstring(o, &csi.where, csi.include_null, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
-		var rows uint64 = get_rows_from_explain(o, td.thrconn, tj.dbt, csi.where, csi.field)
+		update_integer_where_on_gstring(&csi.where, csi.include_null, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, false)
+		var rows uint64 = get_rows_from_explain(td.thrconn, tj.dbt, csi.where, csi.field)
 		if rows > csi.chunk_step.integer_step.min_chunk_step_size {
-			var next_csi *chunk_step_item = initialize_chunk_step_item(o, td.thrconn, dbt, csi.position+1, csi.where, rows)
+			var next_csi *chunk_step_item = initialize_chunk_step_item(td.thrconn, dbt, csi.position+1, csi.where, rows)
 			if next_csi != nil {
 				if next_csi.chunk_type != NONE {
 					csi.next = next_csi
@@ -500,7 +498,7 @@ func process_integer_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item
 		}
 	}
 	tj.where = ""
-	if process_integer_chunk_step(o, tj, csi) {
+	if process_integer_chunk_step(tj, csi) {
 		log.Infof("Thread %d: Job has been cacelled", td.thread_id)
 		return
 	}
@@ -510,7 +508,7 @@ func process_integer_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item
 	for (cs.integer_step.is_unsigned && cs.integer_step.types.unsign.min <= cs.integer_step.types.unsign.max) || (!cs.integer_step.is_unsigned && cs.integer_step.types.sign.min <= cs.integer_step.types.sign.max) {
 		csi.mutex.Lock()
 		tj.where = ""
-		if process_integer_chunk_step(o, tj, csi) {
+		if process_integer_chunk_step(tj, csi) {
 			log.Infof("Thread %d: Job has been cacelled", td.thread_id)
 			return
 		}
@@ -530,7 +528,7 @@ func process_integer_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item
 	}
 }
 
-func update_integer_where_on_gstring(o *OptionEntries, where *string, include_null bool, prefix string, field string, is_unsigned bool, types *int_types, use_cursor bool) {
+func update_integer_where_on_gstring(where *string, include_null bool, prefix string, field string, is_unsigned bool, types *int_types, use_cursor bool) {
 	var t *int_types = new(int_types)
 	t.sign = new(signed_int)
 	t.unsign = new(unsigned_int)
@@ -538,7 +536,7 @@ func update_integer_where_on_gstring(o *OptionEntries, where *string, include_nu
 		*where += fmt.Sprintf("(%s AND ", prefix)
 	}
 	if include_null {
-		*where += fmt.Sprintf("(%s%s%s IS NULL OR", o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str)
+		*where += fmt.Sprintf("(%s%s%s IS NULL OR", Identifier_quote_character_str, field, Identifier_quote_character_str)
 	}
 	*where += "("
 	if is_unsigned {
@@ -549,10 +547,10 @@ func update_integer_where_on_gstring(o *OptionEntries, where *string, include_nu
 			t.unsign.cursor = types.unsign.cursor
 		}
 		if t.unsign.min == t.unsign.cursor {
-			*where += fmt.Sprintf("%s%s%s = %d", o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str, t.unsign.cursor)
+			*where += fmt.Sprintf("%s%s%s = %d", Identifier_quote_character_str, field, Identifier_quote_character_str, t.unsign.cursor)
 		} else {
 			*where += fmt.Sprintf("%d <= %s%s%s AND %s%s%s <= %d", t.unsign.min,
-				o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str,
+				Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 				t.unsign.cursor)
 		}
 	} else {
@@ -563,11 +561,11 @@ func update_integer_where_on_gstring(o *OptionEntries, where *string, include_nu
 			t.sign.cursor = types.sign.cursor
 		}
 		if t.sign.min == t.sign.cursor {
-			*where += fmt.Sprintf("%s%s%s = %d", o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str, t.sign.cursor)
+			*where += fmt.Sprintf("%s%s%s = %d", Identifier_quote_character_str, field, Identifier_quote_character_str, t.sign.cursor)
 		} else {
 			*where += fmt.Sprintf("%d <= %s%s%s AND %s%s%s <= %d",
 				t.sign.min,
-				o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str, o.global.identifier_quote_character_str, field, o.global.identifier_quote_character_str,
+				Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 				t.sign.cursor)
 		}
 	}
@@ -580,8 +578,8 @@ func update_integer_where_on_gstring(o *OptionEntries, where *string, include_nu
 	}
 }
 
-func update_where_on_integer_step(o *OptionEntries, csi *chunk_step_item) {
+func update_where_on_integer_step(csi *chunk_step_item) {
 	var chunk_step *integer_step = csi.chunk_step.integer_step
 	csi.where = ""
-	update_integer_where_on_gstring(o, &csi.where, csi.include_null, csi.prefix, csi.field, chunk_step.is_unsigned, chunk_step.types, true)
+	update_integer_where_on_gstring(&csi.where, csi.include_null, csi.prefix, csi.field, chunk_step.is_unsigned, chunk_step.types, true)
 }

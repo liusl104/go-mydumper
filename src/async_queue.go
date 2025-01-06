@@ -1,29 +1,29 @@
-package myloader
+package mydumper
 
 import (
 	"sync/atomic"
 	"time"
 )
 
-type asyncQueue struct {
+type GAsyncQueue struct {
 	queue  chan any
 	length int64
 	state  uint
 }
 
-func (a *asyncQueue) pop() any {
+func (a *GAsyncQueue) pop() any {
 	atomic.AddInt64(&a.length, -1)
 	task := <-a.queue
 	return task
 }
 
-func (a *asyncQueue) push(task any) {
+func (a *GAsyncQueue) push(task any) {
 	a.queue <- task
 	atomic.AddInt64(&a.length, 1)
 	return
 }
 
-func (a *asyncQueue) try_pop() any {
+func (a *GAsyncQueue) try_pop() any {
 	if a.length <= 0 {
 		return nil
 	}
@@ -31,7 +31,10 @@ func (a *asyncQueue) try_pop() any {
 	task := <-a.queue
 	return task
 }
-func (a *asyncQueue) timeout_pop(timeout uint64) any {
+func G_async_queue_timeout_pop(a *GAsyncQueue, timeout uint64) any {
+	return a.timeout_pop(timeout)
+}
+func (a *GAsyncQueue) timeout_pop(timeout uint64) any {
 	for {
 		select {
 		case task := <-a.queue:
@@ -43,17 +46,11 @@ func (a *asyncQueue) timeout_pop(timeout uint64) any {
 	}
 
 }
-func g_async_queue_unref(a *asyncQueue) {
-	for {
-		if a.length > 0 {
-			a.pop()
-		} else {
-			break
-		}
-
-	}
+func G_async_queue_unref(a *GAsyncQueue) {
+	a.unref()
 }
-func (a *asyncQueue) unref() {
+
+func (a *GAsyncQueue) unref() {
 	for {
 		if a.length > 0 {
 			a.pop()
@@ -64,20 +61,20 @@ func (a *asyncQueue) unref() {
 	}
 
 }
-func g_async_queue_new(buffer uint) *asyncQueue {
-	return &asyncQueue{
+func G_async_queue_new(buffer uint) *GAsyncQueue {
+	return &GAsyncQueue{
 		queue:  make(chan any, buffer),
 		length: 0,
 		state:  0,
 	}
 }
 
-func g_async_queue_push(a *asyncQueue, task any) {
+func G_async_queue_push(a *GAsyncQueue, task any) {
 	a.queue <- task
 	atomic.AddInt64(&a.length, 1)
 	return
 }
-func g_async_queue_try_pop(a *asyncQueue) any {
+func G_async_queue_try_pop(a *GAsyncQueue) any {
 	if a.length <= 0 {
 		return nil
 	}
@@ -86,12 +83,12 @@ func g_async_queue_try_pop(a *asyncQueue) any {
 	return task
 }
 
-func g_async_queue_pop(a *asyncQueue) any {
+func G_async_queue_pop(a *GAsyncQueue) any {
 	atomic.AddInt64(&a.length, -1)
 	task := <-a.queue
 	return task
 }
 
-func g_async_queue_length(a *asyncQueue) int64 {
+func G_async_queue_length(a *GAsyncQueue) int64 {
 	return a.length
 }

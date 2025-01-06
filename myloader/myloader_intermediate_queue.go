@@ -2,6 +2,7 @@ package myloader
 
 import (
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,126 +13,138 @@ type intermediate_filename struct {
 	iterations uint
 }
 
-func (o *OptionEntries) initialize_intermediate_queue(c *configuration) {
-	o.global.intermediate_conf = c
-	o.global.intermediate_queue = g_async_queue_new(o.BufferSize)
-	o.global.exec_process_id = make(map[string]string)
-	o.global.exec_process_id_mutex = g_mutex_new()
-	o.global.start_intermediate_thread = g_mutex_new()
-	o.global.start_intermediate_thread.Lock()
-	if o.Stream {
-		o.global.start_intermediate_thread.Unlock()
+var (
+	intermediate_queue         *GAsyncQueue
+	exec_process_id            map[string]string
+	start_intermediate_thread  *sync.Mutex
+	exec_process_id_mutex      *sync.Mutex
+	intermediate_queue_ended   bool
+	stream_intermediate_thread *sync.WaitGroup
+	exec_per_thread_cmd        []string
+	intermediate_conf          *configuration
+	schema_counter             uint64
+)
+
+func initialize_intermediate_queue(c *configuration) {
+	intermediate_conf = c
+	intermediate_queue = G_async_queue_new(BufferSize)
+	exec_process_id = make(map[string]string)
+	exec_process_id_mutex = G_mutex_new()
+	start_intermediate_thread = G_mutex_new()
+	start_intermediate_thread.Lock()
+	if Stream != "" {
+		start_intermediate_thread.Unlock()
 	}
-	o.global.intermediate_queue_ended = false
-	o.global.stream_intermediate_thread = new(sync.WaitGroup)
-	go o.intermediate_thread()
-	if o.ExecPerThreadExtension != "" {
+	intermediate_queue_ended = false
+	stream_intermediate_thread = new(sync.WaitGroup)
+	go intermediate_thread()
+	if ExecPerThreadExtension != "" {
 		// TODO this is ignore
-		if o.ExecPerThread == "" {
+		if ExecPerThread == "" {
 			log.Errorf("--exec-per-thread needs to be set when --exec-per-thread-extension is used")
 		}
 	}
-	if o.ExecPerThread != "" {
-		if o.ExecPerThread[0] != '/' {
+	if ExecPerThread != "" {
+		if ExecPerThread[0] != '/' {
 			log.Errorf("Absolute path is only allowed when --exec-per-thread is used")
 		}
-		o.global.exec_per_thread_cmd = strings.Split(o.ExecPerThread, " ")
+		exec_per_thread_cmd = strings.Split(ExecPerThread, " ")
 	}
-	o.initialize_control_job(c)
+	initialize_control_job(c)
 }
 
-func (o *OptionEntries) intermediate_queue_new(filename string) {
+func intermediate_queue_new(filename string) {
 	var iflnm = new(intermediate_filename)
 	iflnm.filename = filename
 	iflnm.iterations = 0
 	log.Debugf("intermediate_queue <- %s (%d)", iflnm.filename, iflnm.iterations)
-	o.global.intermediate_queue.push(iflnm)
+	G_async_queue_push(intermediate_queue, iflnm)
 }
 
-func (o *OptionEntries) intermediate_queue_end() {
-	o.global.start_intermediate_thread.Unlock()
+func intermediate_queue_end() {
+	start_intermediate_thread.Unlock()
 	var e = "END"
-	o.intermediate_queue_new(e)
+	intermediate_queue_new(e)
 	log.Info("Intermediate queue: Sending END job")
-	o.global.stream_intermediate_thread.Wait()
+	stream_intermediate_thread.Wait()
 	log.Infof("Intermediate thread: SHUTDOWN")
-	o.global.intermediate_queue_ended = true
+	intermediate_queue_ended = true
 }
 
-func (o *OptionEntries) intermediate_queue_incomplete(iflnm *intermediate_filename) {
+func intermediate_queue_incomplete(iflnm *intermediate_filename) {
 	iflnm.iterations++
 	log.Debugf("intermediate_queue <- %s (%d) incomplete", iflnm.filename, iflnm.iterations)
-	o.global.intermediate_queue.push(iflnm)
+	G_async_queue_push(intermediate_queue, iflnm)
 }
 
-func (o *OptionEntries) process_filename(filename string) file_type {
-	var ft = o.get_file_type(filename)
+func process_filename(filename string) file_type {
+	var ft = get_file_type(filename)
 	switch ft {
 	case INIT:
 		break
 	case SCHEMA_TABLESPACE:
 		break
 	case SCHEMA_CREATE:
-		atomic.AddUint64(&o.global.schema_counter, 1)
-		o.process_database_filename(filename)
-		if o.DB != "" {
+		atomic.AddUint64(&schema_counter, 1)
+		process_database_filename(filename)
+		if DB != "" {
 			ft = DO_NOT_ENQUEUE
-			o.m_remove(o.global.directory, filename)
+			M_remove(directory, filename)
 		}
 		break
 	case SCHEMA_TABLE:
-		atomic.AddUint64(&o.global.schema_counter, 1)
-		if !o.process_table_filename(filename) {
+		atomic.AddUint64(&schema_counter, 1)
+		if !process_table_filename(filename) {
 			return DO_NOT_ENQUEUE
 		}
 		break
 	case SCHEMA_VIEW:
-		if !o.process_schema_view_filename(filename) {
+		if !process_schema_view_filename(filename) {
 			return DO_NOT_ENQUEUE
 		}
 		break
 	case SCHEMA_SEQUENCE:
-		if !o.process_schema_sequence_filename(filename) {
+		if !process_schema_sequence_filename(filename) {
 			return DO_NOT_ENQUEUE
 		}
 		break
 	case SCHEMA_TRIGGER:
-		if !o.SkipTriggers {
-			if !o.process_schema_filename(filename, TRIGGER) {
+		if !SkipTriggers {
+			if !process_schema_filename(filename, TRIGGER) {
 				return DO_NOT_ENQUEUE
 			}
 		}
 		break
 	case SCHEMA_POST:
 		// can be enqueued in any order
-		if !o.SkipPost {
-			if !o.process_schema_filename(filename, POST) {
+		if !SkipPost {
+			if !process_schema_filename(filename, POST) {
 				return DO_NOT_ENQUEUE
 			}
 		}
 		break
 	case CHECKSUM:
-		if !o.process_checksum_filename(filename) {
+		if !process_checksum_filename(filename) {
 			return DO_NOT_ENQUEUE
 		}
-		o.global.intermediate_conf.checksum_list = append(o.global.intermediate_conf.checksum_list, filename)
+		intermediate_conf.checksum_list = append(intermediate_conf.checksum_list, filename)
 		break
 	case METADATA_GLOBAL:
-		o.process_metadata_global(filename)
-		o.refresh_table_list(o.global.intermediate_conf)
+		process_metadata_global(filename)
+		refresh_table_list(intermediate_conf)
 		break
 	case DATA:
-		if !o.NoData {
-			if !o.process_data_filename(filename) {
+		if !NoData {
+			if !process_data_filename(filename) {
 				return DO_NOT_ENQUEUE
 			}
 		} else {
-			o.m_remove(o.global.directory, filename)
+			M_remove(directory, filename)
 		}
-		o.global.total_data_sql_files++
+		total_data_sql_files++
 		break
 	case RESUME:
-		if o.Stream {
+		if Stream != "" {
 			log.Fatalf("We don't expect to find resume files in a stream scenario")
 		}
 		break
@@ -139,7 +152,7 @@ func (o *OptionEntries) process_filename(filename string) file_type {
 		log.Warnf("Filename %s has been ignored", filename)
 		break
 	case LOAD_DATA:
-		o.release_load_data_as_it_is_close(filename)
+		release_load_data_as_it_is_close(filename)
 		break
 	case SHUTDOWN:
 		break
@@ -152,23 +165,23 @@ func (o *OptionEntries) process_filename(filename string) file_type {
 	return ft
 }
 
-func remove_fifo_file(o *OptionEntries, fifo_name string) {
-	o.global.exec_process_id_mutex.Lock()
-	filename, _ := o.global.exec_process_id[fifo_name]
-	o.global.exec_process_id_mutex.Unlock()
+func remove_fifo_file(fifo_name string) {
+	exec_process_id_mutex.Lock()
+	filename, _ := exec_process_id[fifo_name]
+	exec_process_id_mutex.Unlock()
 	if filename != "" {
-		o.m_remove(o.global.directory, filename)
+		M_remove(directory, filename)
 	}
 
 }
 
-func (o *OptionEntries) process_stream_filename(iflnm *intermediate_filename) {
-	var current_ft = o.process_filename(iflnm.filename)
+func process_stream_filename(iflnm *intermediate_filename) {
+	var current_ft = process_filename(iflnm.filename)
 	if current_ft == INCOMPLETE {
 		if iflnm.iterations > 5 {
 			log.Warnf("Max renqueing reached for: %s", iflnm.filename)
 		} else {
-			o.intermediate_queue_incomplete(iflnm)
+			intermediate_queue_incomplete(iflnm)
 		}
 		return
 	}
@@ -179,36 +192,36 @@ func (o *OptionEntries) process_stream_filename(iflnm *intermediate_filename) {
 		current_ft != CHECKSUM &&
 		current_ft != IGNORED &&
 		current_ft != DO_NOT_ENQUEUE {
-		o.refresh_db_and_jobs(current_ft)
+		refresh_db_and_jobs(current_ft)
 	}
 }
 
-func (o *OptionEntries) intermediate_thread() {
-	o.global.stream_intermediate_thread.Add(1)
-	defer o.global.stream_intermediate_thread.Done()
+func intermediate_thread() {
+	stream_intermediate_thread.Add(1)
+	defer stream_intermediate_thread.Done()
 	var iflnm *intermediate_filename
-	o.global.start_intermediate_thread.Lock()
+	start_intermediate_thread.Lock()
 	for {
-		iflnm = o.global.intermediate_queue.pop().(*intermediate_filename)
+		iflnm = G_async_queue_pop(intermediate_queue).(*intermediate_filename)
 		log.Debugf("intermediate_queue -> %s (%d)", iflnm.filename, iflnm.iterations)
 		if strings.Compare(iflnm.filename, "END") == 0 {
-			if o.global.intermediate_queue.length > 0 {
+			if G_async_queue_length(intermediate_queue) > 0 {
 				log.Debugf("intermediate_queue <- %s (%d)", iflnm.filename, iflnm.iterations)
-				o.global.intermediate_queue.push(iflnm)
+				G_async_queue_push(intermediate_queue, iflnm)
 				continue
 			}
 			iflnm = nil
 			break
 		}
-		o.process_stream_filename(iflnm)
+		process_stream_filename(iflnm)
 		if iflnm == nil {
 			break
 		}
 	}
 	var n uint
-	for n = 0; n < o.NumThreads; n++ {
+	for n = 0; n < NumThreads; n++ {
 	}
 	log.Infof("Intermediate thread ended")
-	o.refresh_db_and_jobs(INTERMEDIATE_ENDED)
+	refresh_db_and_jobs(INTERMEDIATE_ENDED)
 	return
 }

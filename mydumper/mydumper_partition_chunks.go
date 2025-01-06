@@ -2,24 +2,29 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
+	. "go-mydumper/src"
 	"math"
 )
 
-func process_partition_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
+var (
+	SplitPartitions bool
+	PartitionRegex  string
+)
+
+func process_partition_chunk(tj *table_job, csi *chunk_step_item) {
 	var cs = csi.chunk_step
 	var partition string
 	for _, data := range cs.partition_step.list {
-		if o.global.shutdown_triggered {
+		if shutdown_triggered {
 			return
 		}
 		csi.mutex.Lock()
 		partition = fmt.Sprintf(" PARTITION (%s) ", data)
 		csi.mutex.Unlock()
 		tj.partition = partition
-		write_table_job_into_file(o, tj)
+		write_table_job_into_file(tj)
 	}
 }
 
@@ -37,16 +42,15 @@ func new_real_partition_step_item(partition []string, deep uint, number uint) *c
 	csi.chunk_functions.process = process_partition_chunk
 	csi.chunk_functions.get_next = get_next_partition_chunk
 	csi.status = UNASSIGNED
-	csi.mutex = g_mutex_new()
+	csi.mutex = G_mutex_new()
 	csi.deep = deep
 	csi.number = uint64(number)
 	return csi
 }
 
-func get_next_partition_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
+func get_next_partition_chunk(dbt *DB_Table) *chunk_step_item {
 	var l = dbt.chunks
 	var csi *chunk_step_item
-	_ = o
 	for e := l.Front(); e != nil; e = e.Next() {
 		csi = e.Value.(*chunk_step_item)
 		csi.mutex.Lock()
@@ -70,17 +74,17 @@ func get_next_partition_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item 
 	return nil
 }
 
-func get_partitions_for_table(o *OptionEntries, conn *client.Conn, dbt *db_table) []string {
+func get_partitions_for_table(conn *DBConnection, dbt *DB_Table) []string {
 	var partition_list []string
 	var row []mysql.FieldValue
 	var query = fmt.Sprintf("select PARTITION_NAME from information_schema.PARTITIONS where PARTITION_NAME is not null and TABLE_SCHEMA='%s' and TABLE_NAME='%s'", dbt.database.name, dbt.table)
-	res, err := conn.Execute(query)
-	if err != nil {
-		log.Errorf("get partition name fail:%v", err)
+	res := conn.Execute(query)
+	if conn.Err != nil {
+		log.Errorf("get partition name fail:%v", conn.Err)
 		return partition_list
 	}
 	for _, row = range res.Values {
-		if (dbt.partition_regex == nil && eval_partition_regex(o, string(row[0].AsString()))) || (dbt.partition_regex != nil && eval_partition_regex(o, string(row[0].AsString()))) {
+		if (dbt.partition_regex == nil && Eval_partition_regex(string(row[0].AsString()))) || (dbt.partition_regex != nil && Eval_partition_regex(string(row[0].AsString()))) {
 			partition_list = append(partition_list, string(row[0].AsString()))
 		}
 	}

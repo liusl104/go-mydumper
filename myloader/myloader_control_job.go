@@ -2,6 +2,7 @@ package myloader
 
 import (
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"sync"
 	"sync/atomic"
 )
@@ -16,7 +17,7 @@ const (
 
 type control_job_data struct {
 	restore_job *restore_job
-	queue       *asyncQueue
+	queue       *GAsyncQueue
 }
 
 type control_job struct {
@@ -25,28 +26,37 @@ type control_job struct {
 	use_database *database
 }
 
-func (o *OptionEntries) cjt_resume() {
-	o.global.cjt_mutex.Lock()
-	o.global.cjt_paused = false
-	o.global.cjt_cond.Add(1)
-	o.global.cjt_mutex.Unlock()
+var (
+	cjt_mutex             *sync.Mutex
+	cjt_cond              *sync.WaitGroup
+	control_job_t         *sync.WaitGroup
+	cjt_paused            bool
+	all_jobs_are_enqueued bool
+	last_wait             int64
+)
+
+func cjt_resume() {
+	cjt_mutex.Lock()
+	cjt_paused = false
+	cjt_cond.Add(1)
+	cjt_mutex.Unlock()
 }
 
-func (o *OptionEntries) initialize_control_job(conf *configuration) {
-	o.global.refresh_db_queue = g_async_queue_new(o.BufferSize)
-	o.global.here_is_your_job = g_async_queue_new(o.BufferSize)
-	o.global.last_wait = int64(o.NumThreads)
-	o.global.data_queue = g_async_queue_new(o.BufferSize)
-	o.global.cjt_mutex = g_mutex_new()
-	o.global.cjt_cond = g_cond_new()
-	o.global.control_job_t = new(sync.WaitGroup)
-	go o.control_job_thread(conf)
+func initialize_control_job(conf *configuration) {
+	refresh_db_queue = G_async_queue_new(BufferSize)
+	here_is_your_job = G_async_queue_new(BufferSize)
+	last_wait = int64(NumThreads)
+	data_queue = G_async_queue_new(BufferSize)
+	cjt_mutex = G_mutex_new()
+	cjt_cond = new(sync.WaitGroup)
+	control_job_t = new(sync.WaitGroup)
+	go control_job_thread(conf)
 
 }
-func (o *OptionEntries) wait_control_job() {
-	o.global.control_job_t.Wait()
-	o.global.cjt_mutex = nil
-	o.global.cjt_cond = nil
+func wait_control_job() {
+	control_job_t.Wait()
+	cjt_mutex = nil
+	cjt_cond = nil
 }
 
 func new_control_job(job_type control_job_type, job_data any, use_database *database) *control_job {
@@ -55,7 +65,7 @@ func new_control_job(job_type control_job_type, job_data any, use_database *data
 	j.use_database = use_database
 	switch job_type {
 	case JOB_WAIT:
-		j.data.queue = job_data.(*asyncQueue)
+		j.data.queue = job_data.(*GAsyncQueue)
 	case JOB_SHUTDOWN:
 		break
 	default:
@@ -64,17 +74,17 @@ func new_control_job(job_type control_job_type, job_data any, use_database *data
 	return j
 }
 
-func (o *OptionEntries) process_job(td *thread_data, job *control_job, retry *bool) bool {
+func process_job(td *thread_data, job *control_job, retry *bool) bool {
 	switch job.job_type {
 	case JOB_RESTORE:
-		var res bool = o.process_restore_job(td, job.data.restore_job)
+		var res bool = process_restore_job(td, job.data.restore_job)
 		if *retry {
 			*retry = res
 		}
 		return true
 	case JOB_WAIT:
-		g_async_queue_push(td.conf.ready, 1)
-		g_async_queue_pop(job.data.queue)
+		G_async_queue_push(td.conf.ready, 1)
+		G_async_queue_pop(job.data.queue)
 		break
 	case JOB_SHUTDOWN:
 		return false
@@ -92,7 +102,7 @@ func schema_file_missed_lets_continue(td *thread_data) {
 		dbt.mutex.Lock()
 		dbt.schema_state = CREATED
 		for i = 0; i < dbt.restore_job_list.Len(); i++ {
-			g_async_queue_push(td.conf.stream_queue, dbt)
+			G_async_queue_push(td.conf.stream_queue, dbt)
 		}
 		dbt.mutex.Unlock()
 	}
@@ -100,9 +110,9 @@ func schema_file_missed_lets_continue(td *thread_data) {
 }
 
 func are_we_waiting_for_schema_jobs_to_complete(td *thread_data) bool {
-	if g_async_queue_length(td.conf.database_queue) > 0 ||
-		g_async_queue_length(td.conf.table_queue) > 0 ||
-		g_async_queue_length(td.conf.retry_queue) > 0 {
+	if G_async_queue_length(td.conf.database_queue) > 0 ||
+		G_async_queue_length(td.conf.table_queue) > 0 ||
+		G_async_queue_length(td.conf.retry_queue) > 0 {
 		return true
 	}
 	td.conf.table_list_mutex.Lock()
@@ -121,7 +131,7 @@ func are_we_waiting_for_schema_jobs_to_complete(td *thread_data) bool {
 }
 
 func are_we_waiting_for_create_schema_jobs_to_complete(td *thread_data) bool {
-	if g_async_queue_length(td.conf.database_queue) > 0 {
+	if G_async_queue_length(td.conf.database_queue) > 0 {
 		return true
 	}
 	td.conf.table_list_mutex.Lock()
@@ -155,7 +165,7 @@ func are_available_jobs(td *thread_data) bool {
 	return false
 }
 
-func (o *OptionEntries) give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
+func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 	var giveup = true
 	conf.table_list_mutex.Lock()
 	var dbt *db_table
@@ -171,7 +181,7 @@ func (o *OptionEntries) give_me_next_data_job_conf(conf *configuration, rj **res
 			continue
 		}
 		dbt.mutex.Lock()
-		if !o.Resume && dbt.schema_state < CREATED {
+		if !Resume && dbt.schema_state < CREATED {
 			giveup = false
 			log.Tracef("%s.%s not yet created: %s, waiting", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			dbt.mutex.Unlock()
@@ -200,7 +210,7 @@ func (o *OptionEntries) give_me_next_data_job_conf(conf *configuration, rj **res
 			break
 		} else {
 			log.Tracef("No remaining jobs on %s.%s", dbt.database.real_database, dbt.real_table)
-			if o.global.all_jobs_are_enqueued && dbt.current_threads == 0 && atomic.LoadInt64(&dbt.remaining_jobs) == 0 {
+			if all_jobs_are_enqueued && dbt.current_threads == 0 && atomic.LoadInt64(&dbt.remaining_jobs) == 0 {
 				dbt.schema_state = DATA_DONE
 				var res bool = enqueue_index_for_dbt_if_possible(conf, dbt)
 				if res {
@@ -219,63 +229,63 @@ func (o *OptionEntries) give_me_next_data_job_conf(conf *configuration, rj **res
 	return giveup
 }
 
-func (o *OptionEntries) refresh_db_and_jobs(current_ft file_type) {
+func refresh_db_and_jobs(current_ft file_type) {
 	switch current_ft {
 	case SCHEMA_CREATE, SCHEMA_TABLE, SCHEMA_SEQUENCE:
-		o.schema_queue_push(current_ft)
+		schema_queue_push(current_ft)
 		break
 	case DATA:
 		log.Tracef("refresh_db_queue <- %v", current_ft)
-		g_async_queue_push(o.global.refresh_db_queue, current_ft)
+		G_async_queue_push(refresh_db_queue, current_ft)
 		break
 	case INTERMEDIATE_ENDED:
-		o.schema_queue_push(current_ft)
+		schema_queue_push(current_ft)
 		log.Tracef("refresh_db_queue <- %v", current_ft)
-		g_async_queue_push(o.global.refresh_db_queue, current_ft)
+		G_async_queue_push(refresh_db_queue, current_ft)
 		break
 	case SHUTDOWN:
 		log.Tracef("refresh_db_queue <- %v", current_ft)
-		g_async_queue_push(o.global.refresh_db_queue, current_ft)
+		G_async_queue_push(refresh_db_queue, current_ft)
 	default:
 		break
 	}
 }
 
-func (o *OptionEntries) maybe_shutdown_control_job() {
-	if g_atomic_int_dec_and_test(&o.global.last_wait) {
+func maybe_shutdown_control_job() {
+	if G_atomic_int_dec_and_test(&last_wait) {
 		log.Tracef("SHUTDOWN maybe_shutdown_control_job")
-		o.refresh_db_and_jobs(SHUTDOWN)
+		refresh_db_and_jobs(SHUTDOWN)
 	}
 }
 
-func (o *OptionEntries) wake_threads_waiting(threads_waiting *uint) {
+func wake_threads_waiting(threads_waiting *uint) {
 	for *threads_waiting > 0 {
 		log.Tracef("refresh_db_queue <- %v", THREAD)
-		o.global.refresh_db_queue.push(THREAD)
+		G_async_queue_push(refresh_db_queue, THREAD)
 		*threads_waiting = *threads_waiting - 1
 	}
 }
 
-func (o *OptionEntries) control_job_thread(conf *configuration) {
-	o.global.control_job_t.Add(1)
-	defer o.global.control_job_t.Done()
+func control_job_thread(conf *configuration) {
+	control_job_t.Add(1)
+	defer control_job_t.Done()
 	var ft file_type
 	var rj *restore_job
-	var _num_threads uint = o.NumThreads
+	var _num_threads uint = NumThreads
 	var threads_waiting uint
 	var giveup bool
 	var cont = true
-	if o.OverwriteTables && !o.OverwriteUnsafe && o.global.cjt_paused {
+	if OverwriteTables && !OverwriteUnsafe && cjt_paused {
 		log.Tracef("Thread control_job_thread paused")
-		o.global.cjt_mutex.Lock()
-		for o.global.cjt_paused {
-			o.global.cjt_cond.Wait()
+		cjt_mutex.Lock()
+		for cjt_paused {
+			cjt_cond.Wait()
 		}
-		o.global.cjt_mutex.Unlock()
+		cjt_mutex.Unlock()
 	}
 	log.Tracef("Thread control_job_thread started")
 	for cont {
-		task := o.global.refresh_db_queue.timeout_pop(10000000)
+		task := G_async_queue_timeout_pop(refresh_db_queue, 10000000)
 		if task == nil {
 			ft = THREAD
 		} else {
@@ -284,10 +294,10 @@ func (o *OptionEntries) control_job_thread(conf *configuration) {
 		log.Tracef("refresh_db_queue -> %v (%d loaders waiting)", ft, threads_waiting)
 		switch ft {
 		case DATA:
-			o.wake_threads_waiting(&threads_waiting)
+			wake_threads_waiting(&threads_waiting)
 			break
 		case THREAD:
-			giveup = o.give_me_next_data_job_conf(conf, &rj)
+			giveup = give_me_next_data_job_conf(conf, &rj)
 			if rj != nil {
 				log.Tracef("job available in give_me_next_data_job_conf")
 				if rj.dbt != nil {
@@ -295,18 +305,18 @@ func (o *OptionEntries) control_job_thread(conf *configuration) {
 				} else {
 					log.Tracef("data_queue <- %v: %s", rj.job_type, rj.filename)
 				}
-				g_async_queue_push(o.global.data_queue, rj)
+				G_async_queue_push(data_queue, rj)
 				log.Tracef("here_is_your_job <- %v", DATA)
-				g_async_queue_push(o.global.here_is_your_job, DATA)
+				G_async_queue_push(here_is_your_job, DATA)
 			} else {
 				log.Tracef("No job available")
-				if o.global.all_jobs_are_enqueued && giveup {
+				if all_jobs_are_enqueued && giveup {
 					log.Tracef("Giving up...")
-					o.global.control_job_ended = true
+					control_job_ended = true
 					var i uint
 					for i = 0; i < _num_threads; i++ {
 						log.Tracef("here_is_your_job <- %v", SHUTDOWN)
-						g_async_queue_push(o.global.here_is_your_job, SHUTDOWN)
+						G_async_queue_push(here_is_your_job, SHUTDOWN)
 					}
 				} else {
 					log.Tracef("Thread will be waiting")
@@ -317,9 +327,9 @@ func (o *OptionEntries) control_job_thread(conf *configuration) {
 			}
 			break
 		case INTERMEDIATE_ENDED:
-			o.enqueue_indexes_if_possible(conf)
-			o.global.all_jobs_are_enqueued = true
-			o.wake_threads_waiting(&threads_waiting)
+			enqueue_indexes_if_possible(conf)
+			all_jobs_are_enqueued = true
+			wake_threads_waiting(&threads_waiting)
 			break
 		case SHUTDOWN:
 			cont = false
@@ -329,7 +339,7 @@ func (o *OptionEntries) control_job_thread(conf *configuration) {
 			break
 		}
 	}
-	o.start_innodb_optimize_keys_all_tables()
+	start_innodb_optimize_keys_all_tables()
 	log.Tracef("Thread control_job_thread finished")
 	return
 }

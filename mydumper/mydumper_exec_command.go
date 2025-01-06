@@ -2,10 +2,17 @@ package mydumper
 
 import (
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"os/exec"
 	"slices"
 	"strings"
 	"sync"
+)
+
+var (
+	Num_exec_threads    uint = 4
+	exec_command_thread []*GThreadFunc
+	pid_file_table      map[*command]string
 )
 
 type command struct {
@@ -13,10 +20,10 @@ type command struct {
 	cmd *exec.Cmd
 }
 
-func exec_this_command(o *OptionEntries, bin string, c_arg []string, filename string) {
+func exec_this_command(bin string, c_arg []string, filename string) {
 	var found bool
 	var this *command
-	for p, f := range o.global.pid_file_table {
+	for p, f := range pid_file_table {
 		if f == filename {
 			found = true
 			this = p
@@ -31,56 +38,55 @@ func exec_this_command(o *OptionEntries, bin string, c_arg []string, filename st
 		c := new(command)
 		c.pid = cmd.Process.Pid
 		c.cmd = cmd
-		o.global.pid_file_table[c] = filename
+		pid_file_table[c] = filename
 	} else {
 		err := this.cmd.Wait()
 		if err != nil {
 			log.Fatalf("wait child pid %d : %v", this.pid, err)
 		}
-		delete(o.global.pid_file_table, this)
+		delete(pid_file_table, this)
 	}
 
 }
 
-func process_exec_command(o *OptionEntries, wg *sync.WaitGroup) {
-	wg.Add(1)
-	defer wg.Done()
-	var arguments = strings.Split(o.global.exec_command, " ")
+func process_exec_command(queue *GAsyncQueue, thread_id uint) {
+	_ = queue
+	defer exec_command_thread[thread_id].Thread.Done()
+	var arguments = strings.Split(exec_command, " ")
 	var bin = arguments[0]
 	var c_arg []string
 	c_arg = arguments[1:]
 	c := slices.Index(c_arg, "FILENAME")
 	for {
-		task := o.global.stream_queue.pop()
+		task := G_async_queue_pop(Stream_queue)
 		filename := task.(string)
 		log.Debugf("get exec command : %s %s %s", bin, strings.Join(c_arg, " "), filename)
 		if len(filename) == 0 {
 			break
 		}
 		c_arg[c] = filename
-		exec_this_command(o, bin, c_arg, filename)
+		exec_this_command(bin, c_arg, filename)
 	}
 
 }
-func initialize_exec_command(o *OptionEntries) {
-	o.global.num_exec_threads = 4
+func initialize_exec_command() {
 	log.Warnf("initialize_exec_command: Started")
-	o.global.stream_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.exec_command_thread = make([]*sync.WaitGroup, o.global.num_exec_threads)
+	Stream_queue = G_async_queue_new(BufferSize)
+	exec_command_thread = make([]*GThreadFunc, Num_exec_threads)
 	var i uint
-	o.global.pid_file_table = make(map[*command]string)
-	for i = 0; i < o.global.num_exec_threads; i++ {
-		o.global.exec_command_thread[i] = new(sync.WaitGroup)
-		go process_exec_command(o, o.global.exec_command_thread[i])
+	pid_file_table = make(map[*command]string)
+	for i = 0; i < Num_exec_threads; i++ {
+		exec_command_thread[i] = G_thread_new("exec_command", new(sync.WaitGroup), i)
+		go process_exec_command(Stream_queue, i)
 	}
 }
 
-func wait_exec_command_to_finish(o *OptionEntries) {
+func wait_exec_command_to_finish() {
 	var i uint
-	for i = 0; i < o.global.num_exec_threads; i++ {
-		o.global.stream_queue.push("")
+	for i = 0; i < Num_exec_threads; i++ {
+		G_async_queue_push(Stream_queue, "")
 	}
-	for i = 0; i < o.global.num_exec_threads; i++ {
-		o.global.exec_command_thread[i].Wait()
+	for i = 0; i < Num_exec_threads; i++ {
+		exec_command_thread[i].Thread.Wait()
 	}
 }

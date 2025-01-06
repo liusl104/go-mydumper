@@ -3,20 +3,26 @@ package mydumper
 import (
 	"github.com/sevlyar/go-daemon"
 	"github.com/siddontang/go-log/log"
+	. "go-mydumper/src"
 	"os"
 )
 
-func runDaemon(o *OptionEntries) *daemon.Context {
+var (
+	SnapshotInterval int = 60
+	SnapshotCount    int = 2
+)
+
+func runDaemon() *daemon.Context {
 	cntxt := &daemon.Context{
-		PidFileName: o.Daemon.PidFile,
+		PidFileName: PidFile,
 		PidFilePerm: 0600,
 
-		WorkDir: o.global.dump_directory,
+		WorkDir: dump_directory,
 		Umask:   027,
 		Args:    os.Args,
 	}
-	if o.CommonOptionEntries.LogFile != "" {
-		cntxt.LogFileName = o.CommonOptionEntries.LogFile
+	if LogFile != "" {
+		cntxt.LogFileName = LogFile
 		cntxt.LogFilePerm = 0644
 	}
 	d, err := cntxt.Reborn()

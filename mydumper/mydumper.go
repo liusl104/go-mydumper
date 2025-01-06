@@ -2,12 +2,27 @@ package mydumper
 
 import (
 	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
 	"strconv"
 	"strings"
 )
 
-func parse_disk_limits(o *OptionEntries) {
-	strsplit := strings.SplitN(o.CommonOptionEntries.DiskLimits, ":", 3)
+var (
+	OutputDirectoryParam string
+	ClearDumpDir         bool
+	DirtyDumpDir         bool
+	DaemonMode           bool
+	PidFile              string
+	SkipConstraints      bool
+	SkipIndexes          bool
+	shutdown_triggered   bool
+	dump_directory       string
+	output_directory     string
+	errors               int
+)
+
+func parse_disk_limits() {
+	strsplit := strings.SplitN(DiskLimits, ":", 3)
 	if len(strsplit) != 2 {
 		log.Fatalf("Parse limit failed")
 	}
@@ -19,21 +34,19 @@ func parse_disk_limits(o *OptionEntries) {
 	if err != nil {
 		log.Fatalf("Parse limit failed")
 	}
-	o.set_disk_limits(uint(p_at), uint(r_at))
+	set_disk_limits(uint(p_at), uint(r_at))
 }
 
 func CommandDump() error {
-	var context *OptionEntries
-	context = newEntries()
-	commandEntries(context)
-	if !context.Daemon.DaemonMode {
-		err := StartDump(context)
+	load_contex_entries()
+	if !DaemonMode {
+		err := StartDump()
 		if err != nil {
 			return err
 		}
 	}
-	if context.CommonOptionEntries.LogFile != "" {
-		_ = context.global.log_output.Close()
+	if LogFile != "" {
+		_ = Log_output.Close()
 	}
 	return nil
 }

@@ -2,22 +2,28 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
+	. "go-mydumper/src"
 	"math"
 	"strings"
 	"sync"
 	"time"
 )
 
-func initialize_char_chunk(o *OptionEntries) {
-	if o.global.starting_chunk_step_size > 0 {
-		if o.Chunks.CharChunk == 0 {
-			o.Chunks.CharChunk = o.Common.NumThreads
+var (
+	CharDeep     uint
+	CharChunk    uint
+	RowsPerChunk string
+)
+
+func initialize_char_chunk() {
+	if starting_chunk_step_size > 0 {
+		if CharChunk == 0 {
+			CharChunk = NumThreads
 		}
-		if o.Chunks.CharDeep == 0 {
-			o.Chunks.CharDeep = o.Common.NumThreads
+		if CharDeep == 0 {
+			CharDeep = NumThreads
 		}
 	}
 }
@@ -31,11 +37,11 @@ func print_hex(buffer string, size uint) string {
 	return str.String()
 }
 
-func new_char_step(o *OptionEntries, conn *client.Conn, row []mysql.FieldValue, lengths []*mysql.Field, mutex *sync.Mutex) *chunk_step {
+func new_char_step(conn *DBConnection, row []mysql.FieldValue, lengths []*mysql.Field, mutex *sync.Mutex) *chunk_step {
 	var cs = new(chunk_step)
 	_ = conn
 	cs.char_step = new(char_step)
-	cs.char_step.step = o.global.starting_chunk_step_size
+	cs.char_step.step = starting_chunk_step_size
 	cs.char_step.mutex = mutex
 
 	cs.char_step.cmin_len = uint(lengths[0].ColumnLength) + 1 // lengths[2]
@@ -56,12 +62,12 @@ func new_char_step(o *OptionEntries, conn *client.Conn, row []mysql.FieldValue, 
 	return cs
 }
 
-func new_char_step_item(o *OptionEntries, conn *client.Conn, include_null bool, prefix string, field string, deep uint, number uint, row []mysql.FieldValue, lengths []*mysql.Field, next *chunk_step_item) *chunk_step_item {
+func new_char_step_item(conn *DBConnection, include_null bool, prefix string, field string, deep uint, number uint, row []mysql.FieldValue, lengths []*mysql.Field, next *chunk_step_item) *chunk_step_item {
 	var csi = new(chunk_step_item)
 	csi.number = uint64(number)
 	csi.field = field
-	csi.mutex = g_mutex_new()
-	csi.chunk_step = new_char_step(o, conn, row, lengths, csi.mutex)
+	csi.mutex = G_mutex_new()
+	csi.chunk_step = new_char_step(conn, row, lengths, csi.mutex)
 	csi.chunk_type = CHAR
 	csi.chunk_functions.process = process_char_chunk
 	csi.chunk_functions.get_next = get_next_char_chunk
@@ -81,15 +87,15 @@ func next_chunk_in_char_step(cs *chunk_step) {
 	cs.char_step.cmin_escaped = cs.char_step.cursor_escaped
 }
 
-func split_char_step(o *OptionEntries, deep uint, number uint, previous_csi *chunk_step_item) *chunk_step_item {
+func split_char_step(deep uint, number uint, previous_csi *chunk_step_item) *chunk_step_item {
 	var csi = new(chunk_step_item)
 	var cs = new(chunk_step)
 	csi.prefix = csi.where
 	csi.status = ASSIGNED
 	cs.char_step.deep = deep
-	csi.mutex = g_mutex_new()
+	csi.mutex = G_mutex_new()
 	csi.number = uint64(number)
-	cs.char_step.step = o.global.starting_chunk_step_size
+	cs.char_step.step = starting_chunk_step_size
 	csi.field = previous_csi.field
 	cs.char_step.previous = nil
 	cs.char_step.status = 0
@@ -105,7 +111,7 @@ func free_char_step(cs *chunk_step) {
 	cs = nil
 }
 
-func get_next_char_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
+func get_next_char_chunk(dbt *DB_Table) *chunk_step_item {
 	var csi *chunk_step_item
 	for e := dbt.chunks.Front(); e != nil; e = e.Next() {
 		csi = e.Value.(*chunk_step_item)
@@ -121,8 +127,8 @@ func get_next_char_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 			return csi
 		}
 
-		if csi.chunk_step.char_step.deep <= o.Chunks.CharDeep && strings.Compare(csi.chunk_step.char_step.cmax, csi.chunk_step.char_step.cursor) != 0 && csi.chunk_step.char_step.status == 0 {
-			var new_cs = split_char_step(o, csi.chunk_step.char_step.deep+1, uint(csi.number)+uint(math.Pow(2, float64(csi.deep))), csi)
+		if csi.chunk_step.char_step.deep <= CharDeep && strings.Compare(csi.chunk_step.char_step.cmax, csi.chunk_step.char_step.cursor) != 0 && csi.chunk_step.char_step.status == 0 {
+			var new_cs = split_char_step(csi.chunk_step.char_step.deep+1, uint(csi.number)+uint(math.Pow(2, float64(csi.deep))), csi)
 			csi.chunk_step.char_step.deep++
 			csi.chunk_step.char_step.status = 1
 			new_cs.status = ASSIGNED
@@ -137,7 +143,7 @@ func get_next_char_chunk(o *OptionEntries, dbt *db_table) *chunk_step_item {
 	return nil
 }
 
-func get_escaped_middle_char(conn *client.Conn, c1 []byte, c1len uint, c2 []byte, c2len uint, part uint) string {
+func get_escaped_middle_char(conn *DBConnection, c1 []byte, c1len uint, c2 []byte, c2len uint, part uint) string {
 	/*fmt.Printf("c1 <-- %s c1len %d\n", c1, c1len)
 	fmt.Printf("c1 <-- %s c1len %d\n", c2, c2len)*/
 	var cresultlen uint
@@ -172,7 +178,7 @@ func get_escaped_middle_char(conn *client.Conn, c1 []byte, c1len uint, c2 []byte
 	return escapedresult
 }
 
-func update_cursor(o *OptionEntries, conn *client.Conn, csi *chunk_step_item, dbt *db_table, tj *table_job) string {
+func update_cursor(conn *DBConnection, csi *chunk_step_item, dbt *DB_Table, tj *table_job) string {
 	var query, cache string
 	var row []mysql.FieldValue
 	var minmax *mysql.Result
@@ -182,7 +188,7 @@ func update_cursor(o *OptionEntries, conn *client.Conn, csi *chunk_step_item, db
 	} else {
 		char_chunk_part = 1
 	}
-	if o.is_mysql_like() {
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var middle = get_escaped_middle_char(conn, []byte(csi.chunk_step.char_step.cmax), csi.chunk_step.char_step.cmax_clen, []byte(csi.chunk_step.char_step.cmin),
@@ -190,7 +196,7 @@ func update_cursor(o *OptionEntries, conn *client.Conn, csi *chunk_step_item, db
 	query = fmt.Sprintf("SELECT %s `%s` FROM `%s`.`%s` WHERE '%s' <= `%s` AND '%s' <= `%s` AND `%s` <= '%s' ORDER BY `%s` LIMIT 1", cache,
 		csi.field, dbt.database.name, dbt.table, csi.chunk_step.char_step.cmin_escaped, csi.field, middle, csi.field, csi.field,
 		csi.chunk_step.char_step.cmax_escaped, csi.field)
-	minmax, _ = conn.Execute(query)
+	minmax = conn.Execute(query)
 	if len(minmax.Values) == 0 {
 		csi.chunk_step.char_step.cursor_clen = csi.chunk_step.char_step.cmax_clen
 		csi.chunk_step.char_step.cursor_len = csi.chunk_step.char_step.cmax_len
@@ -215,11 +221,10 @@ func update_cursor(o *OptionEntries, conn *client.Conn, csi *chunk_step_item, db
 	return ""
 }
 
-func get_new_minmax(o *OptionEntries, td *thread_data, dbt *db_table, csi *chunk_step_item) bool {
+func get_new_minmax(td *thread_data, dbt *DB_Table, csi *chunk_step_item) bool {
 	var query, cache, cursor, escaped string
 	var row []mysql.FieldValue
 	var minmax *mysql.Result
-	var err error
 	var previous = csi.chunk_step.char_step.previous
 	var cursor_len uint
 	// previous->char_step.cursor != NULL ? previous->char_step.cursor: previous->char_step.cmin,
@@ -233,9 +238,9 @@ func get_new_minmax(o *OptionEntries, td *thread_data, dbt *db_table, csi *chunk
 	}
 	log.Infof("get_new_minmax::")
 	previous.char_step.mutex.Lock()
-	var middle = get_escaped_middle_char(td.thrconn, []byte(previous.char_step.cmax), previous.char_step.cmax_clen, []byte(cursor), cursor_len, o.Chunks.CharChunk)
+	var middle = get_escaped_middle_char(td.thrconn, []byte(previous.char_step.cmax), previous.char_step.cmax_clen, []byte(cursor), cursor_len, CharChunk)
 	_ = cursor_len
-	if o.is_mysql_like() {
+	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 
@@ -249,8 +254,8 @@ func get_new_minmax(o *OptionEntries, td *thread_data, dbt *db_table, csi *chunk
 	query = fmt.Sprintf("SELECT %s `%s` FROM `%s`.`%s` WHERE `%s` > (SELECT `%s` FROM `%s`.`%s` WHERE `%s` > '%s' ORDER BY `%s` LIMIT 1) AND '%s' < `%s` AND `%s` < '%s' ORDER BY `%s` LIMIT 1",
 		cache, csi.field, dbt.database.name, dbt.table, dbt.primary_key, dbt.primary_key, dbt.database.name,
 		dbt.table, dbt.primary_key, middle, dbt.primary_key, escaped, dbt.primary_key, dbt.primary_key, previous.char_step.cmax_escaped, dbt.primary_key)
-	minmax, err = td.thrconn.Execute(query)
-	if err != nil {
+	minmax = td.thrconn.Execute(query)
+	if td.thrconn.Err != nil {
 		log.Infof("No middle point")
 		previous.char_step.mutex.Unlock()
 		return false
@@ -283,36 +288,36 @@ func get_new_minmax(o *OptionEntries, td *thread_data, dbt *db_table, csi *chunk
 	return true
 }
 
-func process_char_chunk_step(o *OptionEntries, td *thread_data, tj *table_job, csi *chunk_step_item) bool {
+func process_char_chunk_step(td *thread_data, tj *table_job, csi *chunk_step_item) bool {
 	check_pause_resume(td)
-	if o.global.shutdown_triggered {
+	if shutdown_triggered {
 		return true
 	}
 	csi.mutex.Lock()
 	if csi.chunk_step.char_step.cmax != "" {
-		update_cursor(o, td.thrconn, tj.chunk_step_item, tj.dbt, tj)
+		update_cursor(td.thrconn, tj.chunk_step_item, tj.dbt, tj)
 	}
 	csi.mutex.Unlock()
 	update_where_on_char_step(csi)
 	if csi.next != nil {
-		csi.next.chunk_functions.process(o, tj, csi.next)
+		csi.next.chunk_functions.process(tj, csi.next)
 	} else {
 		tj.where = ""
 		tj.where = csi.where
 		var from = time.Now()
-		write_table_job_into_file(o, tj)
+		write_table_job_into_file(tj)
 		var to = time.Now()
 		diff := to.Sub(from).Seconds()
 		if diff > 2 {
 			csi.chunk_step.char_step.step = csi.chunk_step.char_step.step / 2
-			if csi.chunk_step.char_step.step < o.global.min_chunk_step_size {
-				csi.chunk_step.char_step.step = o.global.min_chunk_step_size
+			if csi.chunk_step.char_step.step < min_chunk_step_size {
+				csi.chunk_step.char_step.step = min_chunk_step_size
 			}
 		} else if diff < 1 {
 			csi.chunk_step.char_step.step = csi.chunk_step.char_step.step * 2
-			if o.global.max_chunk_step_size != 0 {
-				if csi.chunk_step.char_step.step > o.global.max_chunk_step_size {
-					csi.chunk_step.char_step.step = o.global.max_chunk_step_size
+			if max_chunk_step_size != 0 {
+				if csi.chunk_step.char_step.step > max_chunk_step_size {
+					csi.chunk_step.char_step.step = max_chunk_step_size
 				}
 			}
 		}
@@ -323,7 +328,7 @@ func process_char_chunk_step(o *OptionEntries, td *thread_data, tj *table_job, c
 	return false
 }
 
-func process_char_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
+func process_char_chunk(tj *table_job, csi *chunk_step_item) {
 	var td = tj.td
 	var dbt = tj.dbt
 	var cs = csi.chunk_step
@@ -332,7 +337,7 @@ func process_char_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
 	for cs.char_step.previous != nil || cs.char_step.cmax == cs.char_step.cursor {
 		if cs.char_step.previous != nil {
 			csi.mutex.Lock()
-			cont = get_new_minmax(o, td, tj.dbt, csi)
+			cont = get_new_minmax(td, tj.dbt, csi)
 			csi.mutex.Unlock()
 			if cont == true {
 				cs.char_step.previous = nil
@@ -348,7 +353,7 @@ func process_char_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
 			}
 		} else {
 			if strings.Compare(cs.char_step.cmax, cs.char_step.cursor) != 0 {
-				if process_char_chunk_step(o, td, tj, csi) {
+				if process_char_chunk_step(td, tj, csi) {
 					log.Infof("Thread %d: Job has been cacelled", td.thread_id)
 					return
 				}
@@ -361,7 +366,7 @@ func process_char_chunk(o *OptionEntries, tj *table_job, csi *chunk_step_item) {
 		}
 	}
 	if strings.Compare(cs.char_step.cursor, cs.char_step.cmin) != 0 {
-		if process_char_chunk_step(o, td, tj, csi) {
+		if process_char_chunk_step(td, tj, csi) {
 			log.Infof("Thread %d: Job has been cacelled", td.thread_id)
 			return
 		}
