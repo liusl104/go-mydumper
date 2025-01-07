@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"path"
 	"strconv"
@@ -117,26 +117,33 @@ func clear_dump_directory(directory string) error {
 	dir, err := os.Open(directory)
 
 	if err != nil {
-		log.Errorf("cannot open directory %s, %v", directory, err)
+		log.Criticalf("cannot open directory %s, %v", directory, err)
+		errors++
 		return err
 	}
 	defer dir.Close()
 	filename, err := dir.Readdirnames(-1)
 	if err != nil {
+		log.Criticalf("error removing file %s (%v)", directory, err)
+		errors++
 		return err
 	}
 	for _, file := range filename {
 		file_path := path.Join(directory, file)
 		err = os.Remove(file_path)
-		log.Errorf("error removing file %s (%v)", file_path, err)
-		return err
+		if err != nil {
+			log.Criticalf("error removing file %s (%v)", file_path, err)
+			errors++
+			return err
+		}
 	}
 	return nil
 }
 func is_empty_dir(directory string) bool {
 	dir, err := os.Stat(directory)
 	if err != nil {
-		log.Errorf("cannot open directory %s, %v\n", directory, err)
+		log.Criticalf("cannot open directory %s, %v\n", directory, err)
+		errors++
 		return false
 	}
 	if dir.IsDir() {
@@ -155,7 +162,7 @@ func is_empty_dir(directory string) bool {
 func set_transaction_isolation_level_repeatable_read(conn *DBConnection) {
 	_ = conn.Execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 	if conn.Err != nil {
-		log.Errorf("Failed to set isolation level: %v", conn.Err)
+		log.Criticalf("Failed to set isolation level: %v", conn.Err)
 		os.Exit(EXIT_FAILURE)
 	}
 }
@@ -343,19 +350,23 @@ func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *
 	}
 	switch len(split) {
 	case 0:
-		log.Fatalf("This should not happend")
+		log.Critical("This should not happend")
+		break
 	case 1:
 		*start, err = strconv.ParseUint(split[0], 10, 64)
 		*min = *start
 		*max = *start
+		break
 	case 2:
 		*min, err = strconv.ParseUint(split[0], 10, 64)
 		*start, err = strconv.ParseUint(split[1], 10, 64)
 		*max = *start
+		break
 	default:
 		*min, err = strconv.ParseUint(split[0], 10, 64)
 		*start, err = strconv.ParseUint(split[1], 10, 64)
 		*max, err = strconv.ParseUint(split[2], 10, 64)
+		break
 	}
 	_ = err
 	return true

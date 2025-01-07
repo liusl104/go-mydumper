@@ -1,8 +1,8 @@
 package mydumper
 
 import (
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os/exec"
 	"slices"
 	"strings"

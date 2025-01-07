@@ -1,8 +1,8 @@
 package myloader
 
 import (
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -145,7 +145,7 @@ func process_filename(filename string) file_type {
 		break
 	case RESUME:
 		if Stream != "" {
-			log.Fatalf("We don't expect to find resume files in a stream scenario")
+			log.Critical("We don't expect to find resume files in a stream scenario")
 		}
 		break
 	case IGNORED:

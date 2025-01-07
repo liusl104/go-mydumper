@@ -1,8 +1,8 @@
 package myloader
 
 import (
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"sync"
 	"sync/atomic"
 )
@@ -89,7 +89,7 @@ func process_job(td *thread_data, job *control_job, retry *bool) bool {
 	case JOB_SHUTDOWN:
 		return false
 	default:
-		log.Fatalf("Something very bad happened!(1)")
+		log.Error("Something very bad happened!(1)")
 	}
 	return true
 }
@@ -172,7 +172,7 @@ func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 	var job *restore_job
 	for _, dbt = range conf.table_list {
 		if dbt.database.schema_state == NOT_FOUND {
-			log.Tracef("%s.%s: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
+			log.Criticalf("%s.%s: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			continue
 		}
 		if dbt.schema_state >= DATA_DONE || (dbt.schema_state == CREATED && (dbt.is_view || dbt.is_sequence)) {

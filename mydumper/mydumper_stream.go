@@ -3,8 +3,8 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -87,7 +87,7 @@ func process_stream(data any) {
 				log.Errorf("File failed to open: %s", sf.filename)
 			} else {
 				if f == nil {
-					log.Errorf("File failed to open: %s. Reetrying", sf.filename)
+					log.Criticalf("File failed to open: %s. Reetrying", sf.filename)
 					f, err = os.Open(sf.filename)
 					if err != nil {
 						log.Errorf("File failed to open: %s. Cancelling", sf.filename)

@@ -2,9 +2,9 @@ package mydumper
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"strconv"
 	"strings"
@@ -53,6 +53,15 @@ func CommandDump() error {
 		output_format = CSV
 		rows_file_extension = DAT
 	}
+	if OutputDirectoryParam == "" {
+		dt := time.Now()
+		var datetimestr string
+		datetimestr = dt.Format("20060102-150405")
+		output_directory = fmt.Sprintf("%s-%s", DIRECTORY, datetimestr)
+	} else {
+		output_directory = OutputDirectoryParam
+	}
+	Initialize_common_options(MYDUMPER)
 	if Help {
 		print_help()
 	}
@@ -69,17 +78,9 @@ func CommandDump() error {
 		_ = Set_verbose()
 	}
 	log.Infof("MyDumper backup version: %s", VERSION)
-	Initialize_common_options(MYDUMPER)
+
 	Hide_password()
 	Ask_password()
-	if OutputDirectoryParam == "" {
-		dt := time.Now()
-		var datetimestr string
-		datetimestr = dt.Format("20060102-150405")
-		output_directory = fmt.Sprintf("%s-%s", DIRECTORY, datetimestr)
-	} else {
-		output_directory = OutputDirectoryParam
-	}
 	if !DaemonMode {
 		err := StartDump()
 		if err != nil {

@@ -1,9 +1,9 @@
 package myloader
 
 import (
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"strings"
 )
 
@@ -21,43 +21,38 @@ const (
 )
 
 var (
-	innodb_optimize_keys_str string
-	checksum_mode            checksum_modes
-	checksum_str             string
+	checksum_mode checksum_modes = CHECKSUM_FAIL
+	checksum_str  string
 )
 
 var (
-	EnableBinlog       bool
-	InnodbOptimizeKeys string
-	// NoSchemas                bool
-	PurgeModeStr             string
-	DisableRedoLog           bool
-	CheckSum                 string
-	OverwriteTables          bool
-	OverwriteUnsafe          bool
-	RetryCount               uint
-	SerialTblCreation        bool
-	RefreshTableListInterval uint = 100
-	IgnoreErrors             string
-	SetGtidPurge             bool
-	Rows                     int
-	CommitCount              uint
-	AppendIfNotExist         bool
-	// SetNamesStr              string
-	SkipDefiner    bool
-	IgnoreSet      string
-	Help           bool
-	InputDirectory string
-	// DB                          string
-	QuoteCharacter string
-	ShowWarnings   bool
-	Resume         bool
-	KillAtOnce     bool
-	BufferSize     uint
-	// MaxThreadsPerTable          uint
-	MaxThreadsForIndexCreation  uint
-	MaxThreadsForPostCreation   uint
-	MaxThreadsForSchemaCreation uint
+	EnableBinlog                bool
+	InnodbOptimizeKeys          string
+	PurgeModeStr                string
+	DisableRedoLog              bool
+	CheckSum                    string
+	OverwriteTables             bool
+	OverwriteUnsafe             bool
+	RetryCount                  uint = 10
+	SerialTblCreation           bool
+	RefreshTableListInterval    uint = 100
+	IgnoreErrors                string
+	SetGtidPurge                bool
+	Rows                        int
+	CommitCount                 uint = 1000
+	AppendIfNotExist            bool
+	SkipDefiner                 bool
+	IgnoreSet                   string
+	Help                        bool
+	InputDirectory              string
+	QuoteCharacter              string
+	ShowWarnings                bool
+	Resume                      bool
+	KillAtOnce                  bool
+	BufferSize                  uint
+	MaxThreadsForIndexCreation  uint = 4
+	MaxThreadsForPostCreation   uint = 1
+	MaxThreadsForSchemaCreation uint = 4
 	ExecPerThread               string
 	ExecPerThreadExtension      string
 	SourceDb                    string
@@ -65,31 +60,28 @@ var (
 	SkipPost                    bool
 	SkipConstraints             bool
 	SkipIndexes                 bool
-	// NoData                      bool
-	PmmPath       string
-	PmmResolution string
+	PmmPath                     string
+	PmmResolution               string
 )
 
 func arguments_callback() bool {
-	if InnodbOptimizeKeys != "" {
-		innodb_optimize_keys_str = InnodbOptimizeKeys
-		if innodb_optimize_keys_str == "" {
-			innodb_optimize_keys_per_table = true
-			innodb_optimize_keys_all_tables = false
-		} else if strings.ToUpper(InnodbOptimizeKeys) == SKIP {
-			innodb_optimize_keys = false
-			innodb_optimize_keys_per_table = false
-			innodb_optimize_keys_all_tables = false
-		} else if strings.ToUpper(InnodbOptimizeKeys) == AFTER_IMPORT_PER_TABLE {
-			innodb_optimize_keys_per_table = true
-			innodb_optimize_keys_all_tables = false
-		} else if strings.ToUpper(InnodbOptimizeKeys) == AFTER_IMPORT_ALL_TABLES {
-			innodb_optimize_keys_all_tables = true
-			innodb_optimize_keys_per_table = false
-		} else {
-			log.Fatalf("--innodb-optimize-keys accepts: after_import_per_table (default value), after_import_all_tables")
-		}
+	if InnodbOptimizeKeys == "" {
+		innodb_optimize_keys_per_table = true
+		innodb_optimize_keys_all_tables = false
+	} else if strings.ToUpper(InnodbOptimizeKeys) == SKIP {
+		innodb_optimize_keys = false
+		innodb_optimize_keys_per_table = false
+		innodb_optimize_keys_all_tables = false
+	} else if strings.ToUpper(InnodbOptimizeKeys) == AFTER_IMPORT_PER_TABLE {
+		innodb_optimize_keys_per_table = true
+		innodb_optimize_keys_all_tables = false
+	} else if strings.ToUpper(InnodbOptimizeKeys) == AFTER_IMPORT_ALL_TABLES {
+		innodb_optimize_keys_all_tables = true
+		innodb_optimize_keys_per_table = false
+	} else {
+		log.Fatalf("--innodb-optimize-keys accepts: after_import_per_table (default value), after_import_all_tables")
 	}
+
 	if QuoteCharacter != "" {
 		quote_character_cli = true
 		if strings.ToUpper(QuoteCharacter) == "BACKTICK" || strings.ToUpper(QuoteCharacter) == "BT" || QuoteCharacter == "`" {
@@ -134,8 +126,8 @@ func entries() {
 }
 func threads_entries() {
 	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 0, "Maximum number of threads per table to use, defaults to --threads")
-	pflag.UintVar(&MaxThreadsForIndexCreation, "max-threads-for-index-creation", 0, "Maximum number of threads for index creation, default 4")
-	pflag.UintVar(&MaxThreadsForPostCreation, "max-threads-for-post-actions", 0, "Maximum number of threads for post action like: constraints, procedure, views and triggers, default 1")
+	pflag.UintVar(&MaxThreadsForIndexCreation, "max-threads-for-index-creation", 4, "Maximum number of threads for index creation, default 4")
+	pflag.UintVar(&MaxThreadsForPostCreation, "max-threads-for-post-actions", 1, "Maximum number of threads for post action like: constraints, procedure, views and triggers, default 1")
 	pflag.UintVar(&MaxThreadsForSchemaCreation, "max-threads-for-schema-creation", 4, "Maximum number of threads for schema creation. When this is set to 1, is the same than --serialized-table-creation, default 4")
 	pflag.StringVar(&ExecPerThread, "exec-per-thread", "", "Set the command that will receive by STDIN from the input file and write in the STDOUT")
 	pflag.StringVar(&ExecPerThreadExtension, "exec-per-thread-extension", "", "Set the input file extension when --exec-per-thread is used. Otherwise it will be ignored")
@@ -152,7 +144,7 @@ func execution_entries() {
 	pflag.StringVar(&CheckSum, "checksum", "", "Treat checksums: skip, fail(default), warn.")
 	pflag.BoolVarP(&OverwriteTables, "overwrite-tables", "o", false, "Drop tables if they already exist")
 	pflag.BoolVar(&OverwriteUnsafe, "overwrite-unsafe", false, "Same as --overwrite-tables but starts data load as soon as possible. May cause InnoDB deadlocks for foreign keys.")
-	pflag.UintVar(&RetryCount, "retry-count", 0, "Lock wait timeout exceeded retry count, default 10 (currently only for DROP TABLE)")
+	pflag.UintVar(&RetryCount, "retry-count", 10, "Lock wait timeout exceeded retry count, default 10 (currently only for DROP TABLE)")
 	pflag.UintVar(&RefreshTableListInterval, "metadata-refresh-interval", 100, "Every this amount of tables the internal metadata will be refreshed. If the amount of tables you have in your metadata file is high, then you should increase this value. Default: 100")
 	pflag.BoolVar(&SerialTblCreation, "serialized-table-creation", false, "Table recreation will be executed in series, one thread at a time. This means --max-threads-for-schema-creation=1. This option will be removed in future releases")
 	pflag.StringVar(&Stream, "stream", "", "It will receive the stream from STDIN and creates the file in the disk before start processing.Since v0.12.7-1, accepts NO_DELETE, NO_STREAM_AND_NO_DELETE and TRADITIONAL which is the default value and used if no parameter is given")
@@ -178,7 +170,7 @@ func filter_entries() {
 func statement_entries() {
 	// Statement
 	pflag.IntVarP(&Rows, "Rows", "r", 0, "Split the INSERT statement into this many Rows.")
-	pflag.UintVarP(&CommitCount, "queries-per-transaction", "q", 0, "Number of queries per transaction, default 1000")
+	pflag.UintVarP(&CommitCount, "queries-per-transaction", "q", 1000, "Number of queries per transaction, default 1000")
 	pflag.BoolVar(&AppendIfNotExist, "append-if-not-exist", false, "Appends IF NOT EXISTS to the create table statements. This will be removed when https://bugs.mysql.com/bug.php?id=103791 has been implemented")
 	pflag.StringVar(&SetNamesStr, "set-names", "", "Sets the names, use it at your own risk, default binary")
 	pflag.BoolVar(&SkipDefiner, "skip-define", false, "Removes DEFINER from the CREATE statement. By default, statements are not modified")

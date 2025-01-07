@@ -3,7 +3,7 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	log "go-mydumper/src/logrus"
 	"os"
 	"slices"
 	"strings"
@@ -16,7 +16,7 @@ func Read_tables_skiplist(filename string) error {
 	var read_open *os.File
 	read_open, err = os.Open(filename)
 	if err != nil {
-		log.Errorf("cannot read/open file %s, %v", filename, err)
+		log.Critical("cannot read/open file %s, %v", filename, err)
 		return err
 	}
 	defer read_open.Close()

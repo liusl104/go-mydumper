@@ -4,8 +4,8 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/siddontang/go-log/log"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"strings"
 	"time"
 )

@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-ini/ini"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
+	log "go-mydumper/src/logrus"
 )
 
 var (
@@ -112,20 +112,20 @@ func Initialize_hash_of_session_variables() map[string]string {
 }
 
 func Initialize_set_names() {
-	if set_names_str != "" {
-		if len(set_names_str) != 0 {
-			Set_names_statement = fmt.Sprintf("/*!40101 SET NAMES %s*/", set_names_str)
+	if SetNamesStr != "" {
+		if len(SetNamesStr) != 0 {
+			Set_names_statement = fmt.Sprintf("/*!40101 SET NAMES %s*/", SetNamesStr)
 		} else {
-			set_names_str = ""
+			SetNamesStr = ""
 		}
 	} else {
-		set_names_str = "binary"
+		SetNamesStr = "binary"
 		Set_names_statement = "/*!40101 SET NAMES binary*/"
 	}
 }
 
 func Free_set_names() {
-	set_names_str = ""
+	SetNamesStr = ""
 	Set_names_statement = ""
 }
 
@@ -136,7 +136,7 @@ func Show_warnings_if_possible(conn *DBConnection) string {
 	var result *mysql.Result
 	result = conn.Execute("SHOW WARNINGS")
 	if conn.Err != nil {
-		log.Errorf("Error on SHOW WARNINGS: %v", conn.Err)
+		log.Criticalf("Error on SHOW WARNINGS: %v", conn.Err)
 		return ""
 	}
 	var _error *GString = G_string_new("")
@@ -151,7 +151,7 @@ func generic_checksum(conn *DBConnection, database, table, query_template string
 	var query string = fmt.Sprintf(query_template, database, table)
 	result := conn.Execute(query)
 	if conn.Err != nil {
-		log.Errorf("Error dumping checksum (%s.%s): %v", database, table, conn.Err)
+		log.Criticalf("Error dumping checksum (%s.%s): %v", database, table, conn.Err)
 		return ""
 	}
 	var r string
@@ -696,7 +696,7 @@ func M_warning(msg string, args ...any) {
 func Filter_sequence_schemas(create_table string) string {
 	re, err := regexp.Compile("`\\w+`\\.(`\\w+`)")
 	if err != nil {
-		log.Warnf("filter table schema fail:%v", err)
+		log.Criticalf("filter table schema fail:%v", err)
 	}
 	fss := re.FindAllStringSubmatch(create_table, -1)
 	return re.ReplaceAllString(create_table, fss[0][1])

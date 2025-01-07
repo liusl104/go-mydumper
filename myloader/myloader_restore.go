@@ -3,8 +3,8 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"path"
 	"slices"
@@ -124,7 +124,7 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data string, is_s
 			if err := cd.thrconn.Ping(); err != nil {
 				reconnect_connection_data(cd)
 				if !is_schema && CommitCount > 1 {
-					log.Errorf("Connection %d - ERROR %d: Lost connection error. %v", cd.thread_id, cd.thrconn.Code, cd.thrconn.Err)
+					log.Criticalf("Connection %d - ERROR %d: Lost connection error. %v", cd.thread_id, cd.thrconn.Code, cd.thrconn.Err)
 					errors++
 					return 2
 				}
@@ -134,9 +134,9 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data string, is_s
 			_ = en
 			if cd.thrconn.Err != nil {
 				if is_schema {
-					log.Errorf("Connection %d -  - ERROR %v\n%s", cd.thread_id, cd.thrconn.Err, data)
+					log.Criticalf("Connection %d -  - ERROR %v\n%s", cd.thread_id, cd.thrconn.Err, data)
 				} else {
-					log.Errorf("Connection %d -  - ERROR %v", cd.thread_id, cd.thrconn.Err)
+					log.Criticalf("Connection %d -  - ERROR %v", cd.thread_id, cd.thrconn.Err)
 				}
 				errors++
 				return 1
@@ -252,7 +252,7 @@ func restore_insert(cd *connection_data, data string, query_counter *uint, offse
 				tr += m_commit_and_start_transaction(cd, query_counter)
 			}
 			if tr > 0 {
-				log.Fatalf("Connection %d: Error occurs between lines: %d and %d in a splited INSERT: %v", cd.thread_id, offset_line, current_offset_line, cd.thrconn.Err)
+				log.Criticalf("Connection %d: Error occurs between lines: %d and %d in a splited INSERT: %v", cd.thread_id, offset_line, current_offset_line, cd.thrconn.Err)
 			}
 			if cd.thrconn.Warning != 0 {
 				log.Warnf("Connection %d: Warnings found during INSERT between lines: %d and %d: %s", cd.thread_id, offset_line, current_offset_line, Show_warnings_if_possible(cd.thrconn))
@@ -297,15 +297,15 @@ func restore_thread(conn *DBConnection, thread_id uint) {
 					ir.error_number = uint(cd.thrconn.Code)
 					if max_errors != 0 && errors > max_errors {
 						if ir.filename == "" {
-							log.Fatalf("Error occurs processing statement: %v", cd.thrconn.Err)
+							log.Criticalf("Error occurs processing statement: %v", cd.thrconn.Err)
 						} else {
-							log.Fatalf("Error occurs starting at line: %d on file %s: %v", ir.preline, ir.filename, cd.thrconn.Err)
+							log.Criticalf("Error occurs starting at line: %d on file %s: %v", ir.preline, ir.filename, cd.thrconn.Err)
 						}
 					} else {
 						if ir.filename == "" {
-							log.Fatalf("Error occurs processing statement: %v", cd.thrconn.Err)
+							log.Critical("Error occurs processing statement: %v", cd.thrconn.Err)
 						} else {
-							log.Fatalf("Error occurs between line: %d on file %s: %v", ir.preline, ir.filename, cd.thrconn.Err)
+							log.Criticalf("Error occurs between line: %d on file %s: %v", ir.preline, ir.filename, cd.thrconn.Err)
 						}
 					}
 				}
@@ -415,7 +415,7 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 	var file_path string = path.Join(directory, filename)
 	infile, err = myl_open(file_path, os.O_RDONLY)
 	if err != nil {
-		log.Errorf("cannot open file %s (%v)", filename, err)
+		log.Criticalf("cannot open file %s (%v)", filename, err)
 		errors++
 		return 1
 	}
@@ -496,11 +496,11 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 				data.Str.Reset()
 				preline = uint(line) + 1
 				if ir.result > 0 {
-					log.Fatalf("(1)Error occurs processing file %s", filename)
+					log.Criticalf("(1)Error occurs processing file %s", filename)
 				}
 			}
 		} else {
-			log.Errorf("error reading file %s (%v)", filename, err)
+			log.Criticalf("error reading file %s (%v)", filename, err)
 			errors++
 			return 1
 		}

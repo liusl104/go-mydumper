@@ -4,8 +4,8 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"math"
 	"os"
 	"strings"
@@ -116,7 +116,7 @@ func initialize_working_thread() {
 			// Exec_per_thread = fmt.Sprintf("%s -c", cmd)
 			ExecPerThreadExtension = ZSTD_EXTENSION
 		} else {
-			log.Fatalf("%s command not found on any static location", compress_method)
+			log.Errorf("%s command not found on any static location", compress_method)
 		}
 		initialize_file_handler(true)
 	}
@@ -156,7 +156,8 @@ func thd_JOB_DUMP_ALL_DATABASES(td *thread_data, job *job) {
 	var err error
 	databases = td.thrconn.Execute("SHOW DATABASES")
 	if td.thrconn.Err != nil {
-		log.Fatalf("Unable to list databases: %v", err)
+		log.Criticalf("Unable to list databases: %v", err)
+		return
 	}
 	for _, row := range databases.Values {
 		if fmt.Sprintf("%s", row[0].AsString()) == "information_schema" ||
@@ -201,10 +202,11 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *configuration
 			Identifier_quote_character_str, dt[1])
 		var result *mysql.Result
 
-		var err error
 		result = conn.Execute(query)
 		if conn.Err != nil {
-			log.Fatalf("Error showing table status on: %s - Could not execute query: %v", dt[0], err)
+			log.Criticalf("Error showing table status on: %s - Could not execute query: %v", dt[0], conn.Err)
+			errors++
+			return
 		}
 		var ecol int = -1
 		var ccol int = -1
@@ -224,7 +226,9 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *configuration
 			}
 		}
 		if len(result.Values) == 0 {
-			log.Fatalf("Could not list tables for %s", db.name)
+			log.Criticalf("Could not list tables for %s", db.name)
+			errors++
+			return
 		}
 
 		for _, row := range result.Values {
@@ -287,25 +291,25 @@ func thd_JOB_DUMP(td *thread_data, job *job) {
 			if tj.dbt.table != td.table_name {
 				_ = td.thrconn.Execute("ROLLBACK TO SAVEPOINT %s", MYDUMPER)
 				if td.thrconn.Err != nil {
-					log.Fatalf("Rollback to savepoint failed: %v", td.thrconn.Err)
+					log.Criticalf("Rollback to savepoint failed: %v", td.thrconn.Err)
 				}
 				_ = td.thrconn.Execute("SAVEPOINT %s", MYDUMPER)
 				if td.thrconn.Err != nil {
-					log.Fatalf("Savepoint failed: %v", td.thrconn.Err)
+					log.Criticalf("Savepoint failed: %v", td.thrconn.Err)
 				}
 				td.table_name = tj.dbt.table
 
 			} else {
 				td.thrconn.Execute("SAVEPOINT %s", MYDUMPER)
 				if td.thrconn.Err != nil {
-					log.Fatalf("Savepoint failed: %v", td.thrconn.Err)
+					log.Criticalf("Savepoint failed: %v", td.thrconn.Err)
 				}
 				td.table_name = tj.dbt.table
 			}
 		} else {
 			td.thrconn.Execute("SAVEPOINT %s", MYDUMPER)
 			if td.thrconn.Err != nil {
-				log.Fatalf("Savepoint failed: %v", td.thrconn.Err)
+				log.Criticalf("Savepoint failed: %v", td.thrconn.Err)
 			}
 			td.table_name = tj.dbt.table
 		}
@@ -322,7 +326,7 @@ func initialize_thread(td *thread_data) {
 	var err error
 	M_connect(td.thrconn)
 	if td.thrconn.Err != nil {
-		log.Fatalf("connect db fail:%v", err)
+		log.Criticalf("connect db fail:%v", err)
 	}
 	log.Infof("Thread %d: connected using MySQL connection ID %d", td.thread_id, td.thrconn.GetConnectionID())
 
@@ -333,7 +337,7 @@ func initialize_consistent_snapshot(td *thread_data) {
 	if sync_wait != -1 {
 		_ = td.thrconn.Execute("SET SESSION WSREP_SYNC_WAIT = %d", sync_wait)
 		if td.thrconn.Err != nil {
-			log.Fatalf("Failed to set wsrep_sync_wait for the thread: %v", td.thrconn.Err)
+			log.Criticalf("Failed to set wsrep_sync_wait for the thread: %v", td.thrconn.Err)
 		}
 	}
 	set_transaction_isolation_level_repeatable_read(td.thrconn)
@@ -343,7 +347,7 @@ func initialize_consistent_snapshot(td *thread_data) {
 		log.Debugf("Thread %d: Start transaction # %d", td.thread_id, start_transaction_retry)
 		_ = td.thrconn.Execute("START TRANSACTION /*!40108 WITH CONSISTENT SNAPSHOT */")
 		if td.thrconn.Err != nil {
-			log.Fatalf("Failed to start consistent snapshot: %v", td.thrconn.Err)
+			log.Criticalf("Failed to start consistent snapshot: %v", td.thrconn.Err)
 		}
 		var res *mysql.Result
 		res = td.thrconn.Execute("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'")
@@ -377,7 +381,7 @@ func initialize_consistent_snapshot(td *thread_data) {
 			if NoLocks {
 				log.Warnf("Backup will not be consistent, but we are continuing because you use --no-locks.")
 			} else {
-				log.Fatalf("Backup will not be consistent. Threads are in different points in time. Use --no-locks if you expect inconsistent backups.")
+				log.Criticalf("Backup will not be consistent. Threads are in different points in time. Use --no-locks if you expect inconsistent backups.")
 			}
 		}
 	}
@@ -406,7 +410,7 @@ func write_snapshot_info(conn *DBConnection, file *os.File) {
 	var masterpos uint64
 	master = conn.Execute(Show_binary_log_status)
 	if conn.Err != nil {
-		log.Fatalf("Failed to get master status: %v", conn.Err)
+		log.Warnf("Couldn't get master position: %v", conn.Err)
 	}
 	for _, row := range master.Values {
 		masterlog = string(row[0].AsString())
@@ -416,7 +420,7 @@ func write_snapshot_info(conn *DBConnection, file *os.File) {
 		} else {
 			mdb = conn.Execute("SELECT @@gtid_binlog_pos")
 			if conn.Err != nil {
-				log.Fatalf("Failed to get master gtid pos: %v", conn.Err)
+				log.Criticalf("Failed to get master gtid pos: %v", conn.Err)
 			}
 			for _, row = range mdb.Values {
 				mastergtid = Remove_new_line(string(row[0].AsString()))
@@ -611,7 +615,7 @@ func working_thread(td *thread_data, thread_id uint) {
 	if !SkipTz {
 		_ = td.thrconn.Execute("/*!40103 SET TIME_ZONE='+00:00' */")
 		if td.thrconn.Err != nil {
-			log.Fatalf("Failed to set time zone: %v", td.thrconn.Err)
+			log.Criticalf("Failed to set time zone: %v", td.thrconn.Err)
 		}
 	}
 
@@ -619,7 +623,7 @@ func working_thread(td *thread_data, thread_id uint) {
 		if UseSavepoints {
 			_ = td.thrconn.Execute("SET SQL_LOG_BIN = 0")
 			if td.thrconn.Err != nil {
-				log.Fatalf("Failed to disable binlog for the thread: %v", td.thrconn.Err)
+				log.Criticalf("Failed to disable binlog for the thread: %v", td.thrconn.Err)
 			}
 		}
 		initialize_consistent_snapshot(td)
@@ -674,7 +678,7 @@ func working_thread(td *thread_data, thread_id uint) {
 	if UseSavepoints && td.table_name != "" {
 		_ = td.thrconn.Execute(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", MYDUMPER))
 		if td.thrconn.Err != nil {
-			log.Fatalf("Rollback to savepoint failed: %v", td.thrconn.Err)
+			log.Criticalf("Rollback to savepoint failed: %v", td.thrconn.Err)
 		}
 	}
 	process_queue(td.conf.post_data_queue, td, false, nil)
@@ -698,7 +702,7 @@ func get_insertable_fields(conn *DBConnection, database string, table string) st
 	query = fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' and `extra` not like '%%VIRTUAL GENERATED%%' and extra not like '%%STORED GENERATED%%'", database, table)
 	res = conn.Execute(query)
 	if conn.Err != nil {
-		log.Fatalf("get insertable field fail:%v", conn.Err)
+		log.Criticalf("get insertable field fail:%v", conn.Err)
 	}
 	var first = true
 	for _, row := range res.Values {
@@ -721,7 +725,7 @@ func has_json_fields(conn *DBConnection, database string, table string) bool {
 	query = fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' and COLUMN_TYPE ='json'", database, table)
 	res = conn.Execute(query)
 	if conn.Err != nil {
-		log.Fatalf("query [%s] fail:%v", query, conn.Err)
+		log.Criticalf("query [%s] fail:%v", query, conn.Err)
 	}
 	if len(res.Values) == 0 {
 		return false
@@ -990,15 +994,14 @@ func determine_if_schema_is_elected_to_dump_post(conn *DBConnection, database *d
 	var query string
 	var result *mysql.Result
 	if DumpRoutines {
-		if nroutines < 0 {
-			log.Fatalf("nroutines value error")
-		}
+		G_assert(nroutines > 0)
 		var r uint
 		for r = 0; r < nroutines; r++ {
 			query = fmt.Sprintf("SHOW %s STATUS WHERE CAST(Db AS BINARY) = '%s'", routine_type[r], database.escaped)
 			result = conn.Execute(query)
 			if conn.Err != nil {
-				log.Errorf("Error showing procedure on: %s - Could not execute query: %v", database.name, conn.Err)
+				log.Criticalf("Error showing procedure on: %s - Could not execute query: %v", database.name, conn.Err)
+				errors++
 				return false
 			}
 			for _, row := range result.Values {
@@ -1016,7 +1019,8 @@ func determine_if_schema_is_elected_to_dump_post(conn *DBConnection, database *d
 			query = fmt.Sprintf("SHOW EVENTS FROM %s%s%s", Identifier_quote_character_str, database.name, Identifier_quote_character_str)
 			result = conn.Execute(query)
 			if conn.Err != nil {
-				log.Errorf("Error showing function on: %s - Could not execute query: %v", database.name, conn.Err)
+				log.Criticalf("Error showing events on: %s - Could not execute query: %v", database.name, conn.Err)
+				errors++
 				return false
 			}
 			for _, row := range result.Values {
@@ -1038,12 +1042,15 @@ func dump_database_thread(conn *DBConnection, conf *configuration, database *dat
 	var query = fmt.Sprintf("SHOW TABLE STATUS")
 	var result *mysql.Result
 	if !conn.UseDB(database.name) {
-		log.Errorf("Could not select database: %s (%v)", database.name, conn.Err)
+		log.Criticalf("Could not select database: %s (%v)", database.name, conn.Err)
+		errors++
 		return
 	}
 	result = conn.Execute(query)
 	if conn.Err != nil {
-		log.Errorf("Error showing table on: %s - Could not execute query: %v", database.name, conn.Err)
+		log.Criticalf("Error showing table on: %s - Could not execute query: %v", database.name, conn.Err)
+		errors++
+		return
 	}
 
 	var ecol int = -1
@@ -1052,7 +1059,8 @@ func dump_database_thread(conn *DBConnection, conf *configuration, database *dat
 	var rowscol int = 0
 	determine_show_table_status_columns(result.Fields, &ecol, &ccol, &collcol, &rowscol)
 	if len(result.Values) == 0 {
-		log.Errorf("Could not list tables for %s", database.name)
+		log.Criticalf("Could not list tables for %s", database.name)
+		errors++
 		return
 	}
 

@@ -1,8 +1,8 @@
 package myloader
 
 import (
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"sync"
 	"time"
 )

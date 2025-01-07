@@ -2,9 +2,9 @@ package mydumper
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"strings"
 )
 
@@ -99,7 +99,7 @@ func daemon_entries() {
 
 func chunks_entries() {
 	// chunks
-	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 0, "Maximum number of threads per table to use")
+	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 4, "Maximum number of threads per table to use")
 	pflag.UintVar(&CharDeep, "char-deep", 0, "Defines the amount of characters to use when the primary key is a string")
 	pflag.UintVar(&CharChunk, "char-chunk", 0, "Defines in how many pieces should split the table. By default we use the amount of threads")
 	pflag.StringVarP(&RowsPerChunk, "rows", "r", "", "Spliting tables into chunks of this many rows. It can be MIN:START_AT:MAX. MAX can be 0 which means that there is no limit. It will double the chunk size if query takes less than 1 second and half of the size if it is more than 2 seconds")
@@ -214,7 +214,7 @@ func arguments_callback() bool {
 			rows_file_extension = DAT
 			output_format = CLICKHOUSE
 		} else {
-			log.Fatalf("Unknown output format %s", OutputFormat)
+			log.Criticalf("Unknown output format %s", OutputFormat)
 		}
 	}
 	return Common_arguments_callback()

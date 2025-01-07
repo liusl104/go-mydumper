@@ -2,8 +2,8 @@ package myloader
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"os/signal"
 	"strings"
@@ -142,7 +142,7 @@ func free_schema_restore_job(srj *schema_restore_job) {
 
 func overwrite_table_message(m string, a ...any) {
 	if OverwriteUnsafe {
-		log.Fatalf(m, a...)
+		log.Criticalf(m, a...)
 	} else {
 		log.Warnf(m, a...)
 	}
@@ -150,13 +150,17 @@ func overwrite_table_message(m string, a ...any) {
 
 func overwrite_table(td *thread_data, dbt *db_table) bool {
 	var truncate_or_delete_failed bool
-	var data *GString = new(GString)
+	var data *GString = G_string_new("")
 	var q = Identifier_quote_character
 	if purge_mode == DROP {
 		log.Infof("Dropping table or view (if exists) %s.%s", dbt.database.real_database, dbt.real_table)
 		G_string_printf(data, "DROP TABLE IF EXISTS %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
 		if restore_data_in_gstring_extended(td, data, true, dbt.database, overwrite_table_message, "Drop table %s.%s failed", dbt.database.real_database, dbt.real_table) != 0 {
 			truncate_or_delete_failed = true
+		}
+		G_string_printf(data, "DROP VIEW IF EXISTS %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
+		if restore_data_in_gstring(td, data, true, dbt.database) != 0 {
+			log.Critical("Drop view failed")
 		}
 	} else if purge_mode == TRUNCATE {
 		log.Infof("Truncating table %s.%s", dbt.database.real_database, dbt.real_table)
@@ -307,7 +311,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					if purge_mode == FAIL {
 						log.Errorf("Thread %d: issue restoring %s", td.thread_id, rj.filename)
 					} else {
-						log.Fatalf("Thread %d: issue restoring %s", td.thread_id, rj.filename)
+						log.Criticalf("Thread %d: issue restoring %s", td.thread_id, rj.filename)
 					}
 				} else {
 					get_total_created(td.conf, &total)
@@ -329,7 +333,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 			progress_mutex.Unlock()
 			if restore_data_from_file(td, rj.filename, false, dbt.database) > 0 {
 				atomic.AddUint64(&detailed_errors.data_errors, 1)
-				log.Fatalf("Thread : issue restoring %s", rj.filename)
+				log.Criticalf("Thread : issue restoring %s", rj.filename)
 			}
 		}
 		G_atomic_int_dec_and_test(&(dbt.remaining_jobs))
@@ -361,7 +365,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 		break
 
 	default:
-		log.Fatalf("Something very bad happened!")
+		log.Critical("Something very bad happened!")
 	}
 	td.status = COMPLETED
 	return false
@@ -440,7 +444,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	outfile.Close()
 	err = os.Rename(p, p2)
 	if err != nil {
-		log.Fatalf("Error renaming resume.partial to resume")
+		log.Criticalf("Error renaming resume.partial to resume")
 	}
 	log.Infof("Shutting down gracefully completed.")
 	shutdown_triggered_mutex.Unlock()

@@ -21,7 +21,6 @@ var (
 	main_connection                *DBConnection
 	Key_file                       *ini.File
 	Tables                         []string
-	set_names_str                  string
 	Set_names_statement            string
 	Identifier_quote_character     = BACKTICK
 	Identifier_quote_character_str = "`"

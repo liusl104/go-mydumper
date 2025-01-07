@@ -4,9 +4,9 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"strings"
 	"sync"
@@ -24,8 +24,8 @@ const (
 )
 
 var (
-	innodb_optimize_keys            bool
-	innodb_optimize_keys_per_table  bool
+	innodb_optimize_keys            bool = true
+	innodb_optimize_keys_per_table  bool = true
 	innodb_optimize_keys_all_tables bool
 	quote_character_cli             bool
 	directory                       string
@@ -594,7 +594,7 @@ func print_help() {
 	Print_bool("overwrite-unsafe", OverwriteUnsafe)
 	Print_uint("retry-count", RetryCount)
 	Print_bool("serialized-table-creation", SerialTblCreation)
-	Print_string("stream", Stream)
+	Print_bool("stream", Stream != "")
 
 	Print_uint("max-threads-per-table", MaxThreadsPerTable)
 	Print_uint("max-threads-for-index-creation", MaxThreadsForIndexCreation)
@@ -619,7 +619,7 @@ func print_help() {
 	Print_bool("resume", Resume)
 	Print_uint("threads", NumThreads)
 	Print_bool("version", ProgramVersion)
-	Print_uint("verbose", Verbose)
+	Print_bool("verbose", Verbose != 0)
 	Print_bool("debug", Debug)
 	Print_string("defaults-file", DefaultsFile)
 	Print_string("defaults-extra-file", DefaultsExtraFile)

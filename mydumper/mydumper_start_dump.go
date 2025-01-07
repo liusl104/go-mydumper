@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/shirou/gopsutil/disk"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"os/signal"
 	"path"
@@ -440,7 +440,7 @@ func is_disk_space_ok(val uint) bool {
 	// 获取分区使用情况
 	usage, err := disk.Usage(mountPoint)
 	if err != nil {
-		log.Fatalf("Error getting disk usage: %v", err)
+		log.Criticalf("Error getting disk usage: %v", err)
 	}
 	return usage.Free/1024/1024 > uint64(val)
 }
@@ -594,10 +594,10 @@ func detect_sql_mode(conn *DBConnection) {
 	var query = "SELECT @@SQL_MODE"
 	res = conn.Execute(query)
 	if conn.Err != nil {
-		log.Fatalf("Error getting SQL_MODE: %v", conn.Err)
+		log.Critical("Error getting SQL_MODE: %v", conn.Err)
 	}
 	if len(res.Values) == 0 {
-		log.Fatalf("Error getting SQL_MODE")
+		log.Critical("Error getting SQL_MODE")
 	}
 	var str string
 	for _, row = range res.Values {
@@ -667,7 +667,7 @@ func create_main_connection() (conn *DBConnection) {
 	case SERVER_TYPE_CLICKHOUSE:
 		DataChecksums = false
 	default:
-		log.Fatalf("Cannot detect server type")
+		log.Criticalf("Cannot detect server type")
 	}
 	log.Infof("Connected to %s %d.%d.%d", Get_product_name(), Get_major(), Get_secondary(), Get_revision())
 	return conn
@@ -719,7 +719,7 @@ func long_query_wait(conn *DBConnection) {
 				}
 			}
 			if tcol < 0 || ccol < 0 || icol < 0 {
-				log.Fatalf("Error obtaining information from processlist")
+				log.Critical("Error obtaining information from processlist")
 			}
 			for _, row := range res.Values {
 				if string(row[ccol].AsString()) == "Query" || strings.Contains(string(row[ccol].AsString()), "Dump") {
@@ -747,7 +747,7 @@ func long_query_wait(conn *DBConnection) {
 				break
 			} else {
 				if LongqueryRetries == 0 {
-					log.Fatalf("There are queries in PROCESSLIST running longer than %ds, aborting dump, use --long-query-guard to change the guard value, kill queries (--kill-long-queries) or use different server for dump", Longquery)
+					log.Criticalf("There are queries in PROCESSLIST running longer than %ds, aborting dump, use --long-query-guard to change the guard value, kill queries (--kill-long-queries) or use different server for dump", Longquery)
 				}
 				LongqueryRetries--
 				log.Warnf("There are queries in PROCESSLIST running longer than %ds, retrying in %d seconds (%d left).", Longquery, LongqueryRetryInterval, LongqueryRetries)
@@ -770,36 +770,41 @@ func mysql_query_verbose(conn *DBConnection, q string) error {
 func send_backup_stage_on_block_commit(conn *DBConnection) {
 	err := mysql_query_verbose(conn, "BACKUP STAGE BLOCK_COMMIT")
 	if err != nil {
-		log.Fatalf("Couldn't acquire BACKUP STAGE BLOCK_COMMIT: %v", err)
+		log.Criticalf("Couldn't acquire BACKUP STAGE BLOCK_COMMIT: %v", err)
+		errors++
 	}
 }
 
 func send_mariadb_backup_locks(conn *DBConnection) {
 	err := mysql_query_verbose(conn, "BACKUP STAGE START")
 	if err != nil {
-		log.Fatalf("Couldn't acquire BACKUP STAGE START: %v", err)
+		log.Criticalf("Couldn't acquire BACKUP STAGE START: %v", err)
 	}
 	err = mysql_query_verbose(conn, "BACKUP STAGE BLOCK_DDL")
 	if err != nil {
-		log.Fatalf("Couldn't acquire BACKUP STAGE BLOCK_DDL: %v", err)
+		log.Criticalf("Couldn't acquire BACKUP STAGE BLOCK_DDL: %v", err)
+		errors++
 	}
 }
 
 func send_percona57_backup_locks(conn *DBConnection) {
 	err := mysql_query_verbose(conn, "LOCK TABLES FOR BACKUP")
 	if err != nil {
-		log.Fatalf("Couldn't acquire LOCK TABLES FOR BACKUP, snapshots will not be consistent: %v", err)
+		log.Criticalf("Couldn't acquire LOCK TABLES FOR BACKUP, snapshots will not be consistent: %v", err)
+		errors++
 	}
 	err = mysql_query_verbose(conn, "LOCK BINLOG FOR BACKUP")
 	if err != nil {
-		log.Fatalf("Couldn't acquire LOCK BINLOG FOR BACKUP, snapshots will not be consistent: %v", err)
+		log.Criticalf("Couldn't acquire LOCK BINLOG FOR BACKUP, snapshots will not be consistent: %v", err)
+		errors++
 	}
 }
 
 func send_ddl_lock_instance_backup(conn *DBConnection) {
 	err := mysql_query_verbose(conn, "LOCK INSTANCE FOR BACKUP")
 	if err != nil {
-		log.Fatalf("Couldn't acquire LOCK INSTANCE FOR BACKUP: %v", err)
+		log.Criticalf("Couldn't acquire LOCK INSTANCE FOR BACKUP: %v", err)
+		errors++
 	}
 }
 
@@ -828,7 +833,8 @@ func send_flush_table_with_read_lock(conn *DBConnection) {
 	log.Infof("Acquiring FTWRL")
 	err = mysql_query_verbose(conn, "FLUSH TABLES WITH READ LOCK")
 	if err != nil {
-		log.Fatalf("Couldn't acquire global lock, snapshots will not be consistent: %v", err)
+		log.Criticalf("Couldn't acquire global lock, snapshots will not be consistent: %v", err)
+		errors++
 	}
 }
 
@@ -928,7 +934,7 @@ func print_dbt_on_metadata(mdfile *os.File, dbt *DB_Table) {
 	fmt.Fprintf(mdfile, data)
 	mdfile.Sync()
 	if CheckRowCount && (dbt.rows != dbt.rows_total) {
-		log.Fatalf("Row count mismatch found for %s.%s: got %d of %d expected", dbt.database.name, dbt.table, dbt.rows, dbt.rows_total)
+		log.Criticalf("Row count mismatch found for %s.%s: got %d of %d expected", dbt.database.name, dbt.table, dbt.rows, dbt.rows_total)
 	}
 
 }
@@ -951,7 +957,9 @@ func send_lock_all_tables(conn *DBConnection) {
 			query = fmt.Sprintf("SHOW TABLES IN %s LIKE '%s'", dt[0], dt[1])
 			res = conn.Execute(query)
 			if conn.Err != nil {
-				log.Fatalf("Error showing tables in: %s - Could not execute query: %v", dt[0], conn.Err)
+				log.Errorf("Error showing tables in: %s - Could not execute query: %v", dt[0], conn.Err)
+				errors++
+				return
 			} else {
 				for _, row := range res.Values {
 					if TablesSkiplistFile != "" && Check_skiplist(dt[0], string(row[0].AsString())) {
@@ -984,7 +992,8 @@ func send_lock_all_tables(conn *DBConnection) {
 		}
 		res = conn.Execute(query)
 		if conn.Err != nil {
-			log.Fatalf("Couldn't get table list for lock all tables: %v", conn.Err)
+			log.Criticalf("Couldn't get table list for lock all tables: %v", conn.Err)
+			errors++
 		} else {
 			for _, row := range res.Values {
 				if TablesSkiplistFile != "" && Check_skiplist(string(row[0].AsString()), string(row[1].AsString())) {
@@ -1006,7 +1015,8 @@ func send_lock_all_tables(conn *DBConnection) {
 	if len(tables_lock) > 0 {
 		res = conn.Execute(query)
 		if conn.Err != nil {
-			log.Fatalf("Couldn't get table list for lock all tables: %v", conn.Err)
+			log.Criticalf("Couldn't get table list for lock all tables: %v", conn.Err)
+			errors++
 		} else {
 			for _, row := range res.Values {
 				lock = true
@@ -1071,7 +1081,7 @@ func send_lock_all_tables(conn *DBConnection) {
 			retry += 1
 		}
 		if !success {
-			log.Fatalf("Lock all tables fail: %v", conn.Err)
+			log.Criticalf("Lock all tables fail: %v", conn.Err)
 		}
 	} else {
 		log.Warnf("No table found to lock")
@@ -1210,7 +1220,7 @@ func StartDump() error {
 		go signal_thread(conf)
 		time.Sleep(10 * time.Microsecond)
 		if sthread == nil {
-			log.Fatalf("Could not create signal threads")
+			log.Critical("Could not create signal threads")
 		}
 	}
 	if pmm {
@@ -1218,7 +1228,7 @@ func StartDump() error {
 		pmmthread = G_thread_new("pmm_thread", new(sync.WaitGroup), 0)
 		go pmm_thread(conf)
 		if pmmthread == nil {
-			log.Fatalf("Could not create pmm thread")
+			log.Critical("Could not create pmm thread")
 		}
 	}
 	if Stream != "" {
@@ -1230,13 +1240,13 @@ func StartDump() error {
 
 	mdfile, err := os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
 	if err != nil {
-		log.Fatalf("Couldn't write metadata file %s (%v)", metadata_partial_filename, err)
+		log.Criticalf("Couldn't write metadata file %s (%v)", metadata_partial_filename, err)
 	}
 	if UpdatedSince > 0 {
 		u = fmt.Sprintf("%s/not_updated_tables", dump_directory)
 		nufile, err = os.OpenFile(u, os.O_CREATE|os.O_WRONLY, 0660)
 		if err != nil {
-			log.Fatalf("Couldn't write not_updated_tables file (%v)", err)
+			log.Criticalf("Couldn't write not_updated_tables file (%v)", err)
 		}
 		get_not_updated(conn, nufile)
 	}
@@ -1264,7 +1274,7 @@ func StartDump() error {
 		fmt.Fprintf(mdfile, "\nSQL_MODE=%s \n\n", Sql_mode)
 		mdfile.Sync()
 	} else {
-		log.Fatalf("--identifier-quote-character not is %s or %s", BACKTICK, DOUBLE_QUOTE)
+		log.Criticalf("--identifier-quote-character not is %s or %s", BACKTICK, DOUBLE_QUOTE)
 	}
 	if Stream != "" {
 		initialize_stream()
@@ -1273,7 +1283,7 @@ func StartDump() error {
 		metadata_partial_filename = fmt.Sprintf("%s/metadata.partial", dump_directory)
 		mdfile, err = os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
 		if err != nil {
-			log.Fatalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
+			log.Criticalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
 		}
 	}
 	if Detected_server == SERVER_TYPE_TIDB {
@@ -1319,7 +1329,7 @@ func StartDump() error {
 	}
 
 	// TODO: this should be deleted on future releases.
-	server_version = Mysql_get_server_version(conn)
+	server_version = Mysql_get_server_version()
 	if server_version < 40108 {
 		conn.Execute("CREATE TABLE IF NOT EXISTS mysql.mydumperdummy (a INT) ENGINE=INNODB")
 		need_dummy_read = true
@@ -1373,7 +1383,7 @@ func StartDump() error {
 		innodb_table != nil && non_innodb_table != nil {
 		log.Debugf("variables ok")
 	} else {
-		log.Fatalf("check variables fail")
+		log.Critical("check variables fail")
 	}
 	conf.innodb.request_chunk = give_me_another_innodb_chunk_step_queue
 	conf.innodb.table_list = innodb_table
@@ -1631,7 +1641,7 @@ func StartDump() error {
 		if No_delete == false && OutputDirectoryParam == "" {
 			err = os.RemoveAll(output_directory)
 			if err != nil {
-				log.Errorf("Backup directory not removed: %s", output_directory)
+				log.Criticalf("Backup directory not removed: %s", output_directory)
 			}
 		}
 	}

@@ -299,6 +299,6 @@ func Ask_password() {
 	}
 }
 
-func Mysql_get_server_version(conn *DBConnection) uint {
-	return 0
+func Mysql_get_server_version() uint {
+	return uint(Get_major()*10000 + Get_revision()*100 + Get_secondary())
 }

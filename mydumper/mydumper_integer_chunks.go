@@ -3,8 +3,8 @@ package mydumper
 import (
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"math"
 	"sync/atomic"
 	"time"

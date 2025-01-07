@@ -3,8 +3,8 @@ package mydumper
 import (
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"strings"
 	"sync"
@@ -71,17 +71,6 @@ func initialize_jobs() {
 	if IgnoreGeneratedFields {
 		log.Warnf("Queries related to generated fields are not going to be executed. It will lead to restoration issues if you have generated columns")
 	}
-	/*if o.Exec.Exec_per_thread_extension != "" {
-		if o.Exec.Exec_per_thread == "" {
-			log.Fatalf("--exec-per-thread needs to be set when --exec-per-thread-extension (%s) is used", o.Exec.Exec_per_thread_extension)
-		}
-	}*/
-	/*if o.Exec.Exec_per_thread != "" {
-		if o.Exec.Exec_per_thread[0] != '/' {
-			log.Fatalf("Absolute path is only allowed when --exec-per-thread is used")
-		}
-		exec_per_thread_cmd = strings.Split(o.Exec.Exec_per_thread, " ")
-	}*/
 }
 
 func write_checksum_into_file(conn *DBConnection, database *database, table string, fun checksum_fun) string {
@@ -114,7 +103,8 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: Could not create output file %s (%v)", filename, err)
+		log.Criticalf("Error: Could not create output file %s (%v)", filename, err)
+		errors++
 		return
 	}
 	query = get_tablespace_query()
@@ -128,7 +118,8 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping create tablespace: %v", err)
 		} else {
-			log.Fatalf("Error dumping create tablespace: %v", err)
+			log.Criticalf("Error dumping create tablespace: %v", err)
+			errors++
 			return
 		}
 	}
@@ -138,7 +129,8 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 	for _, row := range result.Values {
 		G_string_append_printf(statement, fmt.Sprintf("CREATE TABLESPACE %s%s%s ADD DATAFILE '%s' FILE_BLOCK_SIZE = %s ENGINE=INNODB;\n", q, row[0].AsString(), q, row[1].AsString(), row[2].AsString()))
 		if !write_data(outfile, statement) {
-			log.Fatalf("Could not write tablespace data for %s", row[0].AsString())
+			log.Criticalf("Could not write tablespace data for %s", row[0].AsString())
+			errors++
 			return
 		}
 		G_string_set_size(statement, 0)
@@ -152,8 +144,8 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
+		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
 		errors++
-		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
 		return
 	}
 	var statement = G_string_sized_new(StatementSize)
@@ -166,18 +158,20 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping create database (%s): %v", database.name, err)
 		} else {
-			log.Fatalf("Error dumping create database (%s): %v", database.name, err)
+			log.Criticalf("Error dumping create database (%s): %v", database.name, err)
 		}
 	}
 	for _, row := range result.Values {
 		if !strings.Contains(string(row[1].AsString()), Identifier_quote_character_str) {
-			log.Fatalf("Identifier quote [%s] not found when fetching %s", Identifier_quote_character_str, database.name)
+			log.Criticalf("Identifier quote [%s] not found when fetching %s", Identifier_quote_character_str, database.name)
+			errors++
 		}
 		G_string_append(statement, string(row[1].AsString()))
 		G_string_append(statement, ";\n")
 	}
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write create database for %s", database.name)
+		log.Criticalf("Could not write create database for %s", database.name)
+		errors++
 	}
 	err = m_close(0, outfile, filename, 1, nil)
 	if SchemaChecksums {
@@ -192,7 +186,9 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
+		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
+		errors++
+		return
 	}
 
 	var q = Identifier_quote_character
@@ -201,7 +197,9 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 	initialize_sql_statement(statement)
 
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		errors++
+		return
 	}
 	query = fmt.Sprintf("SHOW CREATE TABLE %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
 	result := conn.Execute(query)
@@ -209,7 +207,9 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
 		} else {
-			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
+			log.Criticalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
+			errors++
+			return
 		}
 	}
 	G_string_set_size(statement, 0)
@@ -231,7 +231,8 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 		var create_table_statement = G_string_sized_new(StatementSize)
 		Global_process_create_table_statement(statement, create_table_statement, alter_table_statement, alter_table_constraint_statement, dbt.table, true)
 		if !write_data(outfile, create_table_statement) {
-			log.Errorf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+			log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+			errors++
 		}
 		if !SkipIndexes {
 			write_data(outfile, alter_table_statement)
@@ -241,7 +242,7 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 		}
 	} else {
 		if !write_data(outfile, statement) {
-			log.Errorf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+			log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
 			errors++
 		}
 	}
@@ -264,20 +265,25 @@ func write_triggers_definition_into_file(conn *DBConnection, result *mysql.Resul
 	var splited_st []string
 	initialize_sql_statement(statement)
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write triggers for %s", message)
+		log.Criticalf("Could not write triggers for %s", message)
+		errors++
+		return
 	}
 
 	for _, row := range result.Values {
 		set_charset(statement, row[8].AsString(), row[9].AsString())
 		if !write_data(outfile, statement) {
-			log.Fatalf("Could not write triggers data for %s", message)
+			log.Criticalf("Could not write triggers data for %s", message)
+			errors++
 			return
 		}
 		G_string_set_size(statement, 0)
 		query = fmt.Sprintf("SHOW CREATE TRIGGER %s%s%s.%s%s%s", q, database.name, q, q, row[0].AsString(), q)
 		result2 = conn.Execute(query)
-		if err != nil {
-			log.Fatalf("show create trigger fail:%v", err)
+		if conn.Err != nil {
+			log.Criticalf("show create trigger fail:%v", conn.Err)
+			errors++
+			return
 		}
 		row2 := result2.Values[0]
 		var create string = string(row2[2].AsString())
@@ -291,7 +297,7 @@ func write_triggers_definition_into_file(conn *DBConnection, result *mysql.Resul
 		G_string_append(statement, ";\n")
 		restore_charset(statement)
 		if !write_data(outfile, statement) {
-			log.Fatalf("Could not write triggers data for %s", message)
+			log.Criticalf("Could not write triggers data for %s", message)
 			errors++
 			return
 		}
@@ -307,7 +313,8 @@ func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *DB_Ta
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
+		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
+		errors++
 		return
 	}
 	var q = Identifier_quote_character
@@ -317,9 +324,10 @@ func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *DB_Ta
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping triggers (%s.%s): %v", dbt.database.name, dbt.table, err)
 		} else {
-			log.Fatalf("Error dumping triggers (%s.%s): %v", dbt.database.name, dbt.table, err)
-			return
+			log.Criticalf("Error dumping triggers (%s.%s): %v", dbt.database.name, dbt.table, err)
+			errors++
 		}
+		return
 	}
 	message := fmt.Sprintf("%s.%s", dbt.database.name, dbt.table)
 	write_triggers_definition_into_file(conn, result, dbt.database, message, outfile)
@@ -338,7 +346,9 @@ func write_triggers_definition_into_file_from_database(conn *DBConnection, datab
 	var q = Identifier_quote_character
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
+		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
+		errors++
+		return
 	}
 	query = fmt.Sprintf("SHOW TRIGGERS FROM %s%s%s", q, database.name, q)
 	result = conn.Execute(query)
@@ -346,7 +356,8 @@ func write_triggers_definition_into_file_from_database(conn *DBConnection, datab
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping triggers (%s): %v", database.name, err)
 		} else {
-			log.Fatalf("Error dumping triggers (%s): %v", database.name, err)
+			log.Criticalf("Error dumping triggers (%s): %v", database.name, err)
+			errors++
 		}
 	}
 	write_triggers_definition_into_file(conn, result, database, database.name, outfile)
@@ -366,15 +377,21 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 	var q = Identifier_quote_character
 	initialize_sql_statement(statement)
 	if !conn.UseDB(dbt.database.name) {
-		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, conn.Err)
+		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, conn.Err)
+		errors++
+		return
 	}
 	outfile, err = m_open(&filename, "w")
 	if outfile == nil {
-		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, nil)
+		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, nil)
+		errors++
+		return
 	}
 
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		errors++
+		return
 	}
 	query = fmt.Sprintf("SHOW FIELDS FROM %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
 	result = conn.Execute(query)
@@ -382,8 +399,10 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
 		} else {
-			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			log.Criticalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			errors++
 		}
+		return
 	}
 	G_string_set_size(statement, 0)
 	G_string_append_printf(statement, "CREATE TABLE IF NOT EXISTS %s%s%s(\n", q, dbt.table, q)
@@ -397,7 +416,8 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 	}
 	G_string_append(statement, "\n) ENGINE=MEMORY ENCRYPTION='N';\n")
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write view schema for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write view schema for %s.%s", dbt.database.name, dbt.table)
+		errors++
 	}
 	query = fmt.Sprintf("SHOW CREATE VIEW %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
 	result = conn.Execute(query)
@@ -405,22 +425,28 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
 		} else {
-			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			log.Criticalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			errors++
 		}
+		return
 	}
 	m_close(0, outfile, filename, 1, dbt)
 	G_string_set_size(statement, 0)
 	var outfile2 *file_write
 	outfile2, err = m_open(&filename2, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
+		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
+		errors++
+		return
 	}
 	initialize_sql_statement(statement)
 
 	G_string_append_printf(statement, "DROP TABLE IF EXISTS %s%s%s;\n", q, dbt.table, q)
 	G_string_append_printf(statement, "DROP VIEW IF EXISTS %s%s%s;\n", q, dbt.table, q)
 	if !write_data(outfile2, statement) {
-		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		errors++
+		return
 	}
 	G_string_set_size(statement, 0)
 	row := result.Values[0]
@@ -433,7 +459,8 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 	G_string_append(statement, ";\n")
 	restore_charset(statement)
 	if !write_data(outfile2, statement) {
-		log.Fatalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+		errors++
 	}
 	err = m_close(0, outfile2, filename2, 1, dbt)
 	if checksum_filename {
@@ -454,26 +481,29 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *DB_Table, file
 
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
+		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
+		errors++
 		return
 	}
 
 	G_string_append_printf(statement, "DROP TABLE IF EXISTS %s%s%s;\n", q, dbt.table, q)
 	G_string_append_printf(statement, "DROP VIEW IF EXISTS %s%s%s;\n", q, dbt.table, q)
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
+		errors++
+		return
 	}
-	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
-	}
+
 	query = fmt.Sprintf("SHOW CREATE SEQUENCE %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
 	result = conn.Execute(query)
 	if conn.Err != nil {
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
 		} else {
-			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			log.Criticalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, conn.Err)
+			errors++
 		}
+		return
 	}
 	G_string_set_size(statement, 0)
 	for _, row := range result.Values {
@@ -485,7 +515,8 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *DB_Table, file
 	}
 	G_string_append(statement, ";\n")
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema for %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
+		log.Criticalf("Could not write schema for %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
+		errors++
 	}
 	query = fmt.Sprintf("SELECT next_not_cached_value FROM %s%s%s.%s%s%s", q, dbt.database.name, q, q, dbt.table, q)
 	result = conn.Execute(query)
@@ -493,15 +524,18 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *DB_Table, file
 		if SuccessOn1146 && conn.Code == 1146 {
 			log.Warnf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
 		} else {
-			log.Fatalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
+			log.Criticalf("Error dumping schemas (%s.%s): %v", dbt.database.name, dbt.table, err)
+			errors++
 		}
+		return
 	}
 	G_string_set_size(statement, 0)
 	for _, row := range result.Values {
 		G_string_printf(statement, "DO SETVAL(%s%s%s, %s, 0);\n", q, dbt.table, q, row[0].AsString())
 	}
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+		log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
+		errors++
 	}
 	err = m_close(0, outfile, filename, 1, dbt)
 	if checksum_filename {
@@ -519,13 +553,17 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
-		log.Fatalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
+		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
+		errors++
+		return
 	}
 	var statement = G_string_sized_new(StatementSize)
 	var q = Identifier_quote_character
 	initialize_sql_statement(statement)
 	if !write_data(outfile, statement) {
-		log.Fatalf("Could not write %s", filename)
+		log.Criticalf("Could not write %s", filename)
+		errors++
+		return
 	}
 	var charcol, collcol uint
 	if DumpRoutines {
@@ -534,12 +572,14 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 		for r = 0; r < nroutines; r++ {
 			query = fmt.Sprintf("SHOW %s STATUS WHERE CAST(Db AS BINARY) = '%s'", routine_type[r], database.escaped)
 			result = conn.Execute(query)
-			if err != nil {
+			if conn.Err != nil {
 				if SuccessOn1146 && conn.Code == 1146 {
-					log.Warnf("Error dumping functions from %s: %v", database.escaped, err)
+					log.Warnf("Error dumping functions from %s: %v", database.escaped, conn.Err)
 				} else {
-					log.Fatalf("Error dumping functions from %s: %v", database.escaped, err)
+					log.Criticalf("Error dumping functions from %s: %v", database.escaped, conn.Err)
+					errors++
 				}
+				return
 			}
 			determine_charset_and_coll_columns_from_show(result, &charcol, &collcol)
 
@@ -547,7 +587,9 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 				set_charset(statement, row[charcol].AsString(), row[collcol].AsString())
 				G_string_append_printf(statement, "DROP %s IF EXISTS %s%s%s;\n", routine_type[r], q, row[1].AsString(), q)
 				if !write_data(outfile, statement) {
-					log.Fatalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
+					log.Criticalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
+					errors++
+					return
 				}
 				G_string_set_size(statement, 0)
 				query = fmt.Sprintf("SHOW CREATE %s %s%s%s.%s%s%s", routine_type[r], q, database.name, q, q, row[1].AsString(), q)
@@ -562,7 +604,9 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 					G_string_append(statement, ";\n")
 					restore_charset(statement)
 					if !write_data(outfile, statement) {
-						log.Fatalf("Could not write function data for %s.%s", database.name, row[1].AsString())
+						log.Criticalf("Could not write function data for %s.%s", database.name, row[1].AsString())
+						errors++
+						return
 					}
 				}
 				G_string_set_size(statement, 0)
@@ -577,19 +621,23 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 	if DumpEvents {
 		query = fmt.Sprintf("SHOW EVENTS FROM %s%s%s", q, database.name, q)
 		result = conn.Execute(query)
-		if err != nil {
+		if conn.Err != nil {
 			if SuccessOn1146 && conn.Code == 1146 {
-				log.Warnf("Error dumping events from %s: %v", database.name, err)
+				log.Warnf("Error dumping events from %s: %v", database.name, conn.Err)
 			} else {
-				log.Fatalf("Error dumping events from %s: %v", database.name, err)
+				log.Criticalf("Error dumping events from %s: %v", database.name, conn.Err)
+				errors++
 			}
+			return
 		}
 		determine_charset_and_coll_columns_from_show(result, &charcol, &collcol)
 		for _, row := range result.Values {
 			set_charset(statement, row[charcol].AsString(), row[collcol].AsString())
 			G_string_append_printf(statement, "DROP EVENT IF EXISTS %s%s%s;\n", q, row[1].AsString(), q)
 			if !write_data(outfile, statement) {
-				log.Fatalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
+				log.Criticalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
+				errors++
+				return
 			}
 			query = fmt.Sprintf("SHOW CREATE EVENT %s%s%s.%s%s%s", q, database.name, q, q, row[1].AsString(), q)
 			result2 = conn.Execute(query)
@@ -603,7 +651,9 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 				G_string_append(statement, ";\n")
 				restore_charset(statement)
 				if !write_data(outfile, statement) {
-					log.Fatalf("Could not write event data for %s.%s", database.name, row[1].AsString())
+					log.Criticalf("Could not write event data for %s.%s", database.name, row[1].AsString())
+					errors++
+					return
 				}
 			}
 			G_string_set_size(statement, 0)
@@ -704,14 +754,14 @@ func do_JOB_CHECKSUM(td *thread_data, job *job) {
 	if UseSavepoints {
 		_ = td.thrconn.Execute(fmt.Sprintf("SAVEPOINT %s", MYDUMPER))
 		if td.thrconn.Err != nil {
-			log.Fatalf("Savepoint failed: %v", td.thrconn.Err)
+			log.Criticalf("Savepoint failed: %v", td.thrconn.Err)
 		}
 	}
 	tcj.dbt.data_checksum = write_checksum_into_file(td.thrconn, tcj.dbt.database, tcj.dbt.table, Checksum_table)
 	if UseSavepoints {
 		_ = td.thrconn.Execute(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", MYDUMPER))
 		if td.thrconn.Err != nil {
-			log.Fatalf("Rollback to savepoint failed: %v", td.thrconn.Err)
+			log.Criticalf("Rollback to savepoint failed: %v", td.thrconn.Err)
 		}
 	}
 	free_table_checksum_job(tcj)
@@ -775,7 +825,8 @@ func create_job_to_dump_triggers(conn *DBConnection, dbt *DB_Table, conf *config
 	query = fmt.Sprintf("SHOW TRIGGERS FROM %s%s%s LIKE '%s'", q, dbt.database.name, q, dbt.escaped_table)
 	result = conn.Execute(query)
 	if conn.Err != nil {
-		log.Fatalf("Error Checking triggers for %s.%s. Err: %v St: %s", dbt.database.name, dbt.table, conn.Err, query)
+		log.Criticalf("Error Checking triggers for %s.%s. Err: %v St: %s", dbt.database.name, dbt.table, conn.Err, query)
+		errors++
 	}
 	for _, row := range result.Values {
 		_ = row
@@ -866,14 +917,18 @@ func update_files_on_table_job(tj *table_job) bool {
 		tj.rows.filename = build_rows_filename(tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
 		tj.rows.file, err = m_open(&tj.rows.filename, "w")
 		if err != nil {
-			log.Fatalf("open file %s fail: %v", tj.rows.filename, err)
+			log.Criticalf("open file %s fail: %v", tj.rows.filename, err)
+			errors++
+			return false
 		}
 		tj.rows.file.status = 1
 		if tj.sql != nil {
 			tj.rows.filename = build_sql_filename(tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
 			tj.rows.file, err = m_open(&tj.sql.filename, "w")
 			if err != nil {
-				log.Fatalf("open file %s fail: %v", tj.sql.filename, err)
+				log.Criticalf("open file %s fail: %v", tj.sql.filename, err)
+				errors++
+				return false
 			}
 			tj.rows.file.status = 1
 			return true

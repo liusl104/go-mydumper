@@ -2,8 +2,8 @@ package mydumper
 
 import (
 	"github.com/sevlyar/go-daemon"
-	"github.com/siddontang/go-log/log"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 )
 

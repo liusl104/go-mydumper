@@ -3,8 +3,8 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -298,7 +298,9 @@ func get_database_name_from_content(filename string) string {
 	var err error
 	infile, err = myl_open(filename, os.O_RDONLY)
 	if err != nil {
-		log.Fatalf("cannot open database schema file %s (%v)", filename, err)
+		log.Criticalf("cannot open database schema file %s (%v)", filename, err)
+		errors++
+		return ""
 	}
 	var eof bool
 	var data *GString = new(GString)
@@ -341,12 +343,12 @@ func process_database_filename(filename string) {
 		if strings.HasPrefix(db_kname, "mydumper_") {
 			db_vname = get_database_name_from_content(path.Join(directory, filename))
 			if db_vname == "" {
-				log.Fatalf("It was not possible to process db content in file: %s", filename)
+				log.Criticalf("It was not possible to process db content in file: %s", filename)
 			}
 		}
 
 	} else {
-		log.Fatalf("It was not possible to process db file: %s", filename)
+		log.Criticalf("It was not possible to process db file: %s", filename)
 	}
 
 	log.Tracef("Adding database: %s -> %s", db_kname, db_vname)
@@ -365,7 +367,7 @@ func process_table_filename(filename string) bool {
 	var dbt *db_table
 	get_database_table_name_from_filename(filename, "-schema.sql", &db_name, &table_name)
 	if db_name == "" || table_name == "" {
-		log.Fatalf("It was not possible to process file: %s (1)", filename)
+		log.Criticalf("It was not possible to process file: %s (1)", filename)
 	}
 	var real_db_name *database = get_db_hash(db_name, db_name)
 	if !eval_table(real_db_name.name, table_name, conf.table_list_mutex) {
@@ -426,7 +428,7 @@ func process_metadata_global(file string) {
 		var group = groups[j]
 		if strings.HasPrefix(group, "config") {
 			if j > 0 {
-				log.Fatalf("Wrong metadata: [config] group must be first")
+				log.Critical("Wrong metadata: [config] group must be first")
 			}
 			value = get_value(kf, "config", "quote_character")
 			if value != "" {
@@ -441,7 +443,7 @@ func process_metadata_global(file string) {
 					delimiter = delim_dq
 					wrong_quote = "`"
 				} else {
-					log.Fatalf("Wrong quote_character = %s in metadata", value)
+					log.Criticalf("Wrong quote_character = %s in metadata", value)
 				}
 				log.Tracef("metadata: quote character is %v", Identifier_quote_character)
 			}
@@ -480,7 +482,7 @@ func process_metadata_global(file string) {
 					if value != "0" {
 						dbt.rows, err = strconv.ParseUint(value, 10, 64)
 						if err != nil {
-							log.Fatalf("Error parsing rows: %s", err)
+							log.Criticalf("Error parsing rows: %v", err)
 						}
 					}
 					value = get_value(kf, group, "real_table_name")
@@ -518,7 +520,7 @@ func process_schema_view_filename(filename string) bool {
 	var real_db_name *database
 	get_database_table_from_file(filename, "-schema", &db_name, &table_name)
 	if db_name == "" {
-		log.Fatalf("Database is null on: %s", filename)
+		log.Criticalf("Database is null on: %s", filename)
 	}
 	real_db_name = get_db_hash(db_name, db_name)
 	if !eval_table(real_db_name.name, table_name, conf.table_list_mutex) {
@@ -538,8 +540,7 @@ func process_schema_sequence_filename(filename string) bool {
 	var dbt *db_table
 	get_database_table_from_file(filename, "-schema-sequence", &db_name, &table_name)
 	if db_name == "" {
-		log.Errorf("Database is null on: %s", filename)
-		return false
+		log.Criticalf("Database is null on: %s", filename)
 	}
 	real_db_name = get_db_hash(db_name, db_name)
 	if real_db_name == nil {
@@ -579,7 +580,7 @@ func process_schema_filename(filename string, object string) bool {
 	var dbt *db_table
 	get_database_table_from_file(filename, "-schema", &db_name, &table_name)
 	if db_name == "" {
-		log.Fatalf("Database is null on: %s", filename)
+		log.Criticalf("Database is null on: %s", filename)
 	}
 	real_db_name = get_db_hash(db_name, db_name)
 	if table_name != "" {
@@ -624,7 +625,7 @@ func process_data_filename(filename string) bool {
 	var part, sub_part uint
 	get_database_table_part_name_from_filename(filename, &db_name, &table_name, &part, &sub_part)
 	if db_name == "" || table_name == "" {
-		log.Fatalf("It was not possible to process file: %s (3)", filename)
+		log.Criticalf("It was not possible to process file: %s (3)", filename)
 	}
 	var real_db_name *database = get_db_hash(db_name, db_name)
 	if !eval_table(real_db_name.name, table_name, conf.table_list_mutex) {
@@ -651,7 +652,7 @@ func process_checksum_filename(filename string) bool {
 	var db_name, table_name string
 	get_database_table_from_file(filename, "-", &db_name, &table_name)
 	if db_name == "" {
-		log.Fatalf("It was not possible to process file: %s (4)", filename)
+		log.Criticalf("It was not possible to process file: %s (4)", filename)
 	}
 	if table_name == "" {
 		var real_db_name = get_db_hash(db_name, db_name)

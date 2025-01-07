@@ -5,8 +5,8 @@ import (
 	"github.com/go-ini/ini"
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
-	log "github.com/sirupsen/logrus"
 	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"os"
 	"path"
 	"slices"
@@ -295,7 +295,7 @@ func execute_use_if_needs_to(cd *connection_data, database *database, msg string
 		if cd.current_database == nil || strings.Compare(database.real_database, cd.current_database.real_database) != 0 {
 			cd.current_database = database
 			if execute_use(cd) {
-				log.Fatalf(fmt.Sprintf("Thread %d: Error switching to database `%s` %s: %v", cd.thread_id, cd.current_database.real_database, msg, cd.thrconn.Err))
+				log.Criticalf("Thread %d: Error switching to database `%s` %s: %v", cd.thread_id, cd.current_database.real_database, msg, cd.thrconn.Err)
 			}
 		}
 	}
@@ -318,12 +318,12 @@ func get_file_type(filename string) file_type {
 	}
 	if strings.Compare(filename, "resume") == 0 {
 		if !Resume {
-			log.Fatalf("resume file found, but no --resume option passed. Use --resume or remove it and restart process if you consider that it will be safe.")
+			log.Critical("resume file found, but no --resume option passed. Use --resume or remove it and restart process if you consider that it will be safe.")
 		}
 		return RESUME
 	}
 	if strings.Compare(filename, "resume.partial") == 0 {
-		log.Fatalf("\"resume.partial file found. Remove it and restart process if you consider that it will be safe.")
+		log.Critical("\"resume.partial file found. Remove it and restart process if you consider that it will be safe.")
 	}
 
 	if m_filename_has_suffix(filename, "-checksum") {
@@ -486,27 +486,24 @@ func refresh_table_list(conf *configuration) {
 }
 
 func checksum_template(dbt_checksum, checksum, err_templ, info_templ, message, _db, _table string) bool {
-	if checksum_mode != CHECKSUM_SKIP {
-		if dbt_checksum != checksum {
-			if _table != "" {
-				if checksum_mode == CHECKSUM_WARN {
-					log.Warnf(err_templ, message, _db, _table, checksum, dbt_checksum)
-				} else {
-					log.Errorf(err_templ, message, _db, _table, checksum, dbt_checksum)
-				}
+	G_assert(checksum_mode != CHECKSUM_SKIP)
+	if dbt_checksum != checksum {
+		if _table != "" {
+			if checksum_mode == CHECKSUM_WARN {
+				log.Warnf(err_templ, message, _db, _table, checksum, dbt_checksum)
 			} else {
-				if checksum_mode == CHECKSUM_WARN {
-					log.Warnf(err_templ, message, _db, checksum, dbt_checksum)
-				} else {
-					log.Errorf(err_templ, message, _db, checksum, dbt_checksum)
-				}
+				log.Criticalf(err_templ, message, _db, _table, checksum, dbt_checksum)
 			}
-			return false
 		} else {
-			log.Infof(info_templ, message, _db, _table)
+			if checksum_mode == CHECKSUM_WARN {
+				log.Warnf(err_templ, message, _db, checksum, dbt_checksum)
+			} else {
+				log.Critical(err_templ, message, _db, checksum, dbt_checksum)
+			}
 		}
+		return false
 	} else {
-		log.Fatalf("checksum_mode is CHECKSUM_SKIP")
+		log.Infof(info_templ, message, _db, _table)
 	}
 	return true
 }
