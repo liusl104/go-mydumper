@@ -61,7 +61,14 @@ func CommandDump() error {
 	} else {
 		output_directory = OutputDirectoryParam
 	}
+	if Debug {
+		Set_debug()
+		_ = Set_verbose()
+	} else {
+		_ = Set_verbose()
+	}
 	Initialize_common_options(MYDUMPER)
+	Hide_password()
 	if Help {
 		print_help()
 	}
@@ -71,15 +78,9 @@ func CommandDump() error {
 			os.Exit(EXIT_SUCCESS)
 		}
 	}
-	if Debug {
-		Set_debug()
-		_ = Set_verbose()
-	} else {
-		_ = Set_verbose()
-	}
+
 	log.Infof("MyDumper backup version: %s", VERSION)
 
-	Hide_password()
 	Ask_password()
 	if !DaemonMode {
 		err := StartDump()

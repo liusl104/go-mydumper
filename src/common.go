@@ -21,6 +21,7 @@ var (
 	Log_output         *os.File
 	Logger             *os.File
 	ignore_errors_list []uint16
+	Help               bool
 	show_warnings      bool
 	No_delete          bool
 	stream             bool

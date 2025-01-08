@@ -2,7 +2,7 @@ package mydumper
 
 import (
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
+	log "go-mydumper/src/logrus"
 	"strconv"
 	"strings"
 )

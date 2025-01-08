@@ -258,7 +258,6 @@ func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filenam
 
 func write_triggers_definition_into_file(conn *DBConnection, result *mysql.Result, database *database, message string, outfile *file_write) {
 	var result2 *mysql.Result
-	var err error
 	var query string
 	var statement = G_string_sized_new(StatementSize)
 	var q string = Identifier_quote_character

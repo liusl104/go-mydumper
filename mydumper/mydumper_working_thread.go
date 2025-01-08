@@ -607,7 +607,7 @@ func working_thread(td *thread_data, thread_id uint) {
 	threads[thread_id].Thread.Add(1)
 	defer threads[thread_id].Thread.Done()
 	init_mutex.Lock()
-	M_connect(td.thrconn)
+	td.thrconn = Mysql_init()
 	init_mutex.Unlock()
 	initialize_thread(td)
 	Execute_gstring(td.thrconn, Set_session)

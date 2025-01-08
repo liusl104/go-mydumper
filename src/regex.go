@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"regexp"
 
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
+	log "go-mydumper/src/logrus"
 )
 
 const filename_regex string = "^[\\w\\-_ ]+$"

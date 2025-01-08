@@ -2,7 +2,8 @@ package mydumper
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	log "go-mydumper/src/logrus"
+
 	"os"
 	"path"
 	"runtime"
@@ -53,7 +54,7 @@ func Set_verbose() error {
 	log.SetOutput(Log_output)
 	switch Verbose {
 	case 0:
-		log.SetLevel(log.FatalLevel)
+		log.SetLevel(log.CriticalLevel)
 	case 1:
 		log.SetLevel(log.ErrorLevel)
 	case 2:
@@ -62,6 +63,10 @@ func Set_verbose() error {
 		log.SetLevel(log.InfoLevel)
 	case 4:
 		log.SetLevel(log.DebugLevel)
+	case 5:
+		log.SetLevel(log.TraceLevel)
+	case 6:
+		log.SetLevel(log.FatalLevel)
 	default:
 		log.SetLevel(log.WarnLevel)
 	}
@@ -89,7 +94,7 @@ func Set_verbose() error {
 }
 
 func Set_debug() {
-	Verbose = 4
+	Verbose = 5
 	log.SetLevel(log.DebugLevel)
 	log.SetReportCaller(true)
 }

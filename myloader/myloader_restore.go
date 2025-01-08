@@ -50,7 +50,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 	if thrconn != nil {
 		cd.thrconn = thrconn
 	} else {
-		cd.thrconn = new(DBConnection)
+		cd.thrconn = Mysql_init()
 		M_connect(cd.thrconn)
 	}
 	cd.current_database = nil
@@ -106,6 +106,7 @@ func wait_restore_threads_to_close() {
 
 func reconnect_connection_data(cd *connection_data) {
 	cd.thrconn.Close()
+	cd.thrconn = Mysql_init()
 	M_connect(cd.thrconn)
 	cd.thread_id = Mysql_thread_id(cd.thrconn)
 	execute_use(cd)

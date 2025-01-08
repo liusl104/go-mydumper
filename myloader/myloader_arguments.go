@@ -43,7 +43,6 @@ var (
 	AppendIfNotExist            bool
 	SkipDefiner                 bool
 	IgnoreSet                   string
-	Help                        bool
 	InputDirectory              string
 	QuoteCharacter              string
 	ShowWarnings                bool
@@ -111,7 +110,7 @@ func arguments_callback() bool {
 }
 
 func entries() {
-	pflag.BoolVar(&Help, "help", false, "Show help options")
+	pflag.BoolVarP(&Help, "help", "?", false, "Show help options")
 	pflag.UintVarP(&BufferSize, "buffer-size", "b", 200000, "Queue buffer size")
 	pflag.StringVarP(&InputDirectory, "directory", "d", "", "Directory of the dump to import")
 	pflag.StringVarP(&LogFile, "logfile", "L", "", "Log file name to use, by default stdout is used")
@@ -180,6 +179,7 @@ func statement_entries() {
 func load_contex_entries() {
 	entries()
 	Common_entries()
+	Connection_entries()
 	filter_entries()
 	Common_filter_entries()
 	pmm_entries()

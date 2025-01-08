@@ -550,7 +550,7 @@ func mydumper_initialize_hash_of_session_variables() map[string]string {
 }
 
 func create_connection() *DBConnection {
-	var conn *DBConnection
+	var conn *DBConnection = Mysql_init()
 	M_connect(conn)
 	Execute_gstring(conn, Set_session)
 	return conn
@@ -624,9 +624,10 @@ func detect_sql_mode(conn *DBConnection) {
 }
 
 func create_main_connection() (conn *DBConnection) {
+	conn = Mysql_init()
 	M_connect(conn)
 	if conn.Err != nil {
-		return
+		log.Fatalf("Error connecting to database: %v", conn.Err)
 	}
 	Set_session = G_string_new("")
 	Set_global = G_string_new("")

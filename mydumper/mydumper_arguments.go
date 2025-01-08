@@ -25,7 +25,6 @@ const (
 
 var (
 	BufferSize           uint
-	Help                 bool
 	compress_method      string
 	split_integer_tables bool
 	output_format        int
@@ -38,7 +37,6 @@ func entries() {
 	pflag.BoolVar(&ClearDumpDir, "clear", false, "Clear output directory before dumping")
 	pflag.BoolVar(&DirtyDumpDir, "dirty", false, "Overwrite output directory without clearing (beware of leftower chunks)")
 	pflag.UintVarP(&BufferSize, "buffer-size", "b", 200000, "Queue buffer size")
-	// pflag.BoolVarP(&Help, "help", "?", false, "Show help options")
 	pflag.StringVarP(&LogFile, "logfile", "L", "", "Log file name to use, by default stdout is used")
 	pflag.StringVar(&DiskLimits, "disk-limits", "", "Set the limit to pause and resume if determines there is no enough disk space.\nAccepts values like: '<resume>:<pause>' in MB.\nFor instance: 100:500 will pause when there is only 100MB free and will\nresume if 500MB are available")
 }
@@ -167,6 +165,7 @@ func statement_entries() {
 func load_contex_entries() {
 	entries()
 	Common_entries()
+	Connection_entries()
 	filter_entries()
 	Common_filter_entries()
 	lock_entries()

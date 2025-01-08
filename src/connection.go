@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"unsafe"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "github.com/sirupsen/logrus"
 	"github.com/spf13/pflag"
+	log "go-mydumper/src/logrus"
 	"golang.org/x/term"
 )
 
@@ -72,10 +73,10 @@ func connection_arguments_callback() bool {
 	return false
 }
 
-func connection_entries() {
+func Connection_entries() {
 	pflag.StringVarP(&Hostname, "host", "h", "", "The host to connect to")
 	pflag.StringVarP(&Username, "user", "u", "", "Username with the necessary privileges")
-	pflag.StringVarP(&Password, "password", "p", "", "User password")
+	pflag.StringVarP(&HidePassword, "password", "p", "", "User password")
 	pflag.BoolVarP(&AskPassword, "ask-password", "a", false, "Prompt For User password")
 	pflag.IntVarP(&Port, "port", "P", 3306, "TCP/IP port to connect to")
 	pflag.StringVarP(&SocketPath, "socket", "S", "", "UNIX domain socket file to use for connection")
@@ -115,6 +116,12 @@ func check_capath(p string) {
 }
 
 func configure_connection(conn *DBConnection) {
+	if Hostname == "" {
+		Hostname = os.Getenv("MYSQL_HOST")
+	}
+	if Port == 0 {
+		Port, _ = strconv.Atoi(os.Getenv("MYSQL_PORT"))
+	}
 
 }
 
@@ -194,6 +201,9 @@ func Mysql_thread_id(dc *DBConnection) uint64 {
 	}
 	return 0
 }
+func Mysql_init() *DBConnection {
+	return new(DBConnection)
+}
 func M_connect(conn *DBConnection) {
 	configure_connection(conn)
 	if !mysql_real_connect(conn, Hostname, Username, Password, "", Port, SocketPath) {
@@ -256,17 +266,17 @@ func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Resul
 }
 
 func Hide_password() {
-	if Password != "" {
-		var tmpPasswd []byte = []byte(Password)
+	if HidePassword != "" {
+		var tmpPasswd []byte = []byte(HidePassword)
+		Password = string(tmpPasswd)
 		for index := 1; index <= len(os.Args)-1; index++ {
-			if os.Args[index] == string(tmpPasswd) {
+			if os.Args[index] == HidePassword {
 				p := *(*unsafe.Pointer)(unsafe.Pointer(&os.Args[index]))
 				for i := 0; i < len(os.Args[index]); i++ {
 					*(*uint8)(unsafe.Pointer(uintptr(p) + uintptr(i))) = 'X'
 				}
 			}
 		}
-		Password = string(tmpPasswd)
 	}
 }
 

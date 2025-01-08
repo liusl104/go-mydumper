@@ -3,6 +3,7 @@ package mydumper
 import (
 	"container/list"
 	"encoding/hex"
+	Error "errors"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	. "go-mydumper/src"
@@ -648,7 +649,8 @@ func initiliaze_clickhouse_files(tj *table_job, dbt *DB_Table) {
 	}
 }
 
-func write_result_into_file(conn *DBConnection, result *mysql.Result, tj *table_job, query string) error {
+func write_result_into_file(conn *DBConnection, tj *table_job, query string) error {
+	var result mysql.Result
 	var dbt *DB_Table = tj.dbt
 	var num_fields uint
 	var escaped *GString = G_string_sized_new(3000)
@@ -656,7 +658,7 @@ func write_result_into_file(conn *DBConnection, result *mysql.Result, tj *table_
 	var fields []*mysql.Field
 	var statement = G_string_sized_new(2 * StatementSize)
 	var statement_row = G_string_sized_new(0)
-	var lengths []*mysql.Field
+	// var lengths []*mysql.Field
 	var num_rows uint64
 	var num_row_st uint64
 	var write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)
@@ -719,8 +721,67 @@ func write_result_into_file(conn *DBConnection, result *mysql.Result, tj *table_
 		G_string_append(statement, dbt.insert_statement.Str.String())
 	}
 	message_dumping_data(tj)
+	err = execute_select_streaming(conn, query, tj, dbt, write_column_into_string)
+	if err != nil {
+		if !it_is_a_consistent_backup {
+			log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
+				err, query)
+			if err = conn.Ping(); err != nil {
+				M_connect(tj.td.thrconn)
+				Execute_gstring(tj.td.thrconn, Set_session)
+			}
+			err = execute_select_streaming(conn, query, tj, dbt, write_column_into_string)
+			log.Warnf("Thread %d: Retrying last failed executed statement", tj.td.thread_id)
+			if err != nil || &result == nil {
+				if SuccessOn1146 && conn.Code == 1146 {
+					log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
+						err, query)
+				} else {
+					log.Criticalf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
+						err, query)
+					errors++
+				}
+			}
+		} else {
+			if SuccessOn1146 && conn.Code == 1146 {
+				log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
+					err, query)
+			} else {
+				log.Criticalf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
+					err, query)
+				errors++
+			}
+
+		}
+	}
+	update_dbt_rows(dbt, num_rows)
+	if num_row_st > 0 && statement.Len > 0 {
+		if output_format == SQL_INSERT || output_format == CLICKHOUSE {
+			G_string_append(statement, statement_terminated_by)
+		}
+		if !write_statement(tj.rows.file, &tj.filesize, statement, dbt) {
+			return err
+		}
+		tj.st_in_file++
+	}
+	G_string_free(statement, true)
+	G_string_free(escaped, true)
+	G_string_free(statement_row, true)
+	return err
+}
+func execute_select_streaming(conn *DBConnection, query string, tj *table_job, dbt *DB_Table, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)) error {
+	var err error
+	var result mysql.Result
+	var num_fields uint
+	var escaped *GString = G_string_sized_new(3000)
+	var fields []*mysql.Field
+	var statement = G_string_sized_new(2 * StatementSize)
+	var statement_row = G_string_sized_new(0)
+	var lengths []*mysql.Field
+	var num_rows uint64
+	var num_row_st uint64
 	var from = time.Now()
-	err = conn.Conn.ExecuteSelectStreaming(query, result, func(row []mysql.FieldValue) error {
+	err = conn.Conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
 		num_rows++
 		write_row_into_string(conn, dbt, row, fields, lengths, num_fields, escaped, statement_row, write_column_into_string)
 		if statement.Len+statement_row.Len+1 > StatementSize {
@@ -788,25 +849,17 @@ func write_result_into_file(conn *DBConnection, result *mysql.Result, tj *table_
 		fields = result.Fields
 		return nil
 	})
-	update_dbt_rows(dbt, num_rows)
-	if num_row_st > 0 && statement.Len > 0 {
-		if output_format == SQL_INSERT || output_format == CLICKHOUSE {
-			G_string_append(statement, statement_terminated_by)
-		}
-		if !write_statement(tj.rows.file, &tj.filesize, statement, dbt) {
-			return err
-		}
-		tj.st_in_file++
+	if err != nil {
+		var myError *mysql.MyError
+		Error.As(err, &myError)
+		conn.Code = myError.Code
+		return err
 	}
-	G_string_free(statement, true)
-	G_string_free(escaped, true)
-	G_string_free(statement_row, true)
-	return err
+	return nil
 }
 
 func write_table_job_into_file(tj *table_job) {
 	var conn = tj.td.thrconn
-	var result *mysql.Result
 	var query string
 	var cache, fields, where1, where_option1, where2, where_option2, where3, where_option3, order, limit string
 	if Is_mysql_like() {
@@ -847,43 +900,8 @@ func write_table_job_into_file(tj *table_job) {
 		Identifier_quote_character_str, tj.dbt.database.name, Identifier_quote_character_str,
 		Identifier_quote_character_str, tj.dbt.table, Identifier_quote_character_str,
 		tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, tj.order_by, limit, tj.dbt.limit)
-	result = conn.Execute(query)
-	if conn.Err != nil {
-		if !it_is_a_consistent_backup {
-			log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
-				conn.Err, query)
-			if err := conn.Ping(); err != nil {
-				M_connect(tj.td.thrconn)
-				Execute_gstring(tj.td.thrconn, Set_session)
-			}
-			log.Warnf("Thread %d: Retrying last failed executed statement", tj.td.thread_id)
-			result = conn.Execute(query)
-			if conn.Err != nil || result == nil {
-				if SuccessOn1146 && conn.Code == 1146 {
-					log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
-						conn.Err, query)
-				} else {
-					log.Criticalf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
-						conn.Err, query)
-					errors++
-				}
-				return
-			}
-		} else {
-			if conn.Err != nil || result == nil {
-				if SuccessOn1146 && conn.Code == 1146 {
-					log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
-						conn.Err, query)
-				} else {
-					log.Criticalf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
-						conn.Err, query)
-					errors++
-				}
-				return
-			}
-		}
-	}
-	err := write_result_into_file(conn, result, tj, query)
+
+	err := write_result_into_file(conn, tj, query)
 	if err != nil {
 		log.Criticalf("Thread %d: Could not read data from %s.%s to write on %s at byte %.0f: %v", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, tj.rows.filename, tj.filesize,
 			err)

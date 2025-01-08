@@ -360,6 +360,7 @@ func StartLoad() {
 	InitializeRegex("")
 	go signal_thread(conf)
 	var conn *DBConnection
+	conn = Mysql_init()
 	M_connect(conn)
 	Set_session = G_string_new("")
 	Set_global = G_string_new("")
