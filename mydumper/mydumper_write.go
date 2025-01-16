@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"container/list"
 	"encoding/hex"
 	Error "errors"
 	"fmt"
@@ -56,7 +55,7 @@ func message_dumping_data_short(tj *table_job) {
 		Identifier_quote_character_str, tj.dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str,
 		tj.dbt.table, Identifier_quote_character_str,
 		total,
-		innodb_table.list.Len()+non_innodb_table.list.Len(), len(all_dbts))
+		len(innodb_table.list)+len(non_innodb_table.list), len(all_dbts))
 }
 
 func message_dumping_data_long(tj *table_job) {
@@ -106,7 +105,7 @@ func message_dumping_data_long(tj *table_job) {
 		where_and_opt_1, where_and_val_1,
 		order_by, order_by_val,
 		tj.rows.filename, total,
-		innodb_table.list.Len()+non_innodb_table.list.Len(), len(all_dbts))
+		len(innodb_table.list)+len(non_innodb_table.list), len(all_dbts))
 }
 
 func initialize_write() {
@@ -340,7 +339,7 @@ func build_insert_statement(dbt *DB_Table, fields []*mysql.Field, num_fields uin
 		}
 	}
 	G_string_append(i_s, " VALUES ")
-	dbt.insert_statement = nil
+	dbt.insert_statement = i_s
 }
 
 func real_write_data(file *file_write, filesize *float64, data *GString) bool {
@@ -518,10 +517,10 @@ func write_header(tj *table_job) bool {
 
 func get_estimated_remaining_of(mlist *MList) uint64 {
 	mlist.mutex.Lock()
-	var tl *list.List = mlist.list
 	var total uint64
-	for e := tl.Front(); e != nil; e = e.Next() {
-		total += e.Value.(*DB_Table).estimated_remaining_steps
+	var dbt *DB_Table
+	for _, dbt = range mlist.list {
+		total += dbt.estimated_remaining_steps
 	}
 	mlist.mutex.Unlock()
 	return total

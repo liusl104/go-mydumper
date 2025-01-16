@@ -197,7 +197,6 @@ func process_stream_filename(iflnm *intermediate_filename) {
 }
 
 func intermediate_thread() {
-	stream_intermediate_thread.Add(1)
 	defer stream_intermediate_thread.Done()
 	var iflnm *intermediate_filename
 	start_intermediate_thread.Lock()

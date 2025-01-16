@@ -187,6 +187,7 @@ func load_contex_entries() {
 	threads_entries()
 	statement_entries()
 	pflag.Parse()
+	Connection_arguments_callback()
 	arguments_callback()
 	Stream_arguments_callback()
 }

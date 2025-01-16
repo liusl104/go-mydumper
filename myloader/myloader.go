@@ -358,6 +358,7 @@ func StartLoad() {
 	initialize_common()
 	Initialize_connection(MYLOADER)
 	InitializeRegex("")
+
 	go signal_thread(conf)
 	var conn *DBConnection
 	conn = Mysql_init()

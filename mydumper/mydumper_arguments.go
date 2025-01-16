@@ -179,6 +179,7 @@ func load_contex_entries() {
 	extra_entries()
 	daemon_entries()
 	pflag.Parse()
+	Connection_arguments_callback()
 	Stream_arguments_callback()
 	arguments_callback()
 }

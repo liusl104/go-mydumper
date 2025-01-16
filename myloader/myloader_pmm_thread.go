@@ -4,7 +4,6 @@ package myloader
 	if pmmthread == nil {
 		pmmthread = new(sync.WaitGroup)
 	}
-	pmmthread.Add(1)
 	defer pmmthread.Done()
 }
 */

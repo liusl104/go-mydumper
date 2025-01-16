@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/shirou/gopsutil/disk"
@@ -120,12 +119,12 @@ type configuration struct {
 	pause_resume                *GAsyncQueue
 	gtid_pos_checked            *GAsyncQueue
 	are_all_threads_in_same_pos *GAsyncQueue
-	lock_tables_statement       string
+	lock_tables_statement       *GString
 	mutex                       *sync.Mutex
 	done                        int
 }
 type MList struct {
-	list  *list.List
+	list  []*DB_Table
 	mutex *sync.Mutex
 }
 type thread_data struct {
@@ -345,7 +344,7 @@ type DB_Table struct {
 	columns_on_insert              string
 	partition_regex                *regexp.Regexp
 	num_threads                    uint
-	chunks                         *list.List
+	chunks                         []any
 	chunks_queue                   *GAsyncQueue
 	chunks_mutex                   *sync.Mutex
 	primary_key                    []string
@@ -594,7 +593,7 @@ func detect_sql_mode(conn *DBConnection) {
 	var query = "SELECT @@SQL_MODE"
 	res = conn.Execute(query)
 	if conn.Err != nil {
-		log.Critical("Error getting SQL_MODE: %v", conn.Err)
+		log.Criticalf("Error getting SQL_MODE: %v", conn.Err)
 	}
 	if len(res.Values) == 0 {
 		log.Critical("Error getting SQL_MODE")
@@ -602,7 +601,7 @@ func detect_sql_mode(conn *DBConnection) {
 	var str string
 	for _, row = range res.Values {
 		if !strings.Contains(string(row[0].AsString()), "NO_AUTO_VALUE_ON_ZERO") {
-			str = fmt.Sprintf("NO_AUTO_VALUE_ON_ZERO,%s", row[0].AsString())
+			str = fmt.Sprintf("'NO_AUTO_VALUE_ON_ZERO,%s'", row[0].AsString())
 		} else {
 			str = fmt.Sprintf("'%s'", row[0].AsString())
 		}
@@ -723,10 +722,10 @@ func long_query_wait(conn *DBConnection) {
 				log.Critical("Error obtaining information from processlist")
 			}
 			for _, row := range res.Values {
-				if string(row[ccol].AsString()) == "Query" || strings.Contains(string(row[ccol].AsString()), "Dump") {
+				if row[ccol].Value() != nil && string(row[ccol].AsString()) != "Query" {
 					continue
 				}
-				if string(row[ucol].AsString()) == "system user" || string(row[ucol].AsString()) == "event_scheduler" {
+				if row[ucol].Value() != nil && (string(row[ucol].AsString()) == "system user" || string(row[ucol].AsString()) == "event_scheduler") {
 					continue
 				}
 				if row[tcol].AsUint64() > Longquery {
@@ -902,37 +901,37 @@ func determine_ddl_lock_function(conn *DBConnection) (acquire_global_lock_functi
 	return
 }
 
-func print_dbt_on_metadata_gstring(dbt *DB_Table, data *string) {
+func print_dbt_on_metadata_gstring(dbt *DB_Table, data *GString) {
 	var name string = Newline_protect(dbt.database.name)
 	var table_filename = Newline_protect(dbt.table_filename)
 	var table = Newline_protect(dbt.table)
 	dbt.chunks_mutex.Lock()
-	*data += fmt.Sprintf("\n[%s]\n", dbt.key)
-	*data += fmt.Sprintf("real_table_name=%s\nrows = %d\n", table, dbt.rows)
+	G_string_append_printf(data, "\n[%s]\n", dbt.key)
+	G_string_append_printf(data, "real_table_name=%s\nrows = %d\n", table, dbt.rows)
 	_ = name
 	_ = table_filename
 	if dbt.is_sequence {
-		*data += "is_sequence = 1\n"
+		G_string_append_printf(data, "is_sequence = 1\n")
 	}
 	if dbt.data_checksum != "" {
-		*data += fmt.Sprintf("data_checksum = %s\n", dbt.data_checksum)
+		G_string_append_printf(data, "data_checksum = %s\n", dbt.data_checksum)
 	}
 	if dbt.schema_checksum != "" {
-		*data += fmt.Sprintf("schema_checksum = %s\n", dbt.schema_checksum)
+		G_string_append_printf(data, "schema_checksum = %s\n", dbt.schema_checksum)
 	}
 	if dbt.indexes_checksum != "" {
-		*data += fmt.Sprintf("indexes_checksum = %s\n", dbt.indexes_checksum)
+		G_string_append_printf(data, "indexes_checksum = %s\n", dbt.indexes_checksum)
 	}
 	if dbt.triggers_checksum != "" {
-		*data += fmt.Sprintf("triggers_checksum = %s\n", dbt.triggers_checksum)
+		G_string_append_printf(data, "triggers_checksum = %s\n", dbt.triggers_checksum)
 	}
 	dbt.chunks_mutex.Unlock()
 }
 
 func print_dbt_on_metadata(mdfile *os.File, dbt *DB_Table) {
-	var data string
-	print_dbt_on_metadata_gstring(dbt, &data)
-	fmt.Fprintf(mdfile, data)
+	var data *GString = G_string_sized_new(100)
+	print_dbt_on_metadata_gstring(dbt, data)
+	fmt.Fprintf(mdfile, data.Str.String())
 	mdfile.Sync()
 	if CheckRowCount && (dbt.rows != dbt.rows_total) {
 		log.Criticalf("Row count mismatch found for %s.%s: got %d of %d expected", dbt.database.name, dbt.table, dbt.rows, dbt.rows_total)
@@ -1443,7 +1442,7 @@ func StartDump() error {
 	} else {
 		td = make([]*thread_data, NumThreads*(0+1))
 	}
-
+	threads = make([]*GThreadFunc, NumThreads)
 	for n = 0; n < NumThreads; n++ {
 		td[n] = new(thread_data)
 		td[n].conf = conf

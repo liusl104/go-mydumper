@@ -267,7 +267,6 @@ func wake_threads_waiting(threads_waiting *uint) {
 }
 
 func control_job_thread(conf *configuration) {
-	control_job_t.Add(1)
 	defer control_job_t.Done()
 	var ft file_type
 	var rj *restore_job

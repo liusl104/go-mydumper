@@ -59,9 +59,10 @@ func Common_entries() {
 	pflag.BoolVarP(&ProgramVersion, "version", "V", false, "Show the program version and exit")
 	pflag.UintVarP(&Verbose, "verbose", "v", 2, "Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info")
 	pflag.BoolVar(&Debug, "debug", false, "(automatically sets verbosity to 4),Print more info")
-	pflag.StringVar(&DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/cnf")
+	pflag.BoolVar(&Json, "json", false, "log output format in JSON, need log level is debug mode")
+	pflag.StringVar(&DefaultsFile, "defaults-file", "", "Use a specific defaults file. Default: /etc/mydumper.cnf")
 	pflag.StringVar(&DefaultsExtraFile, "defaults-extra-file", "", "Use an additional defaults file. This is loaded after --defaults-file, replacing previous defined values")
-	// pflag.StringVar(&FifoDirectory, "fifodir", "", "Directory where the FIFO files will be created when needed. Default: Same as backup")
+	pflag.StringVar(&FifoDirectory, "fifodir", "", "Directory where the FIFO files will be created when needed. Default: Same as backup")
 	pflag.StringVar(&SourceControlCommand, "source-control-command", "", "Instruct the proper commands to execute depending where are configuring the replication. Options: TRADITIONAL, AWS")
 }
 

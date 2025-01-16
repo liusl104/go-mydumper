@@ -372,10 +372,6 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 }
 
 func signal_thread(data any) {
-	if signal_threads == nil {
-		signal_threads = new(sync.WaitGroup)
-	}
-	signal_threads.Add(1)
 	defer signal_threads.Done()
 
 	signalChan := make(chan os.Signal, 1)

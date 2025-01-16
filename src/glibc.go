@@ -27,7 +27,7 @@ func G_file_test(filename string) bool {
 
 func g_atomic_int_dec_and_test(a *int64) bool {
 	atomic.AddInt64(a, -1)
-	if *a < 0 {
+	if *a <= 0 {
 		return true
 	}
 	return false
@@ -53,6 +53,7 @@ func G_string_set_size(s *GString, size int) {
 		return
 	}
 	t := s.Str.String()
+	s.Str.Reset()
 	s.Str.WriteString(t[:size])
 	s.Len = size
 }
@@ -72,12 +73,14 @@ func G_string_printf(s *GString, msg string, args ...any) {
 
 func G_string_new(str string, args ...any) *GString {
 	var s = new(GString)
+	s.Str = new(strings.Builder)
 	s.Str.WriteString(fmt.Sprintf(str, args...))
 	s.Len = s.Str.Len()
 	return s
 }
 func G_string_sized_new(size int) *GString {
 	var s = new(GString)
+	s.Str = new(strings.Builder)
 	s.Str.Grow(size)
 	return s
 }

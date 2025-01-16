@@ -34,7 +34,7 @@ func process_directory(conf *configuration) {
 					intermediate_queue_new(filename)
 				}
 			}
-			data = nil
+			G_string_set_size(data, 0)
 		}
 		err = file.Close()
 	} else {

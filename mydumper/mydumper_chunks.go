@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	. "go-mydumper/src"
@@ -76,6 +75,7 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *DB_Table, position uint
 		return new_none_chunk_step()
 	}
 	var fields []*mysql.Field = minmax.Fields
+	var lengths = minmax.Fields
 	var diff_btwn_max_min, unmin, unmax uint64
 	var nmin, nmax int64
 	// var lengths = minmax.Fields
@@ -146,14 +146,12 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *DB_Table, position uint
 				return new_none_chunk_step()
 			}
 		case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VAR_STRING:
-			/*
-				if (minmax)
-				          mysql_free_result(minmax);
-				        return new_none_chunk_step();
-			*/
-			return new_none_chunk_step()
-			/*csi = new_char_step_item(o, conn, true, prefix, dbt.primary_key[0], 0, 0, row, lengths, nil)
-			  return csi */
+
+			if minmax.Values != nil {
+				return new_none_chunk_step()
+			}
+			csi = new_char_step_item(conn, true, prefix, dbt.primary_key[0], 0, 0, row, lengths, nil)
+			return csi
 		default:
 			log.Infof("It is NONE: default")
 			return new_none_chunk_step()
@@ -250,7 +248,7 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *DB_Table) {
 	} else {
 		csi = new_none_chunk_step()
 	}
-	dbt.chunks.PushFront(csi)
+	dbt.chunks = append(dbt.chunks, csi)
 	G_async_queue_push(dbt.chunks_queue, csi)
 	dbt.status = READY
 	dbt.chunks_mutex.Unlock()
@@ -305,15 +303,14 @@ func get_primary_key(conn *DBConnection, dbt *DB_Table, conf *configuration) {
 func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_item, dbt_list *MList) bool {
 	dbt_list.mutex.Lock()
 	var dbt *DB_Table
-	var iter *list.List = dbt_list.list
 	var are_there_jobs_defining bool
 	var lcs *chunk_step_item
-	for v := iter.Front(); v != nil; v = v.Next() {
-		dbt = v.Value.(*DB_Table)
+	var i int
+	for i, dbt = range dbt_list.list {
 		dbt.chunks_mutex.Lock()
 		if dbt.status != DEFINING {
 			if dbt.status == UNDEFINED {
-				*dbt_pointer = v.Value.(*DB_Table)
+				*dbt_pointer = dbt
 				dbt.status = DEFINING
 				are_there_jobs_defining = true
 				dbt.chunks_mutex.Unlock()
@@ -326,11 +323,11 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_i
 				dbt.chunks_mutex.Unlock()
 				continue
 			}
-			lcs = dbt.chunks.Front().Value.(*chunk_step_item)
+			lcs = dbt.chunks[0].(*chunk_step_item)
 			if lcs.chunk_type == NONE {
-				*dbt_pointer = v.Value.(*DB_Table)
+				*dbt_pointer = dbt
 				*csi = lcs
-				dbt_list.list.Remove(v)
+				dbt_list.list = append(dbt_list.list[:i], dbt_list.list[i+1:]...)
 				dbt.chunks_mutex.Unlock()
 				break
 			}
@@ -341,13 +338,12 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_i
 			dbt.current_threads_running++
 			lcs = lcs.chunk_functions.get_next(dbt)
 			if lcs != nil {
-				*dbt_pointer = v.Value.(*DB_Table)
+				*dbt_pointer = dbt
 				*csi = lcs
 				dbt.chunks_mutex.Unlock()
 				break
 			} else {
-				dbt_list.list.Remove(v)
-				iter.Front().Next()
+				dbt_list.list = append(dbt_list.list[:i], dbt_list.list[i+1:]...)
 				dbt.chunks_mutex.Unlock()
 				continue
 			}

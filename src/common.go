@@ -19,6 +19,7 @@ import (
 
 var (
 	Log_output         *os.File
+	Json               bool
 	Logger             *os.File
 	ignore_errors_list []uint16
 	Help               bool
@@ -320,9 +321,10 @@ func refresh_set_from_hash(ss *GString, kind string, set_hash map[string]string)
 		log.Fatalf("set_hash is nil")
 	}
 	for lkey, e := range set_hash {
-		if strings.HasPrefix(e, "/*!") {
-			var c string
-			// TODO c variables
+		var idx = strings.Index(e, "/*!")
+		if idx != -1 {
+			var c string = e[idx+1:]
+			e = e[:idx]
 			G_string_append_printf(ss, "/%s SET %s %s = %s */;\n", c, kind, lkey, e)
 		} else {
 			G_string_append_printf(ss, "SET %s %s = %s ;\n", kind, lkey, e)
@@ -344,7 +346,7 @@ func Refresh_set_session_from_hash(ss *GString, set_session_hash map[string]stri
 
 func set_global_rollback_from_hash(ss *GString, sr *GString, set_hash map[string]string) {
 	var stmp *GString
-	if len(set_hash) >= 0 {
+	if len(set_hash) > 0 {
 		var i int
 		stmp = G_string_new(" INTO")
 		for lkey, _ := range set_hash {
@@ -426,11 +428,11 @@ func create_fifo_dir(new_fifo_directory string) {
 }
 
 func Create_backup_dir(new_directory, new_fifo_directory string) {
+	if err := os.MkdirAll(new_directory, 0750); err != nil {
+		log.Criticalf("Unable to create `%s': %v", new_directory, err)
+	}
 	if new_fifo_directory != "" {
 		create_fifo_dir(new_fifo_directory)
-	}
-	if err := os.MkdirAll(new_directory, 0660); err != nil {
-		log.Fatalf("Unable to create `%s': %v", new_directory, err)
 	}
 
 }
@@ -687,7 +689,7 @@ func M_error(msg string, args ...any) {
 
 func M_critical(msg string, args ...any) {
 	Execute_gstring(main_connection, Set_global_back)
-	log.Fatalf(msg, args...)
+	log.Criticalf(msg, args...)
 }
 
 func M_warning(msg string, args ...any) {
@@ -708,11 +710,7 @@ func Read_data(infile *bufio.Scanner, data *GString, eof *bool, line *int) bool 
 		*eof = true
 		return false
 	}
-	if data.Str.Len() > 0 {
-		data.Str.Reset()
-	}
-	data.Str.WriteString(infile.Text())
-	data.Len = data.Str.Len()
+	G_string_append(data, infile.Text())
 	*line++
 	if infile.Err() != nil {
 		return false

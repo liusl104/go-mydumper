@@ -229,7 +229,7 @@ func get_next_integer_chunk(dbt *DB_Table) *chunk_step_item {
 				if is_splitable(csi) {
 					new_csi = split_chunk_step(csi)
 					if new_csi != nil {
-						dbt.chunks.PushBack(new_csi)
+						dbt.chunks = append(dbt.chunks, new_csi)
 						G_async_queue_push(dbt.chunks_queue, csi)
 						G_async_queue_push(dbt.chunks_queue, new_csi)
 						csi.mutex.Unlock()
@@ -248,7 +248,7 @@ func get_next_integer_chunk(dbt *DB_Table) *chunk_step_item {
 							new_csi.next = split_chunk_step(csi.next)
 							if new_csi.next != nil {
 								new_csi.next.prefix = new_csi.where
-								dbt.chunks.PushBack(new_csi)
+								dbt.chunks = append(dbt.chunks, new_csi)
 								G_async_queue_push(dbt.chunks_queue, csi)
 								G_async_queue_push(dbt.chunks_queue, new_csi)
 								csi.next.mutex.Unlock()

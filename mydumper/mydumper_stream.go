@@ -170,12 +170,11 @@ func send_initial_metadata() {
 }
 
 func metadata_partial_writer(data any) {
-	// metadata_partial_writer_thread.Add(1)
 	defer metadata_partial_writer_thread.Thread.Done()
 	_ = data
 	var dbt *DB_Table
 	var dbt_list []*DB_Table
-	var output string
+	var output *GString = G_string_sized_new(256)
 	var i uint
 	var filename string
 	var err error
@@ -189,11 +188,12 @@ func metadata_partial_writer(data any) {
 		dbt_list = append(dbt_list, dbt)
 		task = G_async_queue_try_pop(metadata_partial_queue)
 	}
+	G_string_set_size(output, 0)
 	for _, dbt = range dbt_list {
-		print_dbt_on_metadata_gstring(dbt, &output)
+		print_dbt_on_metadata_gstring(dbt, output)
 	}
-	filename = fmt.Sprintf("metadata.partial.%d", 0)
-	err = os.WriteFile(filename, []byte(output), 0644)
+	filename = make_partial_filename(0)
+	err = os.WriteFile(filename, []byte(output.Str.String()), 0644)
 	stream_queue_push(nil, filename)
 	for i = 0; i < NumThreads; i++ {
 		G_async_queue_push(initial_metadata_lock_queue, 1)
@@ -202,7 +202,7 @@ func metadata_partial_writer(data any) {
 	var prev_datetime = time.Now()
 	var current_datetime time.Time
 	var diff float64
-	output = ""
+	G_string_set_size(output, 0)
 	filename = ""
 	task = G_async_queue_timeout_pop(metadata_partial_queue, METADATA_PARTIAL_INTERVAL*1000000)
 	if task == nil {
@@ -224,11 +224,11 @@ func metadata_partial_writer(data any) {
 				filename = fmt.Sprintf("metadata.partial.%d", i)
 				i++
 				for _, dbt = range dbt_list {
-					print_dbt_on_metadata_gstring(dbt, &output)
-					err = os.WriteFile(filename, []byte(output), 0644)
+					print_dbt_on_metadata_gstring(dbt, output)
+					err = os.WriteFile(filename, []byte(output.Str.String()), 0644)
 					stream_queue_push(nil, filename)
 					filename = ""
-					output = ""
+					G_string_set_size(output, 0)
 					dbt_list = nil
 				}
 			}
@@ -242,6 +242,11 @@ func metadata_partial_writer(data any) {
 		}
 	}
 	_ = err
+
+}
+
+func make_partial_filename(i uint) string {
+	return fmt.Sprintf("metadata.partial.%d", i)
 
 }
 

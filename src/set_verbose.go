@@ -89,12 +89,12 @@ func Set_verbose() error {
 			TimestampFormat: time.DateTime,
 		})
 	}
-
+	set_format(Json)
 	return nil
 }
 
 func Set_debug() {
-	Verbose = 5
+	Verbose = 4
 	log.SetLevel(log.DebugLevel)
 	log.SetReportCaller(true)
 }

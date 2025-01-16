@@ -142,7 +142,7 @@ func clear_dump_directory(directory string) error {
 func is_empty_dir(directory string) bool {
 	dir, err := os.Stat(directory)
 	if err != nil {
-		log.Criticalf("cannot open directory %s, %v\n", directory, err)
+		log.Criticalf("cannot open directory %s, %v", directory, err)
 		errors++
 		return false
 	}
@@ -293,14 +293,14 @@ func determine_charset_and_coll_columns_from_show(result *mysql.Result, charcol 
 }
 
 func initialize_headers() {
-	headers = G_string_new("")
+	headers = G_string_sized_new(100)
 	if Is_mysql_like() {
 		if Set_names_statement != "" {
 			G_string_printf(headers, "%s;\n", Set_names_statement)
 		}
 		G_string_append(headers, "/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
 		if Sql_mode != "" && !Compact {
-			G_string_append_printf(headers, "/*!40101 SET Sql_mode='%s'*/;\n", Sql_mode)
+			G_string_append_printf(headers, "/*!40101 SET SQL_MODE=%s*/;\n", Sql_mode)
 		}
 		if !SkipTz {
 			G_string_append(headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
@@ -312,7 +312,7 @@ func initialize_headers() {
 	} else {
 		G_string_printf(headers, "SET FOREIGN_KEY_CHECKS=0;\n")
 		if Sql_mode != "" && !Compact {
-			G_string_append_printf(headers, "SET sql_mode='%s';\n", Sql_mode)
+			G_string_append_printf(headers, "SET SQL_MODE=%s;\n", Sql_mode)
 		}
 	}
 

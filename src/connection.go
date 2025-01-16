@@ -58,7 +58,7 @@ type DBConnection struct {
 	Result  *mysql.Result
 }
 
-func connection_arguments_callback() bool {
+func Connection_arguments_callback() bool {
 	// var Err error
 	if Protocol != "" {
 		if strings.EqualFold(Protocol, "tcp") {
@@ -129,7 +129,7 @@ func print_connection_details_once() {
 	if !g_atomic_int_dec_and_test(&print_connection_details) {
 		return
 	}
-	var print_head *GString = G_string_new("")
+	var print_head *GString = G_string_sized_new(20)
 	G_string_append(print_head, "Connection")
 	switch protocol {
 	case MYSQL_PROTOCOL_DEFAULT:
@@ -149,16 +149,16 @@ func print_connection_details_once() {
 	}
 	var print_body *GString = G_string_new("")
 	if Hostname != "" {
-		G_string_append_printf(print_body, "\n\tHost: %s", Hostname)
+		G_string_append_printf(print_body, " Host: %s", Hostname)
 	}
 	if Port > 0 {
-		G_string_append_printf(print_body, "\n\tPort: %d", Port)
+		G_string_append_printf(print_body, " Port: %d", Port)
 	}
 	if SocketPath != "" {
-		G_string_append_printf(print_body, "\n\tSocket: %s", SocketPath)
+		G_string_append_printf(print_body, " Socket: %s", SocketPath)
 	}
 	if Username != "" {
-		G_string_append_printf(print_body, "\n\tUser: %s", Username)
+		G_string_append_printf(print_body, " User: %s", Username)
 	}
 	if print_body.Len > 1 {
 		G_string_append(print_head, ":")
@@ -170,17 +170,25 @@ func print_connection_details_once() {
 }
 
 func mysql_real_connect(conn *DBConnection, hostname string, username string, password string, db string, port int, unix_socket string) bool {
+	var addr string
+	if SocketPath != "" {
+		addr = SocketPath
+	} else {
+		addr = fmt.Sprintf("%s:%d", hostname, port)
+	}
+
 	if Ssl {
 		tlsConfig := client.NewClientTLSConfig([]byte(Ca), []byte(Cert), []byte(Key),
 			false, program_name)
-		conn.Conn, conn.Err = client.Connect(hostname, username, password, db, func(c *client.Conn) {
+		conn.Conn, conn.Err = client.Connect(addr, username, password, db, func(c *client.Conn) {
 			c.SetTLSConfig(tlsConfig)
 		})
 		if conn.Err != nil {
 			return false
 		}
 	} else {
-		conn.Conn, conn.Err = client.Connect(hostname, username, password, db, func(c *client.Conn) {
+		conn.Conn, conn.Err = client.Connect(addr, username, password, db, func(c *client.Conn) {
+
 		})
 		if conn.Err != nil {
 			return false
@@ -253,6 +261,7 @@ func (d *DBConnection) Close() error {
 }
 
 func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Result) {
+	log.Debugf("Executing: %s", command)
 	d.Result, d.Err = d.Conn.Execute(command, args...)
 	if d.Err != nil {
 		var myError *mysql.MyError
@@ -261,8 +270,10 @@ func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Resul
 	} else {
 		d.Code = 0
 	}
-	d.Warning = result.Warnings
-	return
+	if d.Result != nil {
+		d.Warning = d.Result.Warnings
+	}
+	return d.Result
 }
 
 func Hide_password() {
@@ -310,5 +321,5 @@ func Ask_password() {
 }
 
 func Mysql_get_server_version() uint {
-	return uint(Get_major()*10000 + Get_revision()*100 + Get_secondary())
+	return uint(Get_major()*10000 + Get_secondary()*100 + Get_revision())
 }

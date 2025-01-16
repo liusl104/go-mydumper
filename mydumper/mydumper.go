@@ -67,6 +67,7 @@ func CommandDump() error {
 	} else {
 		_ = Set_verbose()
 	}
+	Create_backup_dir(output_directory, "")
 	Initialize_common_options(MYDUMPER)
 	Hide_password()
 	if Help {
@@ -82,13 +83,15 @@ func CommandDump() error {
 	log.Infof("MyDumper backup version: %s", VERSION)
 
 	Ask_password()
-	if !DaemonMode {
-		err := StartDump()
-		if err != nil {
-			return err
-		}
+	if DaemonMode {
+		ClearDumpDir = true
+		initialize_daemon_thread()
+		runDaemon()
+	} else {
+		dump_directory = output_directory
+		StartDump()
 	}
-	Create_backup_dir(output_directory, "")
+
 	if DiskLimits != "" {
 		parse_disk_limits()
 	}

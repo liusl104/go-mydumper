@@ -66,8 +66,8 @@ func Detect_server_version(conn *DBConnection) error {
 	var res *mysql.Result
 	res = conn.Execute("SELECT @@version_comment, @@version")
 	if conn.Err != nil {
-		log.Warnf("Not able to determine database version: %v", err)
-		return err
+		log.Warnf("Not able to determine database version: %v", conn.Err)
+		return conn.Err
 	}
 	if len(res.Values) == 0 {
 		log.Warnf("Not able to determine database version")

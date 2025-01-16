@@ -303,7 +303,7 @@ func get_database_name_from_content(filename string) string {
 		return ""
 	}
 	var eof bool
-	var data *GString = new(GString)
+	var data *GString = G_string_sized_new(512)
 	var line int
 	var real_database string
 	var reader = bufio.NewScanner(infile.file)

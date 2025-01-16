@@ -409,7 +409,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 func restore_data_from_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
 	var infile *osFile
 	var eof bool
-	var data *GString
+	var data *GString = G_string_sized_new(256)
 	var err error
 	var line int
 	var preline uint
@@ -422,7 +422,6 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 	}
 	var r int
 	var load_data_filename, new_load_data_fifo_filename string
-	_ = load_data_filename
 	var cd *connection_data = wait_for_available_restore_thread(td, !is_schema && (CommitCount > 1), use_database)
 	G_assert(G_async_queue_length(cd.queue.restore) <= 0)
 	G_assert(G_async_queue_length(cd.queue.result) <= 0)
@@ -434,7 +433,7 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 	for eof == false {
 		if Read_data(inBufio, data, &eof, &line) {
 			var length int
-			if data.Len > 5 {
+			if data.Len >= 5 {
 				length = data.Len - 5
 			}
 			if strings.Contains(data.Str.String()[length:], ";\n") {
@@ -456,16 +455,22 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 					ir = nil
 					process_result_vstatement(cd.queue.restore, &ir, M_critical, "(2)Error occurs processing file %s", filename)
 				} else if strings.HasPrefix(data.Str.String(), "LOAD DATA ") {
-					var new_data string
-					var from = strings.Index(data.Str.String(), "'") + 1
+					var new_data *GString
+					var from = strings.Index(data.Str.String(), "'")
+					from++
 					var to = strings.Index(data.Str.String()[from:], "'")
 					load_data_filename = data.Str.String()[from : from+to]
-					var mutex *sync.Mutex
-					_ = mutex
-					_ = new_data
-					_ = new_load_data_fifo_filename
-					// var command []string
-					// TODO
+					var mutex *sync.Mutex = G_mutex_new()
+					if load_data_mutex_locate(load_data_filename, &mutex) {
+						mutex.Lock()
+					}
+					var command []string
+					var is_fifo bool = get_command_and_basename(load_data_filename, &new_load_data_fifo_filename)
+					_ = command
+					_ = is_fifo
+					if is_fifo {
+						_ = new_data
+					}
 					assing_statement(ir, data.Str.String(), preline, false, OTHER)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
@@ -494,7 +499,7 @@ func restore_data_from_file(td *thread_data, filename string, is_schema bool, us
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
 				}
 				r |= ir.result
-				data.Str.Reset()
+				G_string_set_size(data, 0)
 				preline = uint(line) + 1
 				if ir.result > 0 {
 					log.Criticalf("(1)Error occurs processing file %s", filename)

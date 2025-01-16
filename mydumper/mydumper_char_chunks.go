@@ -28,13 +28,13 @@ func initialize_char_chunk() {
 	}
 }
 
-func print_hex(buffer string, size uint) string {
-	var str strings.Builder
-	var i uint
+func print_hex(buffer []byte, size uint32) string {
+	var str = G_string_new("")
+	var i uint32
 	for i = 0; i < size; i++ {
-		str.WriteString(fmt.Sprintf("%02x", buffer[i]))
+		G_string_append_printf(str, "%02x", buffer[i])
 	}
-	return str.String()
+	return str.Str.String()
 }
 
 func new_char_step(conn *DBConnection, row []mysql.FieldValue, lengths []*mysql.Field, mutex *sync.Mutex) *chunk_step {
@@ -113,8 +113,8 @@ func free_char_step(cs *chunk_step) {
 
 func get_next_char_chunk(dbt *DB_Table) *chunk_step_item {
 	var csi *chunk_step_item
-	for e := dbt.chunks.Front(); e != nil; e = e.Next() {
-		csi = e.Value.(*chunk_step_item)
+	for _, v := range dbt.chunks {
+		csi = v.(*chunk_step_item)
 		if csi.mutex == nil {
 			log.Infof("This should not happen")
 			continue
@@ -269,20 +269,20 @@ func get_new_minmax(td *thread_data, dbt *DB_Table, csi *chunk_step_item) bool {
 
 	row = minmax.Values[0]
 	// minmax.Fields[0].ColumnLength
-	var lengths = row
-
+	var lengths = minmax.Fields
+	log.Infof("new_min_max: `%s` %d", print_hex(row[0].AsString(), lengths[0].ColumnLength), lengths[0].ColumnLength)
 	csi.chunk_step.char_step.cmax_clen = previous.char_step.cmax_clen
 	csi.chunk_step.char_step.cmax_len = previous.char_step.cmax_len
 	csi.chunk_step.char_step.cmax = previous.char_step.cmax
 	csi.chunk_step.char_step.cmax_escaped = previous.char_step.cmax_escaped
-	previous.char_step.cmax_clen = uint(len(lengths[0].AsString()))
-	previous.char_step.cmax_len = uint(len(lengths[0].AsString())) + 1
+	previous.char_step.cmax_clen = uint(lengths[0].ColumnLength)
+	previous.char_step.cmax_len = uint(lengths[0].ColumnLength) + 1
 	previous.char_step.cmax = string(row[0].AsString())
 	previous.char_step.cmax_escaped = mysql.Escape(string(row[0].AsString()))
 	previous.char_step.status = 0
 	previous.char_step.mutex.Unlock()
-	csi.chunk_step.char_step.cmin_clen = uint(len(lengths[0].AsString()))
-	csi.chunk_step.char_step.cmin_len = uint(len(lengths[0].AsString())) + 1
+	csi.chunk_step.char_step.cmin_clen = uint(lengths[0].ColumnLength)
+	csi.chunk_step.char_step.cmin_len = uint(lengths[0].ColumnLength) + 1
 	csi.chunk_step.char_step.cmin = string(row[0].AsString())
 	csi.chunk_step.char_step.cmin_escaped = mysql.Escape(string(row[0].AsString()))
 	return true
@@ -329,12 +329,12 @@ func process_char_chunk_step(td *thread_data, tj *table_job, csi *chunk_step_ite
 }
 
 func process_char_chunk(tj *table_job, csi *chunk_step_item) {
-	var td = tj.td
+	var td *thread_data = tj.td
 	var dbt = tj.dbt
 	var cs = csi.chunk_step
 	var previous = cs.char_step.previous
 	var cont bool = false
-	for cs.char_step.previous != nil || cs.char_step.cmax == cs.char_step.cursor {
+	for cs.char_step.previous != nil || cs.char_step.cmax != cs.char_step.cursor {
 		if cs.char_step.previous != nil {
 			csi.mutex.Lock()
 			cont = get_new_minmax(td, tj.dbt, csi)
@@ -342,7 +342,7 @@ func process_char_chunk(tj *table_job, csi *chunk_step_item) {
 			if cont == true {
 				cs.char_step.previous = nil
 				dbt.chunks_mutex.Lock()
-				dbt.chunks.PushBack(cs)
+				dbt.chunks = append(dbt.chunks, cs)
 				dbt.chunks_mutex.Unlock()
 			} else {
 				dbt.chunks_mutex.Lock()

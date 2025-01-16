@@ -33,6 +33,5 @@ func flush() {
 }*/
 
 func process_stream(stream_conf *configuration) {
-	stream_thread.Thread.Add(1)
 	defer stream_thread.Thread.Done()
 }

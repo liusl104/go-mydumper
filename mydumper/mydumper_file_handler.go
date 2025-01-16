@@ -285,5 +285,6 @@ func initialize_file_handler(is_pipe bool) {
 	pipe_creation = G_mutex_new()
 	file_hash = make(map[string]map[string][]string)
 	fifo_table_mutex = G_mutex_new()
+	cft = G_thread_new("close_file_thread", new(sync.WaitGroup), 0)
 	go close_file_thread()
 }

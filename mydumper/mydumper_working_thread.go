@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	. "go-mydumper/src"
@@ -571,30 +570,30 @@ func process_queue(queue *GAsyncQueue, td *thread_data, do_builder bool, chunk_s
 func build_lock_tables_statement(conf *configuration) {
 	non_innodb_table.mutex.Lock()
 	var dbt *DB_Table
-	var iter *list.List = non_innodb_table.list
-	if iter != nil {
-		dbt = iter.Front().Value.(*DB_Table)
-		conf.lock_tables_statement = fmt.Sprintf("LOCK TABLES %s%s%s.%s%s%s READ LOCAL", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
-			Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
-		for e := iter.Front().Next(); e.Value != nil; e.Next() {
-			dbt = e.Value.(*DB_Table)
-			conf.lock_tables_statement += fmt.Sprintf(", %s%s%s.%s%s%s READ LOCAL", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
+	var i int
+	for i, dbt = range non_innodb_table.list {
+		if i == 0 {
+			conf.lock_tables_statement = G_string_sized_new(30)
+			G_string_printf(conf.lock_tables_statement, "LOCK TABLES %s%s%s.%s%s%s READ LOCAL", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
 				Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
 		}
+		G_string_append_printf(conf.lock_tables_statement, ", %s%s%s.%s%s%s READ LOCAL", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
+			Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
+
 	}
 	non_innodb_table.mutex.Unlock()
 }
 
 func update_estimated_remaining_chunks_on_dbt(dbt *DB_Table) {
 	var total uint64
-	for l := dbt.chunks.Front(); l != nil; l = l.Next() {
-		switch l.Value.(*chunk_step_item).chunk_type {
+	var csi *chunk_step_item
+	for _, v := range dbt.chunks {
+		csi = v.(*chunk_step_item)
+		switch csi.chunk_type {
 		case INTEGER:
-			data := l.Value.(*chunk_step_item)
-			total += data.chunk_step.integer_step.estimated_remaining_steps
+			total += csi.chunk_step.integer_step.estimated_remaining_steps
 		case CHAR:
-			data := l.Value.(*chunk_step_item)
-			total += data.chunk_step.char_step.estimated_remaining_steps
+			total += csi.chunk_step.char_step.estimated_remaining_steps
 		default:
 			total++
 		}
@@ -603,8 +602,6 @@ func update_estimated_remaining_chunks_on_dbt(dbt *DB_Table) {
 }
 
 func working_thread(td *thread_data, thread_id uint) {
-
-	threads[thread_id].Thread.Add(1)
 	defer threads[thread_id].Thread.Done()
 	init_mutex.Lock()
 	td.thrconn = Mysql_init()
@@ -647,8 +644,8 @@ func working_thread(td *thread_data, thread_id uint) {
 		G_async_queue_pop(td.conf.ready_non_innodb_queue)
 		if LessLocking {
 			// Sending LOCK TABLE over all non-innodb tables
-			if td.conf.lock_tables_statement != "" {
-				_ = td.thrconn.Execute(td.conf.lock_tables_statement)
+			if td.conf.lock_tables_statement != nil {
+				_ = td.thrconn.Execute(td.conf.lock_tables_statement.Str.String())
 				if td.thrconn.Err != nil {
 					log.Errorf("Error locking non-innodb tables %v", td.thrconn.Err)
 				}
@@ -959,20 +956,20 @@ func new_table_to_dump(conn *DBConnection, conf *configuration, is_view bool, is
 					if TrxConsistencyOnly || (ecol != "" && (ecol == "InnoDB" || ecol == "TokuDB")) {
 						dbt.is_innodb = true
 						innodb_table.mutex.Lock()
-						innodb_table.list.PushFront(dbt)
+						innodb_table.list = append(innodb_table.list, dbt)
 						innodb_table.mutex.Unlock()
 
 					} else {
 						dbt.is_innodb = false
 						non_innodb_table.mutex.Lock()
-						non_innodb_table.list.PushFront(dbt)
+						non_innodb_table.list = append(non_innodb_table.list, dbt)
 						non_innodb_table.mutex.Unlock()
 					}
 				} else {
 					if is_view {
 						dbt.is_innodb = false
 						non_innodb_table.mutex.Lock()
-						non_innodb_table.list.PushFront(dbt)
+						non_innodb_table.list = append(non_innodb_table.list, dbt)
 						non_innodb_table.mutex.Unlock()
 					}
 				}
