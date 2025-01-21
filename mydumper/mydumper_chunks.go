@@ -43,7 +43,7 @@ func new_none_chunk_step() *chunk_step_item {
 	return csi
 }
 
-func initialize_chunk_step_item(conn *DBConnection, dbt *DB_Table, position uint, prefix string, rows uint64) *chunk_step_item {
+func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint, prefix string, rows uint64) *chunk_step_item {
 	var csi *chunk_step_item
 	var query, cache string
 	var row []mysql.FieldValue
@@ -160,7 +160,7 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *DB_Table, position uint
 	return nil
 }
 
-func get_rows_from_explain(conn *DBConnection, dbt *DB_Table, where string, field string) uint64 {
+func get_rows_from_explain(conn *DBConnection, dbt *db_table, where string, field string) uint64 {
 	var query string
 	var row []mysql.FieldValue
 	var res *mysql.Result
@@ -199,7 +199,7 @@ func get_rows_from_explain(conn *DBConnection, dbt *DB_Table, where string, fiel
 	return rows_in_explain
 }
 
-func get_rows_from_count(conn *DBConnection, dbt *DB_Table) uint64 {
+func get_rows_from_count(conn *DBConnection, dbt *db_table) uint64 {
 	var cache, query string
 	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
@@ -219,7 +219,7 @@ func get_rows_from_count(conn *DBConnection, dbt *DB_Table) uint64 {
 	return rows
 }
 
-func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *DB_Table) {
+func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 	dbt.chunks_mutex.Lock()
 	var csi *chunk_step_item
 	var rows uint64
@@ -254,7 +254,7 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *DB_Table) {
 	dbt.chunks_mutex.Unlock()
 }
 
-func get_primary_key(conn *DBConnection, dbt *DB_Table, conf *configuration) {
+func get_primary_key(conn *DBConnection, dbt *db_table, conf *configuration) {
 	var indexes *mysql.Result
 	var row []mysql.FieldValue
 	var query string = fmt.Sprintf("SHOW INDEX FROM %s%s%s.%s%s%s", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
@@ -300,13 +300,12 @@ func get_primary_key(conn *DBConnection, dbt *DB_Table, conf *configuration) {
 	}
 }
 
-func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_item, dbt_list *MList) bool {
+func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
 	dbt_list.mutex.Lock()
-	var dbt *DB_Table
+	var dbt *db_table
 	var are_there_jobs_defining bool
 	var lcs *chunk_step_item
-	var i int
-	for i, dbt = range dbt_list.list {
+	for _, dbt = range dbt_list.list {
 		dbt.chunks_mutex.Lock()
 		if dbt.status != DEFINING {
 			if dbt.status == UNDEFINED {
@@ -316,18 +315,16 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_i
 				dbt.chunks_mutex.Unlock()
 				break
 			}
-			if dbt.status != READY {
-				log.Errorf("dbt status not is ready")
-			}
+			G_assert(dbt.status == READY)
 			if dbt.chunks == nil {
 				dbt.chunks_mutex.Unlock()
 				continue
 			}
-			lcs = dbt.chunks[0].(*chunk_step_item)
+			lcs = g_list_first(dbt.chunks).(*chunk_step_item)
 			if lcs.chunk_type == NONE {
 				*dbt_pointer = dbt
 				*csi = lcs
-				dbt_list.list = append(dbt_list.list[:i], dbt_list.list[i+1:]...)
+				dbt_list.list = remore_dbt_list(dbt_list.list, dbt)
 				dbt.chunks_mutex.Unlock()
 				break
 			}
@@ -343,7 +340,7 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_i
 				dbt.chunks_mutex.Unlock()
 				break
 			} else {
-				dbt_list.list = append(dbt_list.list[:i], dbt_list.list[i+1:]...)
+				dbt_list.list = remore_dbt_list(dbt_list.list, dbt)
 				dbt.chunks_mutex.Unlock()
 				continue
 			}
@@ -356,6 +353,21 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **DB_Table, csi **chunk_step_i
 	return are_there_jobs_defining
 }
 
+func g_list_first(list []any) any {
+	return list[0]
+}
+
+func remore_dbt_list(dbt_list []*db_table, dbt *db_table) []*db_table {
+	var i int
+	for i = 0; i < len(dbt_list); i++ {
+		if dbt_list[i] == dbt {
+			dbt_list = append(dbt_list[:i], dbt_list[i+1:]...)
+			break
+		}
+	}
+	return dbt_list
+
+}
 func enqueue_shutdown_jobs(queue *GAsyncQueue) {
 	var n uint
 	for n = 0; n < NumThreads; n++ {
@@ -371,7 +383,7 @@ func enqueue_shutdown(q *table_queuing) {
 
 }
 func table_job_enqueue(q *table_queuing) {
-	var dbt *DB_Table
+	var dbt *db_table
 	var csi *chunk_step_item
 	var are_there_jobs_defining bool
 	log.Infof("Starting %s tables", q.descr)
@@ -398,14 +410,19 @@ func table_job_enqueue(q *table_queuing) {
 					} else {
 						create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
 					}
+					break
 				case CHAR:
 					create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
+					break
 				case PARTITION:
 					create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
+					break
 				case NONE:
 					create_job_to_dump_chunk(dbt, "", 0, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
+					break
 				default:
 					log.Errorf("This should not happen %v", csi.chunk_type)
+					break
 				}
 			}
 		} else {

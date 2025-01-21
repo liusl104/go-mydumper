@@ -26,10 +26,11 @@ var (
 )
 
 type file_write struct {
-	write  write_fun
-	close  close_fun
-	flush  flush_fun
-	status int
+	write    write_fun
+	close    close_fun
+	flush    flush_fun
+	filename string
+	status   int
 }
 
 func initialize_common() {

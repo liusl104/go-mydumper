@@ -48,7 +48,7 @@ func new_real_partition_step_item(partition []string, deep uint, number uint) *c
 	return csi
 }
 
-func get_next_partition_chunk(dbt *DB_Table) *chunk_step_item {
+func get_next_partition_chunk(dbt *db_table) *chunk_step_item {
 	var l = dbt.chunks
 	var csi *chunk_step_item
 	for _, v := range l {
@@ -74,7 +74,7 @@ func get_next_partition_chunk(dbt *DB_Table) *chunk_step_item {
 	return nil
 }
 
-func get_partitions_for_table(conn *DBConnection, dbt *DB_Table) []string {
+func get_partitions_for_table(conn *DBConnection, dbt *db_table) []string {
 	var partition_list []string
 	var row []mysql.FieldValue
 	var query = fmt.Sprintf("select PARTITION_NAME from information_schema.PARTITIONS where PARTITION_NAME is not null and TABLE_SCHEMA='%s' and TABLE_NAME='%s'", dbt.database.name, dbt.table)

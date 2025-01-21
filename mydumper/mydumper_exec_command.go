@@ -76,7 +76,7 @@ func initialize_exec_command() {
 	var i uint
 	pid_file_table = make(map[*command]string)
 	for i = 0; i < Num_exec_threads; i++ {
-		exec_command_thread[i] = G_thread_new("exec_command", new(sync.WaitGroup), i)
+		exec_command_thread[i] = G_thread_new("exec_command", new(sync.WaitGroup), int(i))
 		go process_exec_command(Stream_queue, i)
 	}
 }

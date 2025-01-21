@@ -75,18 +75,23 @@ func G_async_queue_push(a *GAsyncQueue, task any) {
 	return
 }
 func G_async_queue_try_pop(a *GAsyncQueue) any {
-	if a.length <= 0 {
-		return nil
-	}
-	atomic.AddInt64(&a.length, -1)
-	task := <-a.queue
-	return task
+	return a.try_pop()
 }
 
 func G_async_queue_pop(a *GAsyncQueue) any {
-	atomic.AddInt64(&a.length, -1)
-	task := <-a.queue
-	return task
+	// return a.pop()
+	var timeout = 5
+	for {
+		select {
+		case task := <-a.queue:
+			atomic.AddInt64(&a.length, -1)
+			return task
+		case <-time.After(time.Duration(timeout) * time.Second):
+			panic("G_async_queue_pop timeout")
+			return nil
+		}
+	}
+
 }
 
 func G_async_queue_length(a *GAsyncQueue) int64 {

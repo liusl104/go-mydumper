@@ -26,8 +26,8 @@ const (
 var (
 	BufferSize           uint
 	compress_method      string
-	split_integer_tables bool
-	output_format        int
+	split_integer_tables bool   = true
+	output_format        int    = SQL_INSERT
 	rows_file_extension  string = SQL
 )
 

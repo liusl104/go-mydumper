@@ -36,15 +36,15 @@ var (
 	UpdatedSince                       int
 	DumpTablespaces                    bool
 	chunk_builder                      *GThreadFunc
-	threads                            []*GThreadFunc
+	threads                            *GThreadFunc
 	td                                 []*thread_data
-	all_dbts                           map[string]*DB_Table
+	all_dbts                           map[string]*db_table
 	conf_per_table                     *Configuration_per_table = new(Configuration_per_table)
 	it_is_a_consistent_backup          bool
 	no_updated_tables                  []string
 	identifier_quote_character_protect func(string) string
 	db_items                           []string
-	table_schemas                      []*DB_Table
+	table_schemas                      []*db_table
 	pause_at                           uint
 	resume_at                          uint
 	pmm                                bool
@@ -124,7 +124,7 @@ type configuration struct {
 	done                        int
 }
 type MList struct {
-	list  []*DB_Table
+	list  []*db_table
 	mutex *sync.Mutex
 }
 type thread_data struct {
@@ -224,7 +224,7 @@ type binlog_job struct {
 }
 type chunk_functions struct {
 	process  func(tj *table_job, csi *chunk_step_item)
-	get_next func(dbt *DB_Table) *chunk_step_item
+	get_next func(dbt *db_table) *chunk_step_item
 }
 type table_queuing struct {
 	queue         *GAsyncQueue
@@ -239,7 +239,7 @@ type fifo struct {
 	stdout_filename string
 	queue           *GAsyncQueue
 	size            float64
-	dbt             *DB_Table
+	dbt             *db_table
 	fout            *file_write
 	gpid            int
 	child_pid       int
@@ -285,7 +285,7 @@ type table_job struct {
 	// chunk_step        *chunk_step
 	chunk_step_item *chunk_step_item
 	order_by        string
-	dbt             *DB_Table
+	dbt             *db_table
 	// sql_filename      string
 	// sql_file          *file_write
 	// dat_filename      string
@@ -315,7 +315,7 @@ type partition_step struct {
 	assigned          bool
 }
 
-type DB_Table struct {
+type db_table struct {
 	key                            string
 	database                       *database
 	table                          string
@@ -376,7 +376,7 @@ const (
 type lock_function func(conn *DBConnection)
 
 func initialize_start_dump() {
-	all_dbts = make(map[string]*DB_Table)
+	all_dbts = make(map[string]*db_table)
 	Initialize_set_names()
 	initialize_working_thread()
 	Initialize_conf_per_table(conf_per_table)
@@ -901,7 +901,7 @@ func determine_ddl_lock_function(conn *DBConnection) (acquire_global_lock_functi
 	return
 }
 
-func print_dbt_on_metadata_gstring(dbt *DB_Table, data *GString) {
+func print_dbt_on_metadata_gstring(dbt *db_table, data *GString) {
 	var name string = Newline_protect(dbt.database.name)
 	var table_filename = Newline_protect(dbt.table_filename)
 	var table = Newline_protect(dbt.table)
@@ -928,7 +928,7 @@ func print_dbt_on_metadata_gstring(dbt *DB_Table, data *GString) {
 	dbt.chunks_mutex.Unlock()
 }
 
-func print_dbt_on_metadata(mdfile *os.File, dbt *DB_Table) {
+func print_dbt_on_metadata(mdfile *os.File, dbt *db_table) {
 	var data *GString = G_string_sized_new(100)
 	print_dbt_on_metadata_gstring(dbt, data)
 	fmt.Fprintf(mdfile, data.Str.String())
@@ -948,7 +948,6 @@ func send_lock_all_tables(conn *DBConnection) {
 	var tables_lock []string
 	var success bool
 	var retry uint
-	var lock = true
 	var i uint = 0
 
 	if len(Tables) > 0 {
@@ -1011,45 +1010,6 @@ func send_lock_all_tables(conn *DBConnection) {
 			}
 		}
 	}
-
-	if len(tables_lock) > 0 {
-		res = conn.Execute(query)
-		if conn.Err != nil {
-			log.Criticalf("Couldn't get table list for lock all tables: %v", conn.Err)
-			errors++
-		} else {
-			for _, row := range res.Values {
-				lock = true
-				if len(Tables) > 0 {
-					var table_found bool
-					for _, t := range Tables {
-						if strings.Compare(t, string(row[1].AsString())) == 0 {
-							table_found = true
-							break
-						}
-					}
-					if !table_found {
-						lock = false
-					}
-				}
-
-				if lock && TablesSkiplistFile != "" && Check_skiplist(string(row[0].AsString()), string(row[1].AsString())) {
-					continue
-				}
-
-				if lock && !Eval_regex(string(row[0].AsString()), string(row[1].AsString())) {
-					continue
-				}
-
-				if lock {
-					dbtb = fmt.Sprintf("`%s`.`%s`", row[0].AsString(), row[1].AsString())
-					tables_lock = append(tables_lock, dbtb)
-				}
-			}
-			slices.Sort(tables_lock)
-		}
-	}
-
 	if len(tables_lock) > 0 {
 		// Try three times to get the lock, this is in case of tmp tables
 		// disappearing
@@ -1206,7 +1166,7 @@ func StartDump() error {
 	var metadata_partial_filename, metadata_filename string
 	var u string
 	var acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function lock_function
-	var dbt *DB_Table
+	var dbt *db_table
 	var n uint
 	var nufile *os.File
 
@@ -1442,7 +1402,8 @@ func StartDump() error {
 	} else {
 		td = make([]*thread_data, NumThreads*(0+1))
 	}
-	threads = make([]*GThreadFunc, NumThreads)
+	threads = G_thread_new("WorkingThread", new(sync.WaitGroup), -1)
+	threads.Thread.Add(int(NumThreads))
 	for n = 0; n < NumThreads; n++ {
 		td[n] = new(thread_data)
 		td[n].conf = conf
@@ -1451,7 +1412,6 @@ func StartDump() error {
 		td[n].binlog_snapshot_gtid_executed = ""
 		td[n].pause_resume_mutex = nil
 		td[n].table_name = ""
-		threads[n] = G_thread_new("WorkingThread", new(sync.WaitGroup), n)
 		go working_thread(td[n], n)
 	}
 	// var binlog_snapshot_gtid_executed string
@@ -1566,16 +1526,15 @@ func StartDump() error {
 		var j = new(job)
 		j.types = JOB_SHUTDOWN
 		G_async_queue_push(conf.post_data_queue, j)
+		//G_async_queue_push(td[n].conf.innodb.queue, j)
+		// G_async_queue_push(td[n].conf.innodb.deferQueue, j)
 	}
-
 	if !NoData {
 		chunk_builder.Thread.Wait()
 	}
 
 	log.Infof("Waiting threads to complete")
-	for n = 0; n < NumThreads; n++ {
-		threads[n].Thread.Wait()
-	}
+	threads.Thread.Wait()
 	finalize_working_thread()
 	finalize_write()
 	if release_ddl_lock_function != nil {

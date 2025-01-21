@@ -209,7 +209,7 @@ func clone_chunk_step_item(csi *chunk_step_item) *chunk_step_item {
 	return new_integer_step_item(csi.include_null, csi.prefix, csi.field, csi.chunk_step.integer_step.is_unsigned, csi.chunk_step.integer_step.types, csi.deep, csi.chunk_step.integer_step.is_step_fixed_length, csi.chunk_step.integer_step.step, csi.chunk_step.integer_step.min_chunk_step_size, csi.chunk_step.integer_step.max_chunk_step_size, csi.number, csi.chunk_step.integer_step.check_min, csi.chunk_step.integer_step.check_max, nil, csi.position)
 }
 
-func get_next_integer_chunk(dbt *DB_Table) *chunk_step_item {
+func get_next_integer_chunk(dbt *db_table) *chunk_step_item {
 	var csi, new_csi *chunk_step_item
 	var task any
 	if dbt.chunks != nil {
@@ -266,14 +266,19 @@ func get_next_integer_chunk(dbt *DB_Table) *chunk_step_item {
 			} else {
 				free_integer_step_item(csi)
 			}
-			dbt.chunks_mutex.Unlock()
-			csi = G_async_queue_try_pop(dbt.chunks_queue).(*chunk_step_item)
+			csi.mutex.Unlock()
+			csi_task := G_async_queue_try_pop(dbt.chunks_queue)
+			if csi_task != nil {
+				csi = csi_task.(*chunk_step_item)
+			} else {
+				csi = nil
+			}
 		}
 	}
 	return nil
 }
 
-func refresh_integer_min_max(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
+func refresh_integer_min_max(conn *DBConnection, dbt *db_table, csi *chunk_step_item) {
 	var ics *integer_step = csi.chunk_step.integer_step
 	var query string
 	var cache string
@@ -318,7 +323,7 @@ func refresh_integer_min_max(conn *DBConnection, dbt *DB_Table, csi *chunk_step_
 
 }
 
-func update_integer_min(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
+func update_integer_min(conn *DBConnection, dbt *db_table, csi *chunk_step_item) {
 	var ics = csi.chunk_step.integer_step
 	var query string
 	var minmax *mysql.Result
@@ -359,7 +364,7 @@ func update_integer_min(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item)
 
 }
 
-func update_integer_max(conn *DBConnection, dbt *DB_Table, csi *chunk_step_item) {
+func update_integer_max(conn *DBConnection, dbt *db_table, csi *chunk_step_item) {
 	var ics *integer_step = csi.chunk_step.integer_step
 	var query, cache string
 	var minmax *mysql.Result

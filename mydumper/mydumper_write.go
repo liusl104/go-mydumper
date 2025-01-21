@@ -30,7 +30,7 @@ var (
 	Replace                 bool
 	CompleteInsert          bool
 	HexBlob                 bool
-	StatementSize           int = 100000
+	StatementSize           int = 1000000
 	clickhouse              bool
 	fields_enclosed_by      string
 	fields_terminated_by    string
@@ -295,9 +295,9 @@ func append_load_data_columns(statement *GString, fields []*mysql.Field, num_fie
 			G_string_append(statement, ")")
 			appendable = true
 		} else {
-			G_string_append(str, Identifier_quote_character_str)
+			G_string_append(statement, Identifier_quote_character_str)
 			G_string_append_c(statement, fields[i].Name)
-			G_string_append(str, Identifier_quote_character_str)
+			G_string_append(statement, Identifier_quote_character_str)
 		}
 	}
 	if appendable {
@@ -320,9 +320,8 @@ func append_columns(statement *GString, fields []*mysql.Field, num_fields uint) 
 
 }
 
-func build_insert_statement(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+func build_insert_statement(dbt *db_table, fields []*mysql.Field, num_fields uint) {
 	var i_s = G_string_new(insert_statement)
-	G_string_append(i_s, insert_statement)
 	G_string_append(i_s, " INTO ")
 	G_string_append(i_s, Identifier_quote_character)
 	G_string_append(i_s, dbt.table)
@@ -374,7 +373,7 @@ func write_data(file *file_write, data *GString) bool {
 	return real_write_data(file, &f, data)
 }
 
-func initialize_load_data_statement_suffix(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+func initialize_load_data_statement_suffix(dbt *db_table, fields []*mysql.Field, num_fields uint) {
 	var character_set string
 	if SetNamesStr != "" {
 		character_set = SetNamesStr
@@ -387,15 +386,15 @@ func initialize_load_data_statement_suffix(dbt *DB_Table, fields []*mysql.Field,
 	if character_set != "" && len(character_set) != 0 {
 		G_string_append_printf(load_data_suffix, "CHARACTER SET %s ", character_set)
 	}
-	if FieldsTerminatedByLd != "" {
-		G_string_append_printf(load_data_suffix, "FIELDS TERMINATED BY '%s' ", FieldsTerminatedByLd)
-	}
-	if FieldsEnclosedByLd != "" {
-		G_string_append_printf(load_data_suffix, "ENCLOSED BY '%s' ", FieldsEnclosedByLd)
-	}
-	if FieldsEscapedBy != "" {
-		G_string_append_printf(load_data_suffix, "ESCAPED BY '%s' ", FieldsEscapedBy)
-	}
+	//if FieldsTerminatedByLd != "" {
+	G_string_append_printf(load_data_suffix, "FIELDS TERMINATED BY '%s' ", FieldsTerminatedByLd)
+	//}
+	//if FieldsEnclosedByLd != "" {
+	G_string_append_printf(load_data_suffix, "ENCLOSED BY '%s' ", FieldsEnclosedByLd)
+	//}
+	//if FieldsEscapedBy != "" {
+	G_string_append_printf(load_data_suffix, "ESCAPED BY '%s' ", FieldsEscapedBy)
+	//}
 	G_string_append(load_data_suffix, "LINES ")
 	if LinesStartingByLd != "" {
 		G_string_append_printf(load_data_suffix, "STARTING BY '%s' ", LinesStartingByLd)
@@ -419,7 +418,7 @@ func initialize_load_data_statement_suffix(dbt *DB_Table, fields []*mysql.Field,
 	dbt.load_data_suffix = load_data_suffix
 }
 
-func initialize_clickhouse_statement_suffix(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+func initialize_clickhouse_statement_suffix(dbt *db_table, fields []*mysql.Field, num_fields uint) {
 	var character_set string
 	if SetNamesStr != "" {
 		character_set = SetNamesStr
@@ -462,7 +461,7 @@ func initialize_clickhouse_statement_suffix(dbt *DB_Table, fields []*mysql.Field
 	G_string_append(dbt.load_data_suffix, ";\n")
 }
 
-func initialize_load_data_header(dbt *DB_Table, fields []*mysql.Field, num_fields uint) {
+func initialize_load_data_header(dbt *db_table, fields []*mysql.Field, num_fields uint) {
 	dbt.load_data_header = G_string_sized_new(StatementSize)
 	var i uint
 	for i = 0; i < num_fields-1; i++ {
@@ -477,7 +476,7 @@ func initialize_load_data_header(dbt *DB_Table, fields []*mysql.Field, num_field
 	G_string_append(dbt.load_data_header, fields_terminated_by)
 }
 
-func write_statement(load_data_file *file_write, filessize *float64, statement *GString, dbt *DB_Table) bool {
+func write_statement(load_data_file *file_write, filessize *float64, statement *GString, dbt *db_table) bool {
 	if !real_write_data(load_data_file, filessize, statement) {
 		log.Criticalf("Could not write out data for %s.%s", dbt.database.name, dbt.table)
 		return false
@@ -518,7 +517,7 @@ func write_header(tj *table_job) bool {
 func get_estimated_remaining_of(mlist *MList) uint64 {
 	mlist.mutex.Lock()
 	var total uint64
-	var dbt *DB_Table
+	var dbt *db_table
 	for _, dbt = range mlist.list {
 		total += dbt.estimated_remaining_steps
 	}
@@ -543,12 +542,15 @@ func write_load_data_column_into_string(conn *DBConnection, column mysql.FieldVa
 		G_string_append(statement_row, escaped.Str.String())
 	} else if field.Type != mysql.MYSQL_TYPE_LONG && field.Type != mysql.MYSQL_TYPE_LONGLONG && field.Type != mysql.MYSQL_TYPE_INT24 && field.Type != mysql.MYSQL_TYPE_SHORT {
 		G_string_append(statement_row, fields_enclosed_by)
-		// *escaped = mysql.Escape(string(column.AsString()))
+		G_string_set_size(escaped, int(length.ColumnLength*2+1))
+		G_string_printf(escaped, "%s", mysql.Escape(string(column.AsString())))
 		// *escaped = strings.ReplaceAll(*escaped, "\\", Fields_escaped_by)
-		m_replace_char_with_char('\\', []rune(FieldsEscapedBy)[0], []rune(escaped.Str.String()))
-		m_escape_char_with_char([]byte(fields_terminated_by), []byte(FieldsEscapedBy), []byte(escaped.Str.String()))
+		// m_replace_char_with_char('\\', []rune(FieldsEscapedBy)[0], []rune(escaped.Str.String()))
+		// m_escape_char_with_char([]byte(fields_terminated_by), []byte(FieldsEscapedBy), []byte(escaped.Str.String()))
 		G_string_append(statement_row, escaped.Str.String())
 		G_string_append(statement_row, fields_enclosed_by)
+	} else if field.Type < mysql.MYSQL_TYPE_INT24 {
+		G_string_append(statement_row, strconv.FormatInt(column.AsInt64(), 10))
 	} else {
 		// statement_row.WriteString(strconv.FormatInt(column.AsInt64(), 10))
 		G_string_append_c(statement_row, column.AsString())
@@ -570,11 +572,11 @@ func write_sql_column_into_string(conn *DBConnection, column mysql.FieldValue, f
 	} else if field.Type == mysql.MYSQL_TYPE_BLOB && HexBlob {
 		G_string_set_size(escaped, int(length.ColumnLength*2+1))
 		G_string_append(statement_row, "0x")
-		G_string_printf(escaped, hex.EncodeToString(column.AsString()))
+		G_string_append(escaped, hex.EncodeToString(column.AsString()))
 		G_string_append(statement_row, escaped.Str.String())
 	} else {
 		G_string_set_size(escaped, int(length.ColumnLength*2+1))
-		G_string_printf(escaped, mysql.Escape(string(column.AsString())))
+		G_string_append(escaped, mysql.Escape(string(column.AsString())))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
 			G_string_append(statement_row, "CONVERT(")
 		}
@@ -588,7 +590,7 @@ func write_sql_column_into_string(conn *DBConnection, column mysql.FieldValue, f
 	}
 }
 
-func write_row_into_string(conn *DBConnection, dbt *DB_Table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *GString, statement_row *GString, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)) {
+func write_row_into_string(conn *DBConnection, dbt *db_table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, escaped *GString, statement_row *GString, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)) {
 	var i uint
 	G_string_append(statement_row, lines_starting_by)
 	_ = dbt
@@ -609,13 +611,13 @@ func write_row_into_string(conn *DBConnection, dbt *DB_Table, row []mysql.FieldV
 	G_string_append(statement_row, lines_terminated_by)
 }
 
-func update_dbt_rows(dbt *DB_Table, num_rows uint64) {
+func update_dbt_rows(dbt *db_table, num_rows *uint64) {
 	dbt.rows_lock.Lock()
-	dbt.rows += num_rows
+	dbt.rows += *num_rows
 	dbt.rows_lock.Unlock()
 }
 
-func initiliaze_load_data_files(tj *table_job, dbt *DB_Table) {
+func initiliaze_load_data_files(tj *table_job, dbt *db_table) {
 	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
 	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
@@ -631,7 +633,7 @@ func initiliaze_load_data_files(tj *table_job, dbt *DB_Table) {
 
 }
 
-func initiliaze_clickhouse_files(tj *table_job, dbt *DB_Table) {
+func initiliaze_clickhouse_files(tj *table_job, dbt *db_table) {
 	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
 	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
@@ -650,16 +652,20 @@ func initiliaze_clickhouse_files(tj *table_job, dbt *DB_Table) {
 
 func write_result_into_file(conn *DBConnection, tj *table_job, query string) error {
 	var result mysql.Result
-	var dbt *DB_Table = tj.dbt
+	var dbt *db_table = tj.dbt
 	var num_fields uint
 	var escaped *GString = G_string_sized_new(3000)
 	var err error
 	var fields []*mysql.Field
 	var statement = G_string_sized_new(2 * StatementSize)
 	var statement_row = G_string_sized_new(0)
-	// var lengths []*mysql.Field
+	var lengths []*mysql.Field
 	var num_rows uint64
 	var num_row_st uint64
+	fields, lengths, err = mysql_use_result(conn, query, &num_fields)
+	if err != nil {
+		return err
+	}
 	var write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)
 	switch output_format {
 	case LOAD_DATA, CSV:
@@ -678,6 +684,7 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 			write_load_data_statement(tj)
 			write_header(tj)
 		}
+		break
 	case CLICKHOUSE:
 		write_column_into_string = write_sql_column_into_string
 		if tj.rows.file.status == 0 {
@@ -702,6 +709,7 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 			write_clickhouse_statement(tj)
 		}
 		G_string_append(statement, dbt.insert_statement.Str.String())
+		break
 	case SQL_INSERT:
 		write_column_into_string = write_sql_column_into_string
 		if tj.rows.file.status == 0 {
@@ -718,9 +726,10 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 			initialize_sql_statement(statement)
 		}
 		G_string_append(statement, dbt.insert_statement.Str.String())
+		break
 	}
 	message_dumping_data(tj)
-	err = execute_select_streaming(conn, query, tj, dbt, write_column_into_string)
+	err = execute_select_streaming(conn, query, escaped, statement, statement_row, fields, lengths, &num_fields, tj, dbt, write_column_into_string, &num_rows, &num_row_st)
 	if err != nil {
 		if !it_is_a_consistent_backup {
 			log.Warnf("Thread %d: Error dumping table (%s.%s) data: %v\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
@@ -729,7 +738,7 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 				M_connect(tj.td.thrconn)
 				Execute_gstring(tj.td.thrconn, Set_session)
 			}
-			err = execute_select_streaming(conn, query, tj, dbt, write_column_into_string)
+			err = execute_select_streaming(conn, query, escaped, statement, statement_row, fields, lengths, &num_fields, tj, dbt, write_column_into_string, &num_rows, &num_row_st)
 			log.Warnf("Thread %d: Retrying last failed executed statement", tj.td.thread_id)
 			if err != nil || &result == nil {
 				if SuccessOn1146 && conn.Code == 1146 {
@@ -753,7 +762,7 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 
 		}
 	}
-	update_dbt_rows(dbt, num_rows)
+	update_dbt_rows(dbt, &num_rows)
 	if num_row_st > 0 && statement.Len > 0 {
 		if output_format == SQL_INSERT || output_format == CLICKHOUSE {
 			G_string_append(statement, statement_terminated_by)
@@ -768,23 +777,28 @@ func write_result_into_file(conn *DBConnection, tj *table_job, query string) err
 	G_string_free(statement_row, true)
 	return err
 }
-func execute_select_streaming(conn *DBConnection, query string, tj *table_job, dbt *DB_Table, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer)) error {
+func mysql_use_result(conn *DBConnection, query string, num_fields *uint) (fields []*mysql.Field, lengths []*mysql.Field, err error) {
+	var result mysql.Result
+	err = conn.Conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
+		return nil
+	}, func(r *mysql.Result) error {
+		lengths = result.Fields
+		*num_fields = uint(len(result.Fields))
+		fields = result.Fields
+		return nil
+	})
+	return
+
+}
+func execute_select_streaming(conn *DBConnection, query string, escaped *GString, statement *GString, statement_row *GString, fields []*mysql.Field, lengths []*mysql.Field, num_fields *uint, tj *table_job, dbt *db_table, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, escaped *GString, statement_row *GString, fun_ptr_i *Function_pointer), num_rows *uint64, num_row_st *uint64) error {
 	var err error
 	var result mysql.Result
-	var num_fields uint
-	var escaped *GString = G_string_sized_new(3000)
-	var fields []*mysql.Field
-	var statement = G_string_sized_new(2 * StatementSize)
-	var statement_row = G_string_sized_new(0)
-	var lengths []*mysql.Field
-	var num_rows uint64
-	var num_row_st uint64
 	var from = time.Now()
 	err = conn.Conn.ExecuteSelectStreaming(query, &result, func(row []mysql.FieldValue) error {
-		num_rows++
-		write_row_into_string(conn, dbt, row, fields, lengths, num_fields, escaped, statement_row, write_column_into_string)
+		*num_rows++
+		write_row_into_string(conn, dbt, row, fields, lengths, *num_fields, escaped, statement_row, write_column_into_string)
 		if statement.Len+statement_row.Len+1 > StatementSize {
-			if num_row_st == 0 {
+			if *num_row_st == 0 {
 				G_string_append(statement, statement_row.Str.String())
 				G_string_set_size(statement_row, 0)
 				log.Warnf("Row bigger than statement_size for %s.%s", dbt.database.name, dbt.table)
@@ -794,8 +808,8 @@ func execute_select_streaming(conn *DBConnection, query string, tj *table_job, d
 				return nil
 			}
 			update_dbt_rows(dbt, num_rows)
-			num_rows = 0
-			num_row_st = 0
+			*num_rows = 0
+			*num_row_st = 0
 			tj.st_in_file++
 			if output_format == SQL_INSERT || output_format == CLICKHOUSE {
 				G_string_append(statement, dbt.insert_statement.Str.String())
@@ -833,18 +847,18 @@ func execute_select_streaming(conn *DBConnection, query string, tj *table_job, d
 			tj.filesize = 0
 		}
 
-		if num_row_st != 0 && (output_format == SQL_INSERT || output_format == CLICKHOUSE) {
+		if *num_row_st != 0 && (output_format == SQL_INSERT || output_format == CLICKHOUSE) {
 			G_string_append(statement, ",")
 		}
 		G_string_append(statement, statement_row.Str.String())
 		if statement_row.Len > 0 {
-			num_row_st++
+			*num_row_st++
 		}
 		G_string_set_size(statement_row, 0)
 		return nil
 	}, func(result *mysql.Result) error {
 		lengths = result.Fields
-		num_fields = uint(len(result.Fields))
+		*num_fields = uint(len(result.Fields))
 		fields = result.Fields
 		return nil
 	})

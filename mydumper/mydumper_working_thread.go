@@ -224,7 +224,7 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *configuration
 				db.ad_mutex.Unlock()
 			}
 		}
-		if len(result.Values) == 0 {
+		if result == nil {
 			log.Criticalf("Could not list tables for %s", db.name)
 			errors++
 			return
@@ -430,27 +430,27 @@ func write_snapshot_info(conn *DBConnection, file *os.File) {
 		fmt.Fprintf(file, "[source]\n# Channel_Name = '' # It can be use to setup replication FOR CHANNEL\n")
 		if SourceData > 0 {
 			fmt.Fprintf(file, "#SOURCE_HOST = \"%s\"\n#SOURCE_PORT = \n#SOURCE_USER = \"\"\n#SOURCE_PASSWORD = \"\"\n", Hostname)
-			if SourceData&1<<(3) > 0 {
+			if SourceData&1<<3 > 0 {
 				fmt.Fprintf(file, "SOURCE_SSL = 1\n")
 			} else {
 				fmt.Fprintf(file, "#SOURCE_SSL = {0|1}\n")
 			}
 			fmt.Fprintf(file, "executed_gtid_set = \"%s\"\n", mastergtid)
-			if SourceData&1<<(4) > 0 {
+			if SourceData&(1<<4) > 0 {
 				fmt.Fprintf(file, "SOURCE_AUTO_POSITION = 1\n")
 				fmt.Fprintf(file, "#SOURCE_LOG_FILE = \"%s\"\n#SOURCE_LOG_POS = %d\n", masterlog, masterpos)
 			} else {
 				fmt.Fprintf(file, "SOURCE_LOG_FILE = \"%s\"\nSOURCE_LOG_POS = %d\n", masterlog, masterpos)
 				fmt.Fprintf(file, "#SOURCE_AUTO_POSITION = {0|1}\n")
 			}
-			fmt.Fprintf(file, "myloader_exec_reset_replica = %d\n", SourceData&1<<(0))
-			if SourceData&1<<(1) > 0 {
-				fmt.Fprintf(file, "myloader_exec_reset_replica = %d\n", 1)
+			fmt.Fprintf(file, "myloader_exec_reset_replica = %d\n", SourceData&(1<<0))
+			if SourceData&(1<<1) > 0 {
+				fmt.Fprintf(file, "nmyloader_exec_change_source = %d\n", 1)
 			} else {
-				fmt.Fprintf(file, "myloader_exec_reset_replica = %d\n", 0)
+				fmt.Fprintf(file, "nmyloader_exec_change_source = %d\n", 0)
 			}
 
-			if SourceData&1<<(2) > 0 {
+			if SourceData&(1<<2) > 0 {
 				fmt.Fprintf(file, "myloader_exec_start_replica = %d\n", 1)
 			} else {
 				fmt.Fprintf(file, "myloader_exec_start_replica = %d\n", 0)
@@ -490,34 +490,47 @@ func process_job_builder_job(td *thread_data, job *job) bool {
 func process_job(td *thread_data, job *job) bool {
 	switch job.types {
 	case JOB_DETERMINE_CHUNK_TYPE:
-		set_chunk_strategy_for_dbt(td.thrconn, job.job_data.(*DB_Table))
+		set_chunk_strategy_for_dbt(td.thrconn, job.job_data.(*db_table))
+		break
 	case JOB_DUMP:
 		thd_JOB_DUMP(td, job)
+		break
 	case JOB_DUMP_NON_INNODB:
 		thd_JOB_DUMP(td, job)
+		break
 	case JOB_DEFER:
-
+		break
 	case JOB_CHECKSUM:
 		do_JOB_CHECKSUM(td, job)
+		break
 	case JOB_CREATE_DATABASE:
 		do_JOB_CREATE_DATABASE(td, job)
+		break
 	case JOB_CREATE_TABLESPACE:
 		do_JOB_CREATE_TABLESPACE(td, job)
+		break
 	case JOB_SCHEMA:
 		do_JOB_SCHEMA(td, job)
+		break
 	case JOB_VIEW:
 		do_JOB_VIEW(td, job)
+		break
 	case JOB_SEQUENCE:
 		do_JOB_SEQUENCE(td, job)
+		break
 	case JOB_TRIGGERS:
 		do_JOB_TRIGGERS(td, job)
+		break
 	case JOB_SCHEMA_TRIGGERS:
 		do_JOB_SCHEMA_TRIGGERS(td, job)
+		break
 	case JOB_SCHEMA_POST:
 		do_JOB_SCHEMA_POST(td, job)
+		break
 	case JOB_WRITE_MASTER_STATUS:
 		write_snapshot_info(td.thrconn, job.job_data.(*os.File))
 		G_async_queue_push(td.conf.binlog_ready, 1)
+		break
 	case JOB_SHUTDOWN:
 		return false
 	default:
@@ -569,7 +582,7 @@ func process_queue(queue *GAsyncQueue, td *thread_data, do_builder bool, chunk_s
 
 func build_lock_tables_statement(conf *configuration) {
 	non_innodb_table.mutex.Lock()
-	var dbt *DB_Table
+	var dbt *db_table
 	var i int
 	for i, dbt = range non_innodb_table.list {
 		if i == 0 {
@@ -584,7 +597,7 @@ func build_lock_tables_statement(conf *configuration) {
 	non_innodb_table.mutex.Unlock()
 }
 
-func update_estimated_remaining_chunks_on_dbt(dbt *DB_Table) {
+func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 	var total uint64
 	var csi *chunk_step_item
 	for _, v := range dbt.chunks {
@@ -602,7 +615,7 @@ func update_estimated_remaining_chunks_on_dbt(dbt *DB_Table) {
 }
 
 func working_thread(td *thread_data, thread_id uint) {
-	defer threads[thread_id].Thread.Done()
+	defer threads.Thread.Done()
 	init_mutex.Lock()
 	td.thrconn = Mysql_init()
 	init_mutex.Unlock()
@@ -797,7 +810,7 @@ func get_character_set_from_collation(conn *DBConnection, collation string) stri
 	return character_set
 }
 
-func get_primary_key_separated_by_comma(dbt *DB_Table) {
+func get_primary_key_separated_by_comma(dbt *db_table) {
 	var field_list string
 	var list = dbt.primary_key
 	var first = true
@@ -814,17 +827,17 @@ func get_primary_key_separated_by_comma(dbt *DB_Table) {
 	dbt.primary_key_separated_by_comma = field_list
 }
 
-func new_db_table(d **DB_Table, conn *DBConnection, conf *configuration, database *database, table string, table_collation string, is_sequence bool) bool {
+func new_db_table(d **db_table, conn *DBConnection, conf *configuration, database *database, table string, table_collation string, is_sequence bool) bool {
 	var b bool
 	var lkey = Build_dbt_key(database.name, table)
 	all_dbts_mutex.Lock()
-	var dbt *DB_Table
+	var dbt *db_table
 	dbt = all_dbts[lkey]
 	if dbt != nil {
 		b = false
 		all_dbts_mutex.Unlock()
 	} else {
-		dbt = new(DB_Table)
+		dbt = new(db_table)
 		dbt.key = lkey
 		dbt.object_to_export = new(Object_to_export)
 		dbt.status = UNDEFINED
@@ -911,7 +924,7 @@ func new_db_table(d **DB_Table, conn *DBConnection, conf *configuration, databas
 	return b
 }
 
-func free_db_table(dbt *DB_Table) {
+func free_db_table(dbt *db_table) {
 	dbt.chunks_mutex.Lock()
 	dbt.rows_lock = nil
 	dbt.escaped_table = ""
@@ -933,7 +946,7 @@ func new_table_to_dump(conn *DBConnection, conf *configuration, is_view bool, is
 	}
 	database.ad_mutex.Unlock()
 
-	var dbt *DB_Table
+	var dbt *db_table
 	var b = new_db_table(&dbt, conn, conf, database, table, collation, is_sequence)
 	if b {
 		if (!is_view || ViewsAsTables) && !is_sequence {
@@ -1036,7 +1049,7 @@ func determine_if_schema_is_elected_to_dump_post(conn *DBConnection, database *d
 }
 
 func dump_database_thread(conn *DBConnection, conf *configuration, database *database) {
-	var query = fmt.Sprintf("SHOW TABLE STATUS")
+	var query string = "SHOW TABLE STATUS"
 	var result *mysql.Result
 	if !conn.UseDB(database.name) {
 		log.Criticalf("Could not select database: %s (%v)", database.name, conn.Err)
@@ -1054,6 +1067,7 @@ func dump_database_thread(conn *DBConnection, conf *configuration, database *dat
 	var ccol int = -1
 	var collcol int = -1
 	var rowscol int = 0
+	var i = 0
 	determine_show_table_status_columns(result.Fields, &ecol, &ccol, &collcol, &rowscol)
 	if len(result.Values) == 0 {
 		log.Criticalf("Could not list tables for %s", database.name)
@@ -1080,8 +1094,8 @@ func dump_database_thread(conn *DBConnection, conf *configuration, database *dat
 			dump = false
 		}
 		if dump && len(ignore) > 0 && !is_view && !is_sequence {
-			for _, ignore := range ignore {
-				if strings.ToLower(ignore) == strings.ToLower(string(row[ecol].AsString())) {
+			for i = 0; i < len(ignore); i++ {
+				if strings.Compare(ignore[i], string(row[ecol].AsString())) == 0 {
 					dump = false
 					break
 				}
@@ -1132,9 +1146,6 @@ func dump_database_thread(conn *DBConnection, conf *configuration, database *dat
 	}
 	if determine_if_schema_is_elected_to_dump_post(conn, database) {
 		create_job_to_dump_post(database, conf)
-	}
-	if database.dump_triggers {
-		create_job_to_dump_schema_triggers(database, conf)
 	}
 	if DumpTriggers && database.dump_triggers {
 		create_job_to_dump_schema_triggers(database, conf)

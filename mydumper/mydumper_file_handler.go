@@ -25,6 +25,7 @@ func m_open_file(filename *string, t string) (f *file_write, err error) {
 
 	f = new(file_write)
 	var ff *os.File
+	f.filename = *filename
 	if strings.ToLower(t) == "w" {
 		ff, err = os.OpenFile(*filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0660)
 		if err != nil {
@@ -46,9 +47,13 @@ func m_open_file(filename *string, t string) (f *file_write, err error) {
 	return
 }
 
-// , thread_id uint, file *os.File, filename string, size uint, dbt *DB_Table
-func m_close_file(thread_id uint, file *file_write, filename string, size float64, dbt *DB_Table) error {
+// , thread_id uint, file *os.File, filename string, size uint, dbt *db_table
+func m_close_file(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	var err error
+	if file.filename == "" {
+		log.Warnf("Thread %d: File is nil", thread_id)
+		return nil
+	}
 	err = file.close()
 	file.status = 0
 	if size > 0 {
@@ -169,6 +174,7 @@ func m_open_pipe(filename *string, mode string) (*file_write, error) {
 	var compressFile *gzip.Writer
 	var compressEncode *zstd.Encoder
 	var f = new(file_write)
+	f.filename = *filename
 	f.status = 1
 	switch strings.ToUpper(compress_method) {
 	case GZIP:
@@ -203,7 +209,7 @@ func m_open_pipe(filename *string, mode string) (*file_write, error) {
 
 }
 
-func m_close_pipe(thread_id uint, file *file_write, filename string, size float64, dbt *DB_Table) error {
+func m_close_pipe(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	release_pid()
 	var err error
 	err = file.close()
@@ -224,7 +230,7 @@ func m_close_pipe(thread_id uint, file *file_write, filename string, size float6
 	return err
 }
 
-func final_step_close_file(thread_id uint, filename string, f *fifo, size float64, dbt *DB_Table) error {
+func final_step_close_file(thread_id uint, filename string, f *fifo, size float64, dbt *db_table) error {
 	if size > 0 {
 		if Stream != "" {
 			stream_queue_push(dbt, f.stdout_filename)
@@ -244,6 +250,9 @@ func close_file_thread() {
 	var f *fifo
 	var err error
 	for {
+		if G_async_queue_length(close_file_queue) == 0 {
+			return
+		}
 		f = G_async_queue_pop(close_file_queue).(*fifo)
 		if f.gpid == -10 {
 			// TODO

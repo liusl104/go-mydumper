@@ -83,15 +83,6 @@ func CommandDump() error {
 	log.Infof("MyDumper backup version: %s", VERSION)
 
 	Ask_password()
-	if DaemonMode {
-		ClearDumpDir = true
-		initialize_daemon_thread()
-		runDaemon()
-	} else {
-		dump_directory = output_directory
-		StartDump()
-	}
-
 	if DiskLimits != "" {
 		parse_disk_limits()
 	}
@@ -104,8 +95,9 @@ func CommandDump() error {
 		runDaemon()
 	} else {
 		dump_directory = output_directory
-		return StartDump()
+		StartDump()
 	}
+
 	defer func() {
 		if LogFile != "" {
 			_ = Log_output.Close()

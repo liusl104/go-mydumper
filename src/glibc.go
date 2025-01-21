@@ -52,9 +52,8 @@ func G_string_set_size(s *GString, size int) {
 		s.Len = 0
 		return
 	}
-	t := s.Str.String()
 	s.Str.Reset()
-	s.Str.WriteString(t[:size])
+	s.Str.Grow(size)
 	s.Len = size
 }
 
@@ -134,17 +133,21 @@ func G_mutex_new() *sync.Mutex {
 }
 
 type GThreadFunc struct {
-	Thread    *sync.WaitGroup
-	Name      string
-	Thread_id uint
+	Thread        *sync.WaitGroup
+	Name          string
+	Thread_id     int
+	thread_number int
 }
 
-func G_thread_new(thread_name string, thread *sync.WaitGroup, thread_id uint) *GThreadFunc {
+func G_thread_new(thread_name string, thread *sync.WaitGroup, thread_id int) *GThreadFunc {
 	var gtf = new(GThreadFunc)
 	gtf.Thread = thread
 	gtf.Name = thread_name
 	gtf.Thread_id = thread_id
-	gtf.Thread.Add(1)
+	if thread_id >= 0 {
+		gtf.thread_number = 1
+		gtf.Thread.Add(1)
+	}
 	return gtf
 
 }

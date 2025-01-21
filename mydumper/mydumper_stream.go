@@ -28,17 +28,17 @@ var (
 )
 
 type stream_queue_element struct {
-	dbt      *DB_Table
+	dbt      *db_table
 	filename string
 }
 
-func metadata_partial_queue_push(dbt *DB_Table) {
+func metadata_partial_queue_push(dbt *db_table) {
 	if dbt != nil {
 		G_async_queue_push(metadata_partial_queue, dbt)
 	}
 }
 
-func new_stream_queue_element(dbt *DB_Table, filename string) *stream_queue_element {
+func new_stream_queue_element(dbt *db_table, filename string) *stream_queue_element {
 	var sf = new(stream_queue_element)
 	sf.dbt = dbt
 	sf.filename = filename
@@ -49,7 +49,7 @@ func get_stream_queue_length(queue *GAsyncQueue) int64 {
 	return G_async_queue_length(queue)
 }
 
-func stream_queue_push(dbt *DB_Table, filename string) {
+func stream_queue_push(dbt *db_table, filename string) {
 	var done = G_async_queue_new(BufferSize)
 	G_async_queue_push(Stream_queue, new_stream_queue_element(dbt, filename))
 	G_async_queue_pop(done)
@@ -172,8 +172,8 @@ func send_initial_metadata() {
 func metadata_partial_writer(data any) {
 	defer metadata_partial_writer_thread.Thread.Done()
 	_ = data
-	var dbt *DB_Table
-	var dbt_list []*DB_Table
+	var dbt *db_table
+	var dbt_list []*db_table
 	var output *GString = G_string_sized_new(256)
 	var i uint
 	var filename string
@@ -184,7 +184,7 @@ func metadata_partial_writer(data any) {
 	var task any
 	task = G_async_queue_try_pop(metadata_partial_queue)
 	for task != nil {
-		dbt = task.(*DB_Table)
+		dbt = task.(*db_table)
 		dbt_list = append(dbt_list, dbt)
 		task = G_async_queue_try_pop(metadata_partial_queue)
 	}
@@ -208,7 +208,7 @@ func metadata_partial_writer(data any) {
 	if task == nil {
 		dbt = nil
 	} else {
-		dbt = task.(*DB_Table)
+		dbt = task.(*db_table)
 	}
 	for metadata_partial_writer_alive {
 		if dbt != nil {
@@ -238,7 +238,7 @@ func metadata_partial_writer(data any) {
 		if task == nil {
 			dbt = nil
 		} else {
-			dbt = task.(*DB_Table)
+			dbt = task.(*db_table)
 		}
 	}
 	_ = err

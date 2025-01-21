@@ -111,7 +111,7 @@ func free_char_step(cs *chunk_step) {
 	cs = nil
 }
 
-func get_next_char_chunk(dbt *DB_Table) *chunk_step_item {
+func get_next_char_chunk(dbt *db_table) *chunk_step_item {
 	var csi *chunk_step_item
 	for _, v := range dbt.chunks {
 		csi = v.(*chunk_step_item)
@@ -178,7 +178,7 @@ func get_escaped_middle_char(conn *DBConnection, c1 []byte, c1len uint, c2 []byt
 	return escapedresult
 }
 
-func update_cursor(conn *DBConnection, csi *chunk_step_item, dbt *DB_Table, tj *table_job) string {
+func update_cursor(conn *DBConnection, csi *chunk_step_item, dbt *db_table, tj *table_job) string {
 	var query, cache string
 	var row []mysql.FieldValue
 	var minmax *mysql.Result
@@ -221,7 +221,7 @@ func update_cursor(conn *DBConnection, csi *chunk_step_item, dbt *DB_Table, tj *
 	return ""
 }
 
-func get_new_minmax(td *thread_data, dbt *DB_Table, csi *chunk_step_item) bool {
+func get_new_minmax(td *thread_data, dbt *db_table, csi *chunk_step_item) bool {
 	var query, cache, cursor, escaped string
 	var row []mysql.FieldValue
 	var minmax *mysql.Result

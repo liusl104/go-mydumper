@@ -20,7 +20,7 @@ var (
 	SkipDefiner            bool
 	exec_per_thread_cmd    []string
 	m_open                 func(filename *string, mode string) (*file_write, error)
-	m_close                func(thread_id uint, file *file_write, filename string, size float64, dbt *DB_Table) error
+	m_close                func(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error
 )
 
 type checksum_fun func(conn *DBConnection, database, table string) string
@@ -32,20 +32,20 @@ type schema_metadata_job struct {
 }
 
 type schema_job struct {
-	dbt                     *DB_Table
+	dbt                     *db_table
 	filename                string
 	checksum_filename       bool
 	checksum_index_filename bool
 }
 
 type sequence_job struct {
-	dbt               *DB_Table
+	dbt               *db_table
 	filename          string
 	checksum_filename bool
 }
 
 type table_checksum_job struct {
-	dbt      *DB_Table
+	dbt      *db_table
 	filename string
 }
 
@@ -60,7 +60,7 @@ type database_job struct {
 }
 
 type view_job struct {
-	dbt                *DB_Table
+	dbt                *db_table
 	tmp_table_filename string
 	view_filename      string
 	checksum_filename  bool
@@ -180,7 +180,7 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 	return
 }
 
-func write_table_definition_into_file(conn *DBConnection, dbt *DB_Table, filename string, checksum_filename bool, checksum_index_filename bool) {
+func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool, checksum_index_filename bool) {
 	var outfile *file_write
 	var query string
 	var err error
@@ -305,7 +305,7 @@ func write_triggers_definition_into_file(conn *DBConnection, result *mysql.Resul
 	return
 }
 
-func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *DB_Table, filename string, checksum_filename bool) {
+func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
 	var result *mysql.Result
@@ -367,7 +367,7 @@ func write_triggers_definition_into_file_from_database(conn *DBConnection, datab
 	return
 }
 
-func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename string, filename2 string, checksum_filename bool) {
+func write_view_definition_into_file(conn *DBConnection, dbt *db_table, filename string, filename2 string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
 	var statement = G_string_sized_new(StatementSize)
@@ -468,7 +468,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *DB_Table, filename
 	return
 }
 
-func write_sequence_definition_into_file(conn *DBConnection, dbt *DB_Table, filename string, checksum_filename bool) {
+func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
 	var statement = G_string_sized_new(StatementSize)
@@ -817,7 +817,7 @@ func create_job_to_dump_post(database *database, conf *configuration) {
 	create_database_related_job(database, conf, JOB_SCHEMA_POST, "schema-post", dump_directory)
 }
 
-func create_job_to_dump_triggers(conn *DBConnection, dbt *DB_Table, conf *configuration) {
+func create_job_to_dump_triggers(conn *DBConnection, dbt *db_table, conf *configuration) {
 	var query string
 	var result *mysql.Result
 	var q = Identifier_quote_character
@@ -851,7 +851,7 @@ func create_job_to_dump_schema_triggers(database *database, conf *configuration)
 	G_async_queue_push(conf.post_data_queue, t)
 }
 
-func create_job_to_dump_table_schema(dbt *DB_Table, conf *configuration) {
+func create_job_to_dump_table_schema(dbt *db_table, conf *configuration) {
 	var j = new(job)
 	var sj = new(schema_job)
 	j.types = JOB_SCHEMA
@@ -863,7 +863,7 @@ func create_job_to_dump_table_schema(dbt *DB_Table, conf *configuration) {
 	G_async_queue_push(conf.schema_queue, j)
 }
 
-func create_job_to_dump_view(dbt *DB_Table, conf *configuration) {
+func create_job_to_dump_view(dbt *db_table, conf *configuration) {
 	var j = new(job)
 	var vj = new(view_job)
 	vj.dbt = dbt
@@ -876,7 +876,7 @@ func create_job_to_dump_view(dbt *DB_Table, conf *configuration) {
 	return
 }
 
-func create_job_to_dump_sequence(dbt *DB_Table, conf *configuration) {
+func create_job_to_dump_sequence(dbt *db_table, conf *configuration) {
 	var j = new(job)
 	var sj = new(sequence_job)
 	sj.dbt = dbt
@@ -888,7 +888,7 @@ func create_job_to_dump_sequence(dbt *DB_Table, conf *configuration) {
 	return
 }
 
-func create_job_to_dump_checksum(dbt *DB_Table, conf *configuration) {
+func create_job_to_dump_checksum(dbt *db_table, conf *configuration) {
 	var j = new(job)
 	var tcj = new(table_checksum_job)
 	tcj.dbt = dbt
@@ -922,8 +922,8 @@ func update_files_on_table_job(tj *table_job) bool {
 		}
 		tj.rows.file.status = 1
 		if tj.sql != nil {
-			tj.rows.filename = build_sql_filename(tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
-			tj.rows.file, err = m_open(&tj.sql.filename, "w")
+			tj.sql.filename = build_sql_filename(tj.dbt.database.filename, tj.dbt.table_filename, tj.nchunk, tj.sub_part)
+			tj.sql.file, err = m_open(&tj.sql.filename, "w")
 			if err != nil {
 				log.Criticalf("open file %s fail: %v", tj.sql.filename, err)
 				errors++
@@ -936,7 +936,7 @@ func update_files_on_table_job(tj *table_job) bool {
 	return false
 }
 
-func new_table_job(dbt *DB_Table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item) *table_job {
+func new_table_job(dbt *db_table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item) *table_job {
 	var tj = new(table_job)
 	tj.partition = partition
 	tj.chunk_step_item = chunk_step_item
@@ -985,7 +985,7 @@ func free_table_job(tj *table_job) {
 	tj = nil
 }
 
-func create_job_to_dump_chunk_without_enqueuing(dbt *DB_Table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item) *job {
+func create_job_to_dump_chunk_without_enqueuing(dbt *db_table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item) *job {
 	var j = new(job)
 	var tj = new_table_job(dbt, partition, nchunk, order_by, chunk_step_item)
 	j.job_data = tj
@@ -998,7 +998,7 @@ func create_job_to_dump_chunk_without_enqueuing(dbt *DB_Table, partition string,
 	return j
 }
 
-func create_job_to_dump_chunk(dbt *DB_Table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item, f func(q *GAsyncQueue, task any), queue *GAsyncQueue) {
+func create_job_to_dump_chunk(dbt *db_table, partition string, nchunk uint64, order_by string, chunk_step_item *chunk_step_item, f func(q *GAsyncQueue, task any), queue *GAsyncQueue) {
 	var j = new(job)
 	var tj = new_table_job(dbt, partition, nchunk, order_by, chunk_step_item)
 	j.job_data = tj
@@ -1010,14 +1010,14 @@ func create_job_to_dump_chunk(dbt *DB_Table, partition string, nchunk uint64, or
 	f(queue, j)
 }
 
-func create_job_defer(dbt *DB_Table, queue *GAsyncQueue) {
+func create_job_defer(dbt *db_table, queue *GAsyncQueue) {
 	var j *job = new(job)
 	j.types = JOB_DEFER
 	j.job_data = dbt
 	G_async_queue_push(queue, j)
 }
 
-func create_job_to_determine_chunk_type(dbt *DB_Table, f func(q *GAsyncQueue, task any), queue *GAsyncQueue) {
+func create_job_to_determine_chunk_type(dbt *db_table, f func(q *GAsyncQueue, task any), queue *GAsyncQueue) {
 	var j = new(job)
 	j.job_data = dbt
 	j.types = JOB_DETERMINE_CHUNK_TYPE

@@ -150,7 +150,13 @@ func Show_warnings_if_possible(conn *DBConnection) string {
 }
 
 func generic_checksum(conn *DBConnection, database, table, query_template string, column_number int) string {
-	var query string = fmt.Sprintf(query_template, database, table)
+	var query string
+	if table == "" {
+		query = fmt.Sprintf(query_template, database)
+	} else {
+		query = fmt.Sprintf(query_template, database, table)
+	}
+
 	result := conn.Execute(query)
 	if conn.Err != nil {
 		log.Criticalf("Error dumping checksum (%s.%s): %v", database, table, conn.Err)
@@ -159,7 +165,11 @@ func generic_checksum(conn *DBConnection, database, table, query_template string
 	var r string
 
 	for _, row := range result.Values {
-		r = fmt.Sprintf("%v", row[column_number].Value())
+		if result.Fields[column_number].Type <= mysql.MYSQL_TYPE_INT24 {
+			r = fmt.Sprintf("%d", row[column_number].AsInt64())
+		} else {
+			r = fmt.Sprintf("%s", row[column_number].AsString())
+		}
 	}
 	return r
 }
@@ -428,6 +438,9 @@ func create_fifo_dir(new_fifo_directory string) {
 }
 
 func Create_backup_dir(new_directory, new_fifo_directory string) {
+	if Help {
+		return
+	}
 	if err := os.MkdirAll(new_directory, 0750); err != nil {
 		log.Criticalf("Unable to create `%s': %v", new_directory, err)
 	}
@@ -678,7 +691,7 @@ func Check_num_threads() {
 	// 如果线程数量小于最小线程数量，则记录警告并将其设置为最小线程数量
 	if NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", NumThreads, MIN_THREAD_COUNT)
-		NumThreads = MIN_THREAD_COUNT
+		// NumThreads = MIN_THREAD_COUNT
 	}
 }
 
