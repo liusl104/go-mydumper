@@ -29,7 +29,7 @@ func initialize_loader_threads(conf *configuration) {
 	}
 	for n = 0; n < NumThreads; n++ {
 		loader_td[n] = new(thread_data)
-		threads[n] = G_thread_new("myloader_loader", new(sync.WaitGroup), n)
+		threads[n] = G_thread_new("myloader_loader", new(sync.WaitGroup), int(n))
 		initialize_thread_data(loader_td[n], conf, WAITING, n+1, nil)
 		go loader_thread(loader_td[n], n)
 		G_async_queue_pop(conf.ready)
