@@ -32,7 +32,7 @@ func initialize_post_loding_threads(conf *configuration) {
 	sync_mutex2.Lock()
 	post_threads = make([]*GThreadFunc, 0)
 	for n = 0; n < MaxThreadsForPostCreation; n++ {
-		post_threads[n] = G_thread_new("myloader_post", new(sync.WaitGroup), n)
+		post_threads[n] = G_thread_new("myloader_post", new(sync.WaitGroup), int(n))
 		post_td[n] = new(thread_data)
 		initialize_thread_data(post_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation+MaxThreadsForIndexCreation, nil)
 		go worker_post_thread(post_td[n], n)

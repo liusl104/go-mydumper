@@ -5,7 +5,6 @@ go 1.21
 require (
 	github.com/go-ini/ini v1.67.0
 	github.com/go-mysql-org/go-mysql v1.7.0
-	github.com/go-sql-driver/mysql v1.6.0
 	github.com/klauspost/compress v1.17.7
 	github.com/sevlyar/go-daemon v0.1.6
 	github.com/shirou/gopsutil v3.21.11+incompatible

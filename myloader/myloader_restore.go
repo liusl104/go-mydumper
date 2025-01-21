@@ -89,7 +89,7 @@ func initialize_connection_pool(thrconn *DBConnection) {
 		iors = new_io_restore_result()
 		G_async_queue_push(restore_queues, iors)
 		var thread = new(sync.WaitGroup)
-		restore_threads[n] = G_thread_new("myloader_conn", thread, n)
+		restore_threads[n] = G_thread_new("myloader_conn", thread, int(n))
 		go restore_thread(thrconn, n)
 
 	}

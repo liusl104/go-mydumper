@@ -23,7 +23,7 @@ func initialize_worker_index(conf *configuration) {
 	innodb_optimize_keys_all_tables_queue = G_async_queue_new(BufferSize)
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		index_td[n] = new(thread_data)
-		index_threads[n] = G_thread_new("myloader_index", new(sync.WaitGroup), n)
+		index_threads[n] = G_thread_new("myloader_index", new(sync.WaitGroup), int(n))
 		initialize_thread_data(index_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation, nil)
 		// g_thread_new("myloader_index_thread", worker_index_thread()) {
 		go worker_index_thread(index_td[n], n)
