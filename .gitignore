@@ -9,7 +9,6 @@
 *.dylib
 .DS_Store
 .idea
-go.sum
 output
 # Test binary, built with `go test -c`
 *.test
