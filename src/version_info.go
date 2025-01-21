@@ -1,4 +1,4 @@
-package src
+package mydumper
 
 var (
 	BuildTS   string

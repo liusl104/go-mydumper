@@ -3,7 +3,8 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	. "go-mydumper/src"
+	log "go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -17,14 +18,23 @@ const (
 	STREAM_BUFFER_SIZE        = 1000000
 )
 
+var (
+	initial_metadata_queue         *GAsyncQueue
+	initial_metadata_lock_queue    *GAsyncQueue
+	metadata_partial_queue         *GAsyncQueue
+	metadata_partial_writer_alive  bool
+	metadata_partial_writer_thread *GThreadFunc
+	stream_thread                  *GThreadFunc
+)
+
 type stream_queue_element struct {
 	dbt      *db_table
 	filename string
 }
 
-func metadata_partial_queue_push(o *OptionEntries, dbt *db_table) {
+func metadata_partial_queue_push(dbt *db_table) {
 	if dbt != nil {
-		o.global.metadata_partial_queue.push(dbt)
+		G_async_queue_push(metadata_partial_queue, dbt)
 	}
 }
 
@@ -35,23 +45,20 @@ func new_stream_queue_element(dbt *db_table, filename string) *stream_queue_elem
 	return sf
 }
 
-func get_stream_queue_length(queue *asyncQueue) uint {
-	return uint(queue.length)
+func get_stream_queue_length(queue *GAsyncQueue) int64 {
+	return G_async_queue_length(queue)
 }
 
-func stream_queue_push(o *OptionEntries, dbt *db_table, filename string) {
-	if dbt != nil {
-		log.Infof("New stream file: %s for dbt: %s ", filename, dbt.table)
-	} else {
-		log.Infof("New stream file: %s with null dbt: ", filename)
-	}
-	o.global.stream_queue.push(new_stream_queue_element(dbt, filename))
-	metadata_partial_queue_push(o, dbt)
+func stream_queue_push(dbt *db_table, filename string) {
+	var done = G_async_queue_new(BufferSize)
+	G_async_queue_push(Stream_queue, new_stream_queue_element(dbt, filename))
+	G_async_queue_pop(done)
+	G_async_queue_unref(done)
+	metadata_partial_queue_push(dbt)
 }
 
-func process_stream(o *OptionEntries, data any) {
-	o.global.stream_thread.Add(1)
-	defer o.global.stream_thread.Done()
+func process_stream(data any) {
+	defer stream_thread.Thread.Done()
 	var f *os.File
 	var buf []byte = make([]byte, STREAM_BUFFER_SIZE)
 	var buflen int
@@ -62,7 +69,7 @@ func process_stream(o *OptionEntries, data any) {
 	var datetime time.Time
 	var err error
 	for {
-		task := o.global.stream_queue.pop()
+		task := G_async_queue_pop(Stream_queue)
 		sf := task.(*stream_queue_element)
 		if len(sf.filename) == 0 {
 			break
@@ -74,13 +81,13 @@ func process_stream(o *OptionEntries, data any) {
 		total_size += 5
 		total_size += uint64(len(used_filemame))
 		used_filemame = ""
-		if o.global.no_stream == false {
+		if No_stream == false {
 			f, err = os.Open(sf.filename)
 			if err != nil {
 				log.Errorf("File failed to open: %s", sf.filename)
 			} else {
 				if f == nil {
-					log.Errorf("File failed to open: %s. Reetrying", sf.filename)
+					log.Criticalf("File failed to open: %s. Reetrying", sf.filename)
 					f, err = os.Open(sf.filename)
 					if err != nil {
 						log.Errorf("File failed to open: %s. Cancelling", sf.filename)
@@ -138,7 +145,7 @@ func process_stream(o *OptionEntries, data any) {
 				f.Close()
 			}
 		}
-		if o.global.no_delete == false {
+		if No_delete == false {
 			os.Remove(sf.filename)
 		}
 		sf.filename = ""
@@ -151,61 +158,59 @@ func process_stream(o *OptionEntries, data any) {
 	} else {
 		log.Infof("All data transferred was %d at a rate of %.2f MB/s", total_size, float64(total_size)/1024/1024)
 	}
-	o.global.metadata_partial_writer_alive = false
-	metadata_partial_queue_push(o, nil)
-	o.global.metadata_partial_writer_thread.Wait()
+	metadata_partial_writer_alive = false
+	metadata_partial_queue_push(nil)
+	metadata_partial_writer_thread.Thread.Wait()
 	return
 }
 
-func send_initial_metadata(o *OptionEntries) {
-	o.global.initial_metadata_queue.push(1)
-	o.global.initial_metadata_lock_queue.pop()
+func send_initial_metadata() {
+	G_async_queue_push(initial_metadata_queue, 1)
+	G_async_queue_pop(initial_metadata_lock_queue)
 }
 
-func metadata_partial_writer(o *OptionEntries, data any) {
-	o.global.metadata_partial_writer_thread.Add(1)
-	defer o.global.metadata_partial_writer_thread.Done()
+func metadata_partial_writer(data any) {
+	defer metadata_partial_writer_thread.Thread.Done()
 	_ = data
 	var dbt *db_table
 	var dbt_list []*db_table
-	var output string
+	var output *GString = G_string_sized_new(256)
 	var i uint
 	var filename string
 	var err error
-	for i = 0; i < o.Common.NumThreads; i++ {
-		o.global.initial_metadata_queue.pop()
+	for i = 0; i < NumThreads; i++ {
+		G_async_queue_pop(initial_metadata_queue)
 	}
 	var task any
-	task = o.global.metadata_partial_queue.try_pop()
+	task = G_async_queue_try_pop(metadata_partial_queue)
 	for task != nil {
-		if task != nil {
-			dbt = task.(*db_table)
-			dbt_list = append(dbt_list, dbt)
-			task = o.global.metadata_partial_queue.try_pop()
-		}
+		dbt = task.(*db_table)
+		dbt_list = append(dbt_list, dbt)
+		task = G_async_queue_try_pop(metadata_partial_queue)
 	}
+	G_string_set_size(output, 0)
 	for _, dbt = range dbt_list {
-		print_dbt_on_metadata_gstring(dbt, &output)
+		print_dbt_on_metadata_gstring(dbt, output)
 	}
-	filename = fmt.Sprintf("metadata.partial.%d", 0)
-	err = os.WriteFile(filename, []byte(output), 0644)
-	stream_queue_push(o, nil, filename)
-	for i = 0; i < o.Common.NumThreads; i++ {
-		o.global.initial_metadata_lock_queue.push(1)
+	filename = make_partial_filename(0)
+	err = os.WriteFile(filename, []byte(output.Str.String()), 0644)
+	stream_queue_push(nil, filename)
+	for i = 0; i < NumThreads; i++ {
+		G_async_queue_push(initial_metadata_lock_queue, 1)
 	}
 	i = 1
 	var prev_datetime = time.Now()
 	var current_datetime time.Time
 	var diff float64
-	output = ""
+	G_string_set_size(output, 0)
 	filename = ""
-	task = o.global.metadata_partial_queue.timeout_pop(METADATA_PARTIAL_INTERVAL * 1000000)
+	task = G_async_queue_timeout_pop(metadata_partial_queue, METADATA_PARTIAL_INTERVAL*1000000)
 	if task == nil {
 		dbt = nil
 	} else {
 		dbt = task.(*db_table)
 	}
-	for o.global.metadata_partial_writer_alive {
+	for metadata_partial_writer_alive {
 		if dbt != nil {
 			f := slices.Contains(dbt_list, dbt)
 			if !f {
@@ -219,17 +224,17 @@ func metadata_partial_writer(o *OptionEntries, data any) {
 				filename = fmt.Sprintf("metadata.partial.%d", i)
 				i++
 				for _, dbt = range dbt_list {
-					print_dbt_on_metadata_gstring(dbt, &output)
-					err = os.WriteFile(filename, []byte(output), 0644)
-					stream_queue_push(o, nil, filename)
+					print_dbt_on_metadata_gstring(dbt, output)
+					err = os.WriteFile(filename, []byte(output.Str.String()), 0644)
+					stream_queue_push(nil, filename)
 					filename = ""
-					output = ""
+					G_string_set_size(output, 0)
 					dbt_list = nil
 				}
 			}
 			prev_datetime = current_datetime
 		}
-		task = o.global.metadata_partial_queue.timeout_pop(METADATA_PARTIAL_INTERVAL * 1000000)
+		task = G_async_queue_timeout_pop(metadata_partial_queue, METADATA_PARTIAL_INTERVAL*1000000)
 		if task == nil {
 			dbt = nil
 		} else {
@@ -240,18 +245,23 @@ func metadata_partial_writer(o *OptionEntries, data any) {
 
 }
 
-func initialize_stream(o *OptionEntries) {
-	o.global.initial_metadata_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.initial_metadata_lock_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.stream_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.metadata_partial_queue = g_async_queue_new(o.CommonOptionEntries.BufferSize)
-	o.global.stream_thread = new(sync.WaitGroup)
-	o.global.metadata_partial_writer_thread = new(sync.WaitGroup)
-	o.global.metadata_partial_writer_alive = true
-	go process_stream(o, nil)
-	go metadata_partial_writer(o, nil)
+func make_partial_filename(i uint) string {
+	return fmt.Sprintf("metadata.partial.%d", i)
+
 }
 
-func wait_stream_to_finish(o *OptionEntries) {
-	o.global.stream_thread.Wait()
+func initialize_stream() {
+	initial_metadata_queue = G_async_queue_new(BufferSize)
+	initial_metadata_lock_queue = G_async_queue_new(BufferSize)
+	Stream_queue = G_async_queue_new(BufferSize)
+	metadata_partial_queue = G_async_queue_new(BufferSize)
+	stream_thread = G_thread_new("stream_thread", new(sync.WaitGroup), 0)
+	metadata_partial_writer_thread = G_thread_new("metadata_partial_writer_thread", new(sync.WaitGroup), 0)
+	metadata_partial_writer_alive = true
+	go process_stream(nil)
+	go metadata_partial_writer(nil)
+}
+
+func wait_stream_to_finish() {
+	stream_thread.Thread.Wait()
 }
