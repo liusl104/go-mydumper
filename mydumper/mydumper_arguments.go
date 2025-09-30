@@ -127,8 +127,6 @@ func chunks_entries() {
 	pflag.IntVar(&MaxTimePerSelect, "max-time-per-select", 2, "Maximum amount of seconds that a select should take. Default: 2")
 	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 4, "Maximum number of threads per table to use")
 	pflag.BoolVar(&UseSingleColumn, "use-single-column", false, "It will ignore_engines if the table has multiple columns and use only the first column to split the table")
-	// pflag.UintVar(&CharDeep, "char-deep", 0, "Defines the amount of characters to use when the primary key is a string")
-	// pflag.UintVar(&CharChunk, "char-chunk", 0, "Defines in how many pieces should split the table. By default we use the amount of threads")
 	pflag.StringVarP(&RowsPerChunk, "rows", "r", "", "Spliting tables into chunks of this many rows. It can be MIN:START_AT:MAX. MAX can be 0 which means that there is no limit. It will double the chunk size if query takes less than 1 second and half of the size if it is more than 2 seconds")
 	pflag.StringVar(&RowsHard, "rows-hard", "", "This set the MIN and MAX limit when even if --rows is 0")
 	pflag.BoolVar(&SplitPartitions, "split-partitions", false, "Dump partitions into separate files. This options overrides the --rows option for partitioned tables.")
