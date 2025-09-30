@@ -3,7 +3,7 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
-	log "go-mydumper/src/logrus"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"slices"
 	"strings"
@@ -11,13 +11,13 @@ import (
 
 var tables_skiplist []string
 
-func Read_tables_skiplist(filename string) error {
+func Read_tables_skiplist(filename string, errors *int) {
 	var err error
 	var read_open *os.File
 	read_open, err = os.Open(filename)
 	if err != nil {
-		log.Critical("cannot read/open file %s, %v", filename, err)
-		return err
+		*errors++
+		return
 	}
 	defer read_open.Close()
 	var tablesSkipListChannel = bufio.NewScanner(read_open)
@@ -27,7 +27,7 @@ func Read_tables_skiplist(filename string) error {
 	}
 	slices.Sort(tables_skiplist)
 	log.Infof("Omit list file contains %d tables to skip", len(tables_skiplist))
-	return nil
+	return
 }
 
 func Check_skiplist(database string, table string) bool {

@@ -42,7 +42,11 @@ func G_string_append(s *GString, str string) {
 	s.Str.WriteString(str)
 	s.Len = s.Str.Len()
 }
-func G_string_append_c(s *GString, b []byte) {
+func G_string_append_c(s *GString, b byte) {
+	s.Str.Write([]byte{b})
+	s.Len = s.Str.Len()
+}
+func G_string_append_b(s *GString, b []byte) {
 	s.Str.Write(b)
 	s.Len = s.Str.Len()
 }
@@ -132,17 +136,21 @@ func G_mutex_new() *sync.Mutex {
 	return new(sync.Mutex)
 }
 
-type GThreadFunc struct {
+type GThread struct {
 	Thread        *sync.WaitGroup
+	Func          any
+	Args          any
 	Name          string
 	Thread_id     int
 	thread_number int
 }
 
-func G_thread_new(thread_name string, thread *sync.WaitGroup, thread_id int) *GThreadFunc {
-	var gtf = new(GThreadFunc)
-	gtf.Thread = thread
+func G_thread_new(thread_name string, f any, data any, thread_id int) *GThread {
+	var gtf = new(GThread)
+	gtf.Thread = new(sync.WaitGroup)
 	gtf.Name = thread_name
+	gtf.Func = f
+	gtf.Args = data
 	gtf.Thread_id = thread_id
 	if thread_id >= 0 {
 		gtf.thread_number = 1
@@ -151,7 +159,16 @@ func G_thread_new(thread_name string, thread *sync.WaitGroup, thread_id int) *GT
 	return gtf
 
 }
+func G_thread_join(t *GThread) {
+	t.Thread.Wait()
+}
 
+func G_thread_unref(t *GThread) {
+
+}
+func G_hash_table_unref(h any) {
+	h = nil
+}
 func G_atomic_int_dec_and_test(a *int64) bool {
 	atomic.AddInt64(a, -1)
 	if *a == 0 {

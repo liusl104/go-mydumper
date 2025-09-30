@@ -2,7 +2,7 @@ package mydumper
 
 import (
 	"fmt"
-	log "go-mydumper/src/logrus"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 
 	"os"
 	"path"

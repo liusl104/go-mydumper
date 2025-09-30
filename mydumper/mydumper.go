@@ -2,9 +2,9 @@ package mydumper
 
 import (
 	"fmt"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
 	"os"
 	"strconv"
 	"strings"
@@ -12,18 +12,18 @@ import (
 )
 
 var (
-	OutputDirectoryParam string
-	ClearDumpDir         bool
-	DirtyDumpDir         bool
-	DaemonMode           bool
-	PidFile              string
-	SkipConstraints      bool
-	SkipIndexes          bool
-	shutdown_triggered   bool
-	dump_directory       string
-	output_directory     string
-	errors               int
-	DIRECTORY            string = "export"
+	ClearDumpDir       bool
+	DirtyDumpDir       bool
+	MergeDumpDir       bool
+	DaemonMode         bool
+	PidFile            string
+	SkipConstraints    bool
+	SkipIndexes        bool
+	shutdown_triggered bool
+	dump_directory     string
+	output_directory   string
+	errors             int
+	DIRECTORY          string = "export"
 )
 
 func parse_disk_limits() {
@@ -42,9 +42,10 @@ func parse_disk_limits() {
 	set_disk_limits(uint(p_at), uint(r_at))
 }
 
-func CommandDump() error {
+func CommandDump() {
 	load_contex_entries()
-	Initialize_share_common()
+	// Loading the defaults file:
+	Initialize_common_options(MYDUMPER)
 	if LoadData {
 		output_format = LOAD_DATA
 		rows_file_extension = DAT
@@ -53,23 +54,51 @@ func CommandDump() error {
 		output_format = CSV
 		rows_file_extension = DAT
 	}
-	if OutputDirectoryParam == "" {
-		dt := time.Now()
-		var datetimestr string
-		datetimestr = dt.Format("20060102-150405")
-		output_directory = fmt.Sprintf("%s-%s", DIRECTORY, datetimestr)
-	} else {
-		output_directory = OutputDirectoryParam
+	initialize_directories()
+	if DiskLimits != "" {
+		parse_disk_limits()
 	}
+	if NumThreads < 2 {
+		UseDefer = false
+	}
+
+	if ExecPerThreadExtension == "" && Exec_per_thread != "" {
+		log.Criticalf("--exec-per-thread-extension needs to be set when --exec-per-thread (%s) is used", Exec_per_thread)
+	}
+	if ExecPerThreadExtension != "" && Exec_per_thread == "" {
+		log.Criticalf("--exec-per-thread needs to be set when --exec-per-thread-extension (%s) is used", ExecPerThreadExtension)
+	}
+	if compress_method == "" && Exec_per_thread == "" {
+		ExecPerThreadExtension = EMPTY_STRING
+	} else {
+		set_pipe_backup()
+		if compress_method != "" && Exec_per_thread != "" {
+			log.Criticalf("--compression and --exec-per-thread are not comptatible")
+		}
+		if compress_method != "" {
+			if strings.EqualFold(compress_method, GZIP) {
+				Exec_per_thread = fmt.Sprintf("%s -c", GZIP)
+				ExecPerThreadExtension = GZIP_EXTENSION
+			} else if strings.EqualFold(compress_method, ZSTD) {
+				Exec_per_thread = fmt.Sprintf("%s -c", ZSTD)
+				ExecPerThreadExtension = ZSTD_EXTENSION
+			}
+		}
+		/*
+			这里不需要借助命令行压缩，使用第三方内置包
+			 exec_per_thread_cmd=g_strsplit(exec_per_thread, " ", 0);
+			    gchar *tmpcmd=g_find_program_in_path(exec_per_thread_cmd[0]);
+			    if (!tmpcmd)
+			      m_critical("%s was not found in PATH, use --exec-per-thread for non default locations",exec_per_thread_cmd[0]);
+			    exec_per_thread_cmd[0]=tmpcmd;
+		*/
+	}
+	Initialize_set_names()
 	if Debug {
 		Set_debug()
-		_ = Set_verbose()
-	} else {
-		_ = Set_verbose()
+		Verbose = 4
 	}
-	Create_backup_dir(output_directory, "")
-	Initialize_common_options(MYDUMPER)
-	Hide_password()
+
 	if Help {
 		print_help()
 	}
@@ -79,23 +108,22 @@ func CommandDump() error {
 			os.Exit(EXIT_SUCCESS)
 		}
 	}
-
+	_ = Set_verbose()
 	log.Infof("MyDumper backup version: %s", VERSION)
-
+	Hide_password()
 	Ask_password()
-	if DiskLimits != "" {
-		parse_disk_limits()
-	}
-	if NumThreads > 2 {
-		UseDefer = false
-	}
+	Initialize_pmm()
+	Create_dir(output_directory)
+
 	if DaemonMode {
 		ClearDumpDir = true
 		initialize_daemon_thread()
 		runDaemon()
 	} else {
 		dump_directory = output_directory
-		StartDump()
+		var conf = Configuration{}
+		Start_pmm_thread(&conf)
+		StartDump(&conf)
 	}
 
 	defer func() {
@@ -103,7 +131,12 @@ func CommandDump() error {
 			_ = Log_output.Close()
 		}
 	}()
-	return nil
+	if errors == 0 {
+		log.Debugf("dump completed successfully")
+	} else {
+		log.Debugf("dump completed with %d errors", errors)
+	}
+	return
 }
 
 func print_help() {
@@ -128,19 +161,16 @@ func print_help() {
 	Print_string("tls-version", Tls_version)
 	Print_list("regex", Regex_list)
 	Print_string("database", DB)
-	Print_string("ignore-engines", IgnoreEngines)
+	Print_string("ignore_engines-engines", IgnoreEnginesStr)
 	Print_string("where", WhereOption)
 	Print_int("updated-since", UpdatedSince)
 	Print_string("partition-regex", PartitionRegex)
 	Print_string("omit-from-file", TablesSkiplistFile)
 	Print_string("tables-list", TablesList)
 	Print_string("tidb-snapshot", TidbSnapshot)
-	Print_bool("no-locks", NoLocks)
 	Print_bool("use-savepoints", UseSavepoints)
 	Print_bool("no-backup-locks", NoBackupLocks)
-	Print_bool("lock-all-tables", LockAllTables)
-	Print_bool("less-locking", LessLocking)
-	Print_bool("trx-consistency-only", TrxConsistencyOnly)
+	Print_int("trx-tables", TrxTables)
 	Print_bool("skip-ddl-locks", SkipDdlLocks)
 	Print_string("pmm-path", PmmPath)
 	Print_string("pmm-resolution", PmmResolution)
@@ -177,7 +207,7 @@ func print_help() {
 	Print_string("lines-starting-by", LinesStartingByLd)
 	Print_string("lines-terminated-by", LinesTerminatedByLd)
 	Print_string("statement-terminated-by", StatementTerminatedByLd)
-	Print_bool("insert-ignore", InsertIgnore)
+	Print_bool("insert-ignore_engines", InsertIgnore)
 	Print_bool("replace", Replace)
 	Print_bool("complete-insert", CompleteInsert)
 	Print_bool("hex-blob", HexBlob)
@@ -185,10 +215,18 @@ func print_help() {
 	Print_int("statement-size", StatementSize)
 	Print_bool("tz-utc", SkipTz)
 	Print_bool("skip-tz-utc", SkipTz)
-	Print_string("set-names", SetNamesStr)
+	if Set_names_in_conn_by_default != "" || SetNamesInConnForSct != "" {
+		Print_string("set-names", fmt.Sprintf("%s,%s", Set_names_in_conn_by_default, SetNamesInConnForSct))
+	} else {
+		Print_string("set-names", "")
+	}
+	if SetNamesInFileByDefault != "" || SetNamesInFileForSct != "" {
+		Print_string("set-names-file", fmt.Sprintf("%s,%s", SetNamesInFileByDefault, SetNamesInFileForSct))
+	} else {
+		Print_string("set-names-file", "")
+	}
 	Print_uint("chunk-filesize", ChunkFilesize)
 	Print_bool("exit-if-broken-table-found", ExitIfBrokenTableFound)
-	Print_bool("success-on-1146", SuccessOn1146)
 	Print_bool("build-empty-files", BuildEmptyFiles)
 	Print_bool("no-check-generated-fields", IgnoreGeneratedFields)
 	Print_bool("order-by-primary", OrderByPrimaryKey)
@@ -203,6 +241,7 @@ func print_help() {
 	Print_string("outputdir", output_directory)
 	Print_bool("clear", ClearDumpDir)
 	Print_bool("dirty", DirtyDumpDir)
+	Print_bool("merge", MergeDumpDir)
 	Print_bool("stream", Stream != "")
 	Print_string("logfile", LogFile)
 	Print_string("disk-limits", DiskLimits)
@@ -212,6 +251,14 @@ func print_help() {
 	Print_bool("debug", Debug)
 	Print_string("defaults-file", DefaultsFile)
 	Print_string("defaults-extra-file", DefaultsExtraFile)
-	Print_string("fifodir", FifoDirectory)
 	os.Exit(EXIT_SUCCESS)
+}
+
+func initialize_directories() {
+	if OutputDirectoryStr == "" {
+		var datatimestr = time.Now().Format("20060102-150405")
+		output_directory = fmt.Sprintf("%s-%s", DIRECTORY, datatimestr)
+	} else {
+		output_directory = OutputDirectoryStr
+	}
 }

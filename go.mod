@@ -1,4 +1,4 @@
-module go-mydumper
+module github.com/liusl104/go-mydumper
 
 go 1.21
 

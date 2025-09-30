@@ -2,7 +2,7 @@ package mydumper
 
 import (
 	"fmt"
-	. "go-mydumper/src"
+	. "github.com/liusl104/go-mydumper/src"
 	"os"
 	"sort"
 	"sync"
@@ -25,16 +25,6 @@ type database struct {
 	dump_triggers     bool
 }
 
-func free_database(d *database) {
-	if d.escaped != "" {
-		d.escaped = ""
-	}
-	if d.ad_mutex != nil {
-		d.ad_mutex = nil
-	}
-	d = nil
-}
-
 func initialize_database() {
 	database_hash = make(map[string]*database)
 	database_hash_mutex = G_mutex_new()
@@ -54,6 +44,16 @@ func new_database(conn *DBConnection, database_name string, already_dumped bool)
 	d.dump_triggers = !Is_regex_being_used() && TablesList == "" && len(conf_per_table.All_object_to_export) == 0
 	database_hash[d.name] = d
 	return d
+}
+
+func free_database(d *database) {
+	if d.escaped != "" {
+		d.escaped = ""
+	}
+	if d.ad_mutex != nil {
+		d.ad_mutex = nil
+	}
+	d = nil
 }
 
 func free_databases() {

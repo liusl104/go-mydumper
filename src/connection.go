@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -10,8 +9,8 @@ import (
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
-	log "go-mydumper/src/logrus"
 	"golang.org/x/term"
 )
 
@@ -56,6 +55,8 @@ type DBConnection struct {
 	Code    uint16
 	Warning uint16
 	Result  *mysql.Result
+	Stmt    *client.Stmt
+	Query   string
 }
 
 func Connection_arguments_callback() bool {
@@ -171,8 +172,8 @@ func print_connection_details_once() {
 
 func mysql_real_connect(conn *DBConnection, hostname string, username string, password string, db string, port int, unix_socket string) bool {
 	var addr string
-	if SocketPath != "" {
-		addr = SocketPath
+	if unix_socket != "" {
+		addr = unix_socket
 	} else {
 		addr = fmt.Sprintf("%s:%d", hostname, port)
 	}
@@ -225,55 +226,9 @@ func M_connect(conn *DBConnection) {
 	print_connection_details_once()
 
 	if Set_names_statement != "" {
-		conn.Execute(Set_names_statement)
+		M_query_warning(conn, Set_names_statement, "Not able to execute SET NAMES statement")
 	}
 	return
-}
-
-func (d *DBConnection) Ping() error {
-	d.Err = d.Conn.Ping()
-	if d.Err != nil {
-		var myError *mysql.MyError
-		errors.As(d.Err, &myError)
-		d.Code = myError.Code
-	} else {
-		d.Code = 0
-	}
-	return d.Err
-}
-
-func (d *DBConnection) UseDB(dbName string) bool {
-	if d.Err = d.Conn.UseDB(dbName); d.Err != nil {
-		var myError *mysql.MyError
-		errors.As(d.Err, &myError)
-		d.Code = myError.Code
-		return false
-	}
-	d.Code = 0
-	return true
-}
-func (d *DBConnection) GetConnectionID() uint32 {
-	return d.Conn.GetConnectionID()
-}
-
-func (d *DBConnection) Close() error {
-	return d.Conn.Close()
-}
-
-func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Result) {
-	log.Debugf("Executing: %s", command)
-	d.Result, d.Err = d.Conn.Execute(command, args...)
-	if d.Err != nil {
-		var myError *mysql.MyError
-		errors.As(d.Err, &myError)
-		d.Code = myError.Code
-	} else {
-		d.Code = 0
-	}
-	if d.Result != nil {
-		d.Warning = d.Result.Warnings
-	}
-	return d.Result
 }
 
 func Hide_password() {
@@ -318,8 +273,4 @@ func Ask_password() {
 	if Password == "" && AskPassword {
 		Password = passwordPrompt()
 	}
-}
-
-func Mysql_get_server_version() uint {
-	return uint(Get_major()*10000 + Get_secondary()*100 + Get_revision())
 }
