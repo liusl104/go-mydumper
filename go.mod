@@ -1,6 +1,6 @@
 module go-mydumper
 
-go 1.21
+go 1.22
 
 require (
 	github.com/go-ini/ini v1.67.0
