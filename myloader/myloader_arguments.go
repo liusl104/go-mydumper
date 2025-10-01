@@ -1,9 +1,9 @@
 package myloader
 
 import (
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
 	"strings"
 )
 
@@ -36,7 +36,6 @@ var (
 	RetryCount                  uint = 10
 	SerialTblCreation           bool
 	RefreshTableListInterval    uint = 100
-	IgnoreErrors                string
 	SetGtidPurge                bool
 	Rows                        int
 	CommitCount                 uint = 1000
