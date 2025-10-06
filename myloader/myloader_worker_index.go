@@ -1,33 +1,29 @@
 package myloader
 
 import (
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"sync"
 	"time"
 )
 
 var (
 	innodb_optimize_keys_all_tables_queue *GAsyncQueue
-	index_threads                         []*GThreadFunc
+	index_threads                         []*GThread
 	index_td                              []*thread_data
+	init_connection_mutex                 *sync.Mutex
 )
 
 func initialize_worker_index(conf *configuration) {
 	var n uint = 0
-	//  index_mutex = g_mutex_new();
 	init_connection_mutex = G_mutex_new()
-
-	index_threads = make([]*GThreadFunc, 0)
+	index_threads = make([]*GThread, MaxThreadsForIndexCreation)
 	index_td = make([]*thread_data, MaxThreadsForIndexCreation)
 	innodb_optimize_keys_all_tables_queue = G_async_queue_new(BufferSize)
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		index_td[n] = new(thread_data)
-		index_threads[n] = G_thread_new("myloader_index", new(sync.WaitGroup), int(n))
 		initialize_thread_data(index_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation, nil)
-		// g_thread_new("myloader_index_thread", worker_index_thread()) {
-		go worker_index_thread(index_td[n], n)
-
+		index_threads[n] = M_thread_new("myloader_index", worker_index_thread, index_td[n], "Index thread could not be created")
 	}
 }
 
@@ -50,19 +46,19 @@ func process_index(td *thread_data) bool {
 	return true
 }
 
-func worker_index_thread(td *thread_data, thread_id uint) {
-	defer index_threads[thread_id].Thread.Done()
-	var conf = td.conf
+func worker_index_thread(td *thread_data) {
+	var cnf = td.conf
 	init_connection_mutex.Lock()
 	init_connection_mutex.Unlock()
-	G_async_queue_push(conf.ready, 1)
-	if innodb_optimize_keys_all_tables {
+	G_async_queue_push(cnf.ready, 1)
+	if optimize_keys_all_tables {
 		G_async_queue_pop(innodb_optimize_keys_all_tables_queue)
 	}
 	log.Tracef("I-Thread %d: Starting import", td.thread_id)
 	var cont = true
 	for cont {
 		cont = process_index(td)
+		enroute_into_the_right_queue_based_on_file_type(REQUEST_DATA_JOB)
 	}
 	log.Tracef("I-Thread %d: ending", td.thread_id)
 
@@ -70,6 +66,7 @@ func worker_index_thread(td *thread_data, thread_id uint) {
 
 func create_index_shutdown_job(conf *configuration) {
 	var n uint
+	log.Tracef("Sending SHUTDOWN to index threads")
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		G_async_queue_push(conf.index_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 	}
@@ -78,15 +75,46 @@ func create_index_shutdown_job(conf *configuration) {
 func wait_index_worker_to_finish() {
 	var n uint
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
-		index_threads[n].Thread.Wait()
+		G_thread_join(index_threads[n])
 	}
 }
 
-func start_innodb_optimize_keys_all_tables() {
+func start_optimize_keys_all_tables() {
 	var n uint
+	log.Tracef("optimize_keys_all_tables_queue <- 1 (%d times)", MaxThreadsForIndexCreation)
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		G_async_queue_push(innodb_optimize_keys_all_tables_queue, 1)
 	}
+}
+
+func create_index_job(conf *configuration, dbt *db_table, tdid uint) bool {
+	log.Infof("Thread %d: Enqueuing index for table: %s.%s", tdid, dbt.database.real_database, dbt.table)
+	var rj *restore_job = new_schema_restore_job("index", JOB_RESTORE_STRING, dbt, dbt.database, dbt.indexes, INDEXES)
+	log.Tracef("index_queue <- %v: %s.%s", rj.job_type, dbt.database.real_database, dbt.table)
+	G_async_queue_push(conf.index_queue, new_control_job(JOB_RESTORE, rj, dbt.database))
+	dbt.schema_state = INDEX_ENQUEUED
+	return true
+}
+
+func enqueue_index_for_dbt_if_possible(conf *configuration, dbt *db_table) {
+	if dbt.schema_state == DATA_DONE {
+		if dbt.indexes == nil {
+			dbt.schema_state = ALL_DONE
+		} else {
+			create_index_job(conf, dbt, 0)
+		}
+	}
+	// return dbt.schema_state != ALL_DONE
+}
+
+func enqueue_indexes_if_possible(conf *configuration) {
+	conf.table_list_mutex.Lock()
+	for _, dbt := range conf.table_list {
+		dbt.mutex.Lock()
+		enqueue_index_for_dbt_if_possible(conf, dbt)
+		dbt.mutex.Unlock()
+	}
+	conf.table_list_mutex.Unlock()
 }
 
 func free_index_worker_threads() {

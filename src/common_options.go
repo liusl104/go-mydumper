@@ -44,6 +44,8 @@ var (
 	Throttle_variable              string
 	Throttle_value                 int
 	ReplicaDataStr                 string
+	PmmPath                        string
+	PmmResolution                  string
 )
 
 var (
@@ -100,7 +102,12 @@ func Common_filter_entries() {
 	pflag.StringVarP(&TablesSkiplistFile, "omit-from-file", "O", "", "File containing a list of database.table entries to skip, one per line (skips before applying regex option)")
 	pflag.StringVarP(&TablesList, "tables-list", "T", "", "Comma delimited table list to dump (does not exclude regex option). Table name must include database name. For instance: test.t1,test.t2")
 }
+func Pmm_entries() {
+	// pmm
+	pflag.StringVar(&PmmPath, "pmm-path", "", "which default value will be /usr/local/percona/pmm2/collectors/textfile-collector/high-resolution")
+	pflag.StringVar(&PmmResolution, "pmm-resolution", "", "which default will be high")
 
+}
 func parse_source_replica_options(value string, rep_set *Replication_settings) {
 	rep_set.Enabled = true
 	if value != "" {
@@ -132,7 +139,7 @@ func Common_arguments_callback() bool {
 		var tp []string
 		var tq = strings.SplitN(ThrottleStr, ":", 2)
 		if len(tq[1]) > 0 {
-			throttle_max_usleep_limit, _ = strconv.Atoi(tq[0])
+			Throttle_max_usleep_limit, _ = strconv.Atoi(tq[0])
 			tp = strings.SplitN(tq[1], "=", 2)
 		} else {
 			tp = strings.SplitN(ThrottleStr, "=", 2)

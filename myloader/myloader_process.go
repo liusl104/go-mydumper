@@ -3,8 +3,8 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -41,16 +41,23 @@ var (
 	append_if_not_exist     bool
 	change_master_statement *GString
 	schema_sequence_fix     bool
+	replicationStatements   *replication_statements
 )
 
 func initialize_process(c *configuration) {
+	replicationStatements = new(replication_statements)
+	replicationStatements.reset_replica = nil
+	replicationStatements.start_replica = nil
+	replicationStatements.change_replication_source = nil
+	replicationStatements.gtid_purge = nil
+	replicationStatements.start_replica_until = nil
 	conf = c
 	fifo_hash = make(map[*os.File]*fifo)
 	fifo_table_mutex = G_mutex_new()
 }
 
 func append_new_db_table(real_db_name *database, table string, number_rows uint64, alter_table_statement *GString) *db_table {
-	var lkey = build_dbt_key(real_db_name.filename, table)
+	var lkey = Build_dbt_key(real_db_name.filename, table)
 	var dbt *db_table = conf.table_hash[lkey]
 	if dbt == nil {
 		conf.table_hash_mutex.Lock()
@@ -61,6 +68,7 @@ func append_new_db_table(real_db_name *database, table string, number_rows uint6
 			dbt.table = table
 			dbt.real_table = dbt.table
 			dbt.rows = number_rows
+			dbt.rows_inserted = 0
 			dbt.restore_job_list = nil
 			Parse_object_to_export(dbt.object_to_export, conf_per_table.All_object_to_export[lkey])
 			dbt.current_threads = 0
@@ -126,6 +134,28 @@ func free_table_hash(table_hash map[string]*db_table) {
 func myl_open(filename string, mode int) (*osFile, error) {
 	var file *osFile
 	var err error
+	var basename, fifoname string
+	var command []string
+	if get_command_and_basename(filename, &command, &basename) {
+		fifoname = basename
+		if FifoDirectory != "" {
+			var basefilename = path.Base(basename)
+			fifoname = path.Join(FifoDirectory, basefilename)
+		}
+		if G_file_test(fifoname) {
+			a, _ := os.Stat(fifoname)
+			log.Infof("FIFO file: %s", filename)
+			if a.Mode()&os.ModeNamedPipe == 0 {
+				log.Warnf("FIFO file found %s, removing and continuing", fifoname)
+				os.Remove(fifoname)
+			}
+		}
+		err = os.Mkdir(fifoname, 0666)
+		if err != nil {
+			log.Criticalf("cannot create named pipe %s (%v)", fifoname, err)
+		}
+	}
+	// TODO : support write mode
 	mode = os.O_RDONLY
 	file, err = execute_file_per_thread(filename, ExecPerThreadExtension)
 	if err != nil {
@@ -138,11 +168,13 @@ func myl_open(filename string, mode int) (*osFile, error) {
 func myl_close(filename string, file *osFile, rm bool) {
 	fifo_table_mutex.Lock()
 	fifo_table_mutex.Unlock()
+	// TODO: support fifo mode
 	_ = filename
 	_ = file.close()
 }
 
 func load_schema(dbt *db_table, filename string) *control_job {
+	// TODO : load schema from fifo
 	var infile *osFile
 	var data *GString = new(GString)
 	var eof bool
@@ -396,6 +428,7 @@ func process_table_filename(filename string) bool {
 }
 
 func process_metadata_global(file string) {
+	// TODO : load metadata from fifo
 	var pt = path.Join(directory, file)
 	var kf = Load_config_file(pt)
 	if kf == nil {
@@ -495,15 +528,15 @@ func process_metadata_global(file string) {
 				}
 			} else {
 				database_table[0] = ""
-				var database *database = get_db_hash(database_table[0], database_table[0])
-				database.schema_checksum = get_value(kf, group, "schema_checksum")
-				database.post_checksum = get_value(kf, group, "post_checksum")
-				database.triggers_checksum = get_value(kf, group, "triggers_checksum")
+				var db *database = get_db_hash(database_table[0], database_table[0])
+				db.schema_checksum = get_value(kf, group, "schema_checksum")
+				db.post_checksum = get_value(kf, group, "post_checksum")
+				db.triggers_checksum = get_value(kf, group, "triggers_checksum")
 			}
 		} else if strings.HasPrefix(group, "replication") {
-			change_master(kf, group, change_master_statement)
+			// change_master(kf, group, change_master_statement)
 		} else if strings.HasPrefix(group, "master") || strings.HasPrefix(group, "source") {
-			change_master(kf, group, change_master_statement)
+			// change_master(kf, group, change_master_statement)
 		} else if strings.HasPrefix(group, "myloader_session_variables") {
 			Load_hash_of_all_variables_perproduct_from_key_file(kf, set_session_hash, "myloader_session_variables")
 			Refresh_set_session_from_hash(Set_session, set_session_hash)

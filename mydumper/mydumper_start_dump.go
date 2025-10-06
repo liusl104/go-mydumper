@@ -33,8 +33,6 @@ var (
 	Longquery                          uint64 = 60
 	Killqueries                        bool
 	Exec_command                       string
-	PmmPath                            string
-	PmmResolution                      string
 	UpdatedSince                       int
 	DumpTablespaces                    bool
 	threads                            []*GThread

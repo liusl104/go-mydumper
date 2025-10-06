@@ -4,9 +4,9 @@ import (
 	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/client"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
 	"os"
 	"strings"
 	"sync"
@@ -24,24 +24,25 @@ const (
 )
 
 var (
-	innodb_optimize_keys            bool = true
-	innodb_optimize_keys_per_table  bool = true
-	innodb_optimize_keys_all_tables bool
-	quote_character_cli             bool
-	directory                       string
-	detailed_errors                 *restore_errors = &restore_errors{}
-	sequences_processed             uint
-	sequences                       uint
-	sequences_mutex                 *sync.Mutex
-	errors                          uint
-	max_errors                      uint
-	retry_count                     uint = 10
-	load_data_list                  map[string]*sync.Mutex
-	load_data_list_mutex            *sync.Mutex
-	conf_per_table                  *Configuration_per_table
-	set_session_hash                map[string]string
-	set_global_hash                 map[string]string
-	pmm                             bool
+	innodb_optimize_keys     bool = true
+	optimize_keys_per_table  bool = true
+	optimize_keys            bool = true
+	optimize_keys_all_tables bool
+	quote_character_cli      bool
+	directory                string
+	detailed_errors          *restore_errors = &restore_errors{}
+	sequences_processed      uint
+	sequences                uint
+	sequences_mutex          *sync.Mutex
+	errors                   uint
+	max_errors               uint
+	retry_count              uint = 10
+	load_data_list           map[string]*sync.Mutex
+	load_data_list_mutex     *sync.Mutex
+	conf_per_table           *Configuration_per_table
+	set_session_hash         map[string]string
+	set_global_hash          map[string]string
+	pmm                      bool
 )
 
 type schema_status int
@@ -49,27 +50,23 @@ type thread_states int
 type file_type int
 
 const (
-	INIT file_type = iota
+	METADATA_GLOBAL file_type = iota
 	SCHEMA_TABLESPACE
+	SCHEMA_SEQUENCE
 	SCHEMA_CREATE
-	CJT_RESUME
 	SCHEMA_TABLE
 	DATA
+	LOAD_DATA
 	SCHEMA_VIEW
-	SCHEMA_SEQUENCE
 	SCHEMA_TRIGGER
 	SCHEMA_POST
-	CHECKSUM
-	//  METADATA_TABLE
-	METADATA_GLOBAL
-	RESUME
 	IGNORED
-	LOAD_DATA
+	INIT
+	CJT_RESUME
+	RESUME
 	SHUTDOWN
-	INCOMPLETE
 	DO_NOT_ENQUEUE
-	THREAD
-	INDEX
+	REQUEST_DATA_JOB
 	INTERMEDIATE_ENDED
 )
 
@@ -101,6 +98,7 @@ type db_connection struct {
 }
 type restore_errors struct {
 	data_errors        uint64
+	data_warnings      uint64
 	index_errors       uint64
 	schema_errors      uint64
 	trigger_errors     uint64
@@ -115,6 +113,7 @@ type restore_errors struct {
 type connection_data struct {
 	thrconn          *DBConnection
 	current_database *database
+	connection_id    int
 	thread_id        uint64
 	queue            *io_restore_result
 	ready            *GAsyncQueue
@@ -170,6 +169,7 @@ type db_table struct {
 	real_table              string
 	object_to_export        *Object_to_export
 	rows                    uint64
+	rows_inserted           uint64
 	restore_job_list        *list.List
 	current_threads         uint
 	max_threads             uint
@@ -195,16 +195,28 @@ type db_table struct {
 }
 
 func myloader_initialize_hash_of_session_variables() map[string]string {
-	var set_session_hash = Initialize_hash_of_session_variables()
-	if !EnableBinlog {
-		set_session_hash["SQL_LOG_BIN"] = "0"
-	}
+	var _set_session_hash = Initialize_hash_of_session_variables()
+
 	if CommitCount > 1 {
-		set_session_hash["AUTOCOMMIT"] = "0"
+		_set_session_hash["AUTOCOMMIT"] = "0"
 	}
-	return set_session_hash
+	if !EnableBinlog {
+		_set_session_hash["SQL_LOG_BIN"] = "0"
+	}
+	return _set_session_hash
 }
 
+func detect_group_replication_transaction_size_limit(conn *DBConnection) {
+	var _max_transaction_size uint64
+	var mr *M_ROW = M_store_result_row(conn, "SELECT @@group_replication_transaction_size_limit / 1024 / 1024", M_message, M_message, "Using default transaction limit")
+	if mr.Row != nil {
+		_max_transaction_size = mr.Row[0].AsUint64()
+	}
+	if _max_transaction_size > MaxTransactionSize {
+		MaxTransactionSize = _max_transaction_size
+	}
+	M_store_result_row_free(mr)
+}
 func print_time(timespan time.Time) string {
 	var now_time = time.Now().UnixMicro()
 	var days = (now_time - timespan.UnixMicro()) / G_TIME_SPAN_DAY
@@ -216,6 +228,40 @@ func print_time(timespan time.Time) string {
 
 func compare_by_time(a *db_table, b *db_table) bool {
 	return a.finish_time.Sub(a.start_data_time).Microseconds() > b.finish_time.Sub(b.start_data_time).Microseconds()
+}
+func initialize_directories() {
+	var current_dir string
+	current_dir, _ = os.Getwd()
+	if InputDirectory == "" {
+		if Stream != "" {
+			var datetimestr = time.Now().Format("20060102-150405")
+			directory = fmt.Sprintf("%s/%s-%s", current_dir, DIRECTORY, datetimestr)
+		} else {
+			if !Help {
+				log.Criticalf("a directory needs to be specified, see --help\n")
+			}
+		}
+
+	} else {
+		if strings.HasPrefix(InputDirectory, "/") {
+			directory = InputDirectory
+		} else {
+			directory = fmt.Sprintf("%s/%s", current_dir, InputDirectory)
+		}
+		if Stream != "" {
+			if G_file_test(InputDirectory) && !No_stream {
+				log.Criticalf("Backup directory (-d) must not exist when --stream / --stream=TRADITIONAL")
+			}
+		} else {
+			if G_file_test(InputDirectory) {
+				log.Criticalf("the specified directory doesn't exists\n")
+			}
+			var p = fmt.Sprintf("%s/metadata", directory)
+			if !G_file_test(p) {
+				log.Criticalf("the specified directory %s is not a mydumper backup as metadata file was not found in it", directory)
+			}
+		}
+	}
 }
 
 func show_dbt(key any, dbt any, total any) {
@@ -231,11 +277,11 @@ func create_database(td *thread_data, database string) {
 	if G_file_test(filepath) {
 		atomic.AddUint64(&detailed_errors.schema_errors, uint64(restore_data_from_file(td, filename, true, nil)))
 	} else {
-		var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS %s%s%s", Identifier_quote_character, database, Identifier_quote_character)
-		if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) != 0 {
-			atomic.AddUint64(&detailed_errors.schema_errors, 1)
-		}
-		data = nil
+		// var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS %s%s%s", Identifier_quote_character, database, Identifier_quote_character)
+		//if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) != 0 {
+		//	atomic.AddUint64(&detailed_errors.schema_errors, 1)
+		//}
+		// data = nil
 	}
 	return
 }
@@ -352,7 +398,7 @@ func StartLoad() {
 	}
 	err = os.Chdir(directory)
 	if TablesSkiplistFile != "" {
-		err = Read_tables_skiplist(TablesSkiplistFile)
+		// err = Read_tables_skiplist(TablesSkiplistFile)
 	}
 	initialize_process(conf)
 	initialize_common()
@@ -366,7 +412,7 @@ func StartLoad() {
 	Set_session = G_string_new("")
 	Set_global = G_string_new("")
 	Set_global_back = G_string_new("")
-	err = Detect_server_version(conn)
+	// err = Detect_server_version(conn)
 	Detected_server = Get_product()
 	set_session_hash = myloader_initialize_hash_of_session_variables()
 	set_global_hash = make(map[string]string)
@@ -579,9 +625,9 @@ func print_help() {
 	Print_bool("enable-binlog", EnableBinlog)
 	if !innodb_optimize_keys {
 		Print_string("innodb-optimize-keys", SKIP)
-	} else if innodb_optimize_keys_per_table {
+	} else if optimize_keys_per_table {
 		Print_string("innodb-optimize-keys", AFTER_IMPORT_PER_TABLE)
-	} else if innodb_optimize_keys_all_tables {
+	} else if optimize_keys_all_tables {
 		Print_string("innodb-optimize-keys", AFTER_IMPORT_ALL_TABLES)
 	} else {
 		Print_string("innodb-optimize-keys", "")

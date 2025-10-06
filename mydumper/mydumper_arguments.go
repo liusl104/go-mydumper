@@ -9,8 +9,6 @@ import (
 )
 
 const (
-	GZIP           = "GZIP"
-	ZSTD           = "ZSTD"
 	INSERT_ARG     = "INSERT"
 	LOAD_DATA_ARG  = "LOAD_DATA"
 	CSV_ARG        = "CSV"

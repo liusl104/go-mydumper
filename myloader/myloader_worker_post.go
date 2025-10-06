@@ -1,8 +1,8 @@
 package myloader
 
 import (
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"sync"
 )
 
@@ -14,12 +14,13 @@ var (
 	sync_threads_remaining1 int64
 	sync_threads_remaining2 int64
 	post_td                 []*thread_data
-	post_threads            []*GThreadFunc
+	post_threads            []*GThread
 )
 
 func initialize_post_loding_threads(conf *configuration) {
 	var n uint
 	// post_threads = make([]*sync.WaitGroup, Threads.MaxThreadsForPostCreation)
+	post_threads = make([]*GThread, MaxThreadsForPostCreation)
 	post_td = make([]*thread_data, MaxThreadsForPostCreation)
 	sync_threads_remaining = int64(MaxThreadsForPostCreation)
 	sync_threads_remaining1 = int64(MaxThreadsForPostCreation)
@@ -30,12 +31,10 @@ func initialize_post_loding_threads(conf *configuration) {
 	sync_mutex.Lock()
 	sync_mutex1.Lock()
 	sync_mutex2.Lock()
-	post_threads = make([]*GThreadFunc, 0)
 	for n = 0; n < MaxThreadsForPostCreation; n++ {
-		post_threads[n] = G_thread_new("myloader_post", new(sync.WaitGroup), int(n))
 		post_td[n] = new(thread_data)
 		initialize_thread_data(post_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation+MaxThreadsForIndexCreation, nil)
-		go worker_post_thread(post_td[n], n)
+		post_threads[n] = M_thread_new("myloader_post", worker_post_thread, post_td[n], "Post thread could not be created")
 	}
 }
 
@@ -50,7 +49,7 @@ func sync_threads(counter *int64, mutex *sync.Mutex) {
 
 func worker_post_thread(td *thread_data, thread_id uint) {
 	defer post_threads[thread_id].Thread.Done()
-	var conf *configuration = td.conf
+	var cnf *configuration = td.conf
 
 	G_async_queue_push(conf.ready, 1)
 	var cont bool = true
@@ -59,19 +58,19 @@ func worker_post_thread(td *thread_data, thread_id uint) {
 	log.Infof("Thread %d: Starting post import task over table", td.thread_id)
 	cont = true
 	for cont {
-		job = G_async_queue_pop(conf.post_table_queue).(*control_job)
+		job = G_async_queue_pop(cnf.post_table_queue).(*control_job)
 		cont = process_job(td, job, nil)
 	}
 
 	cont = true
 	for cont {
-		job = G_async_queue_pop(conf.post_queue).(*control_job)
+		job = G_async_queue_pop(cnf.post_queue).(*control_job)
 		cont = process_job(td, job, nil)
 	}
 	sync_threads(&sync_threads_remaining2, sync_mutex2)
 	cont = true
 	for cont {
-		job = G_async_queue_pop(conf.view_queue).(*control_job)
+		job = G_async_queue_pop(cnf.view_queue).(*control_job)
 		cont = process_job(td, job, nil)
 	}
 
@@ -90,7 +89,7 @@ func create_post_shutdown_job(conf *configuration) {
 func wait_post_worker_to_finish() {
 	var n uint
 	for n = 0; n < MaxThreadsForPostCreation; n++ {
-		post_threads[n].Thread.Wait()
+		G_thread_join(post_threads[n])
 	}
 }
 

@@ -32,8 +32,8 @@ var (
 	SetNamesInConnForSct      string
 	SetNamesInFileForSct      string
 	SetNamesInFileByDefault   string
-	throttle_time             int = 0
-	throttle_max_usleep_limit int = 60000000
+	Throttle_time             int = 0
+	Throttle_max_usleep_limit int = 60000000
 )
 
 const (
@@ -76,6 +76,8 @@ const (
 	FLUSH_NO_WRITE_TO_BINLOG_TABLES = "FLUSH NO_WRITE_TO_BINLOG TABLES"
 	ZSTD_EXTENSION                  = ".zst"
 	GZIP_EXTENSION                  = ".gz"
+	GZIP                            = "gzip"
+	ZSTD                            = "zstd"
 	BZIP2_EXTENSION                 = ".bz2"
 	LZ4_EXTENSION                   = ".lz4"
 	EMPTY_STRING                    = ""

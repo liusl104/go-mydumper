@@ -29,6 +29,7 @@ var (
 	connection_default_file_group string
 	program_name                  string
 	print_connection_details      int64 = 1
+	LocalInFile                   bool
 )
 var (
 	Hostname          string // The host to connect to
@@ -198,17 +199,8 @@ func mysql_real_connect(conn *DBConnection, hostname string, username string, pa
 	return true
 }
 func Mysql_thread_id(dc *DBConnection) uint64 {
-	res, err := dc.Conn.Execute("SELECT connection_id()")
-	if err != nil {
-		log.Fatalf("Error getting connection_id: %v", err)
-		return 0
-	}
-	for _, v := range res.Values {
-		for _, v2 := range v {
-			return v2.AsUint64()
-		}
-	}
-	return 0
+	res := dc.Conn.GetConnectionID()
+	return uint64(res)
 }
 func Mysql_init() *DBConnection {
 	return new(DBConnection)

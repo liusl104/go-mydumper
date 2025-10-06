@@ -66,6 +66,10 @@ func Mysql_free_result(m *MYSQL_RES) {
 	}
 
 }
+
+func Mysql_real_query(conn *DBConnection, data string) *mysql.Result {
+	return conn.Execute(data)
+}
 func init_result() *MYSQL_RES {
 	return &MYSQL_RES{
 		IsClosed: make(chan struct{}),
@@ -135,7 +139,9 @@ func newClientConnection() (*client.Conn, error) {
 	}
 	return cli, err
 }
-
+func Mysql_warning_count(conn *DBConnection) int {
+	return int(conn.Warning)
+}
 func (d *DBConnection) Ping() error {
 	d.Err = d.Conn.Ping()
 	if d.Err != nil {

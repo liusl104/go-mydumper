@@ -1,28 +1,42 @@
 package myloader
 
 import (
-	. "go-mydumper/src"
+	. "github.com/liusl104/go-mydumper/src"
 	"sync"
 )
 
 var (
-	stream_thread *GThreadFunc
+	stream_thread         *GThread
+	metadata_header_mutex *sync.Mutex
+	metadata_header_cond  *sync.Cond
 )
 
 func initialize_stream(c *configuration) {
-	stream_thread = G_thread_new("myloader_stream", new(sync.WaitGroup), 0)
-	go process_stream(c)
+	stream_thread = M_thread_new("myloader_stream", process_stream, c, "Stream thread could not be created")
+	metadata_header_mutex = G_mutex_new()
+	metadata_header_cond = &sync.Cond{}
 }
 func wait_stream_to_finish() {
-	stream_thread.Thread.Wait()
+	G_thread_join(stream_thread)
 }
 
+func wait_stream_to_process_metadata_header() {
+
+}
+
+func metadata_has_been_processed() {
+
+}
 func read_stream_line() {
 
 }
 
 func flush() {
 
+}
+
+func has_mydumper_suffix(line string) bool {
+	return false
 }
 
 /*func has_mydumper_suffix(o *OptionEntries, line string) bool {
@@ -33,5 +47,4 @@ func flush() {
 }*/
 
 func process_stream(stream_conf *configuration) {
-	defer stream_thread.Thread.Done()
 }
