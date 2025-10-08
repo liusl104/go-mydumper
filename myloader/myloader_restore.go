@@ -14,11 +14,15 @@ import (
 	"time"
 )
 
+const (
+	DEFAULT_DELIMITER            string = ";\n"
+	DEFAULT_MAX_TRANSACTION_SIZE uint64 = 1000
+)
+
 var (
 	connection_pool              *GAsyncQueue
 	restore_queues               *GAsyncQueue
 	free_results_queue           *GAsyncQueue
-	ignore_errors                string
 	release_connection_statement *statement         = &statement{kind_of_statement: CLOSE}
 	end_restore_thread           *io_restore_result = new(io_restore_result)
 	restore_threads              []*GThread
@@ -34,7 +38,6 @@ const (
 	OTHER
 	CLOSE
 )
-const DEFAULT_MAX_TRANSACTION_SIZE uint64 = 1000
 
 type statement struct {
 	result            int
@@ -146,9 +149,9 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 			atomic.AddUint64(&detailed_errors.retries, 1)
 			if Mysql_real_query(cd.thrconn, data.Str.String()) != nil {
 				if is_schema {
-					log.Criticalf("Thread %ld using connection %ld - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
+					log.Criticalf("Thread %d using connection %d - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 				} else {
-					log.Criticalf("Thread %ld using connection %ld - ERROR %d: %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn))
+					log.Criticalf("Thread %d using connection %d - ERROR %d: %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn))
 				}
 				errors++
 				return 1
@@ -228,70 +231,73 @@ func m_commit_and_start_transaction(cd *connection_data, query_counter *uint) ui
 }
 
 func restore_insert(cd *connection_data, td *thread_data, data *GString, query_counter *uint, offset_line uint, dbt *db_table) int {
-	var next_line string
+	var next_line int
 	nextLineIndex := strings.Index(data.Str.String(), "VALUES") + 6
-	var insert_statement_prefix string = data.Str.String()[nextLineIndex:]
+	var insert_statement_prefix string = data.Str.String()[:nextLineIndex]
 	var r uint
 	var tr uint
 	var current_offset_line uint = offset_line - 1
-	var current_line = data.Str.String()[nextLineIndex:]
-	next_line = current_line[strings.Index(current_line, "\n"):]
+	var current_line = nextLineIndex
+	next_line = strings.Index(data.Str.String()[current_line:], "\n")
 	var new_insert = G_string_sized_new(len(insert_statement_prefix))
 	var current_rows uint64
 	var transaction_size uint64
 	for {
-		if next_line == "" {
-			break
-		}
 		current_rows = 0
 		G_string_set_size(new_insert, 0)
 		if dbt.rows > 0 {
 			G_string_printf(new_insert, "/* Completed: %d */ ", dbt.rows_inserted*100/dbt.rows)
 		} else {
 			G_string_printf(new_insert, "/* Completed: %d */ ", 0)
-
-			G_string_append(new_insert, insert_statement_prefix)
-			var line_len int
-			for {
-				// TODO char *line=g_strndup(current_line, next_line - current_line);
-				var line = ""
-				if (Rows == 0 || current_rows < uint64(Rows)) && next_line != "" {
-					break
-				}
-				G_string_append(new_insert, line)
-
-				current_rows++
-				// TODO current_line=next_line+1; next_line=g_strstr_len(current_line, -1, "\n");
-				current_offset_line++
+		}
+		G_string_append(new_insert, insert_statement_prefix)
+		var line_len int = 0
+		for {
+			if next_line == -1 {
+				// EOF
+				break
 			}
-			if current_rows > 1 || (current_rows == 1 && line_len > 0) {
-				if cd.transaction && (MaxTransactionSize*1024*1024 < uint64(new_insert.Len)+transaction_size) {
-					tr += m_commit_and_start_transaction(cd, query_counter)
-					transaction_size = 0
-				}
-				transaction_size += uint64(new_insert.Len)
-				tr = restore_data_in_gstring_by_statement(cd, new_insert, false, query_counter)
-				time.Sleep(time.Duration(Throttle_time) * time.Millisecond)
-				dbt.mutex.Lock()
-				dbt.rows_inserted += current_rows
-				dbt.mutex.Unlock()
-				if cd.transaction && *query_counter == CommitCount {
-					tr += m_commit_and_start_transaction(cd, query_counter)
-					transaction_size = 0
-				}
-				if tr > 0 {
-					log.Criticalf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
-				}
-				if Mysql_warning_count(cd.thrconn) != 0 {
-					log.Warning("Connection %ld: Warnings found during INSERT between lines: %d and %d: %s", cd.connection_id, offset_line, current_offset_line, show_warnings_if_possible(cd.thrconn))
-					detailed_errors.data_warnings += uint64(Mysql_warning_count(cd.thrconn))
-				}
-			} else {
-				tr = 0
+			var line = data.Str.String()[current_line:next_line]
+			line_len = len(line)
+			current_rows++
+			current_line = next_line + 1
+			next_line = strings.Index(data.Str.String()[current_line:], "\n")
+			current_offset_line++
+			if Rows == 0 || current_rows < uint64(Rows) {
+				break
 			}
-			r += tr
-			offset_line = current_offset_line + 1
-			current_line = current_line[1:]
+		}
+		if current_rows > 1 || (current_rows == 1 && line_len > 0) {
+			if cd.transaction && (MaxTransactionSize*1024*1024 < uint64(new_insert.Len)+transaction_size) {
+				tr += m_commit_and_start_transaction(cd, query_counter)
+				transaction_size = 0
+			}
+			transaction_size += uint64(new_insert.Len)
+			tr = restore_data_in_gstring_by_statement(cd, new_insert, false, query_counter)
+			time.Sleep(time.Duration(Throttle_time) * time.Millisecond)
+			dbt.mutex.Lock()
+			dbt.rows_inserted += current_rows
+			dbt.mutex.Unlock()
+			if cd.transaction && *query_counter == CommitCount {
+				tr += m_commit_and_start_transaction(cd, query_counter)
+				transaction_size = 0
+			}
+			if tr > 0 {
+				log.Errorf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
+			}
+			if Mysql_warning_count(cd.thrconn) != 0 {
+				log.Warnf("Connection %d: Warnings found during INSERT between lines: %d and %d: %s", cd.connection_id, offset_line, current_offset_line, show_warnings_if_possible(cd.thrconn))
+				detailed_errors.data_warnings += uint64(Mysql_warning_count(cd.thrconn))
+			}
+		} else {
+			tr = 0
+		}
+		r += tr
+		offset_line = current_offset_line + 1
+		current_line++
+		// 检查是否处理完所有行
+		if next_line == -1 {
+			break
 		}
 	}
 	return int(r)
@@ -331,9 +337,9 @@ func restore_thread(conn *DBConnection) {
 						}
 					} else {
 						if ir.filename == "" {
-							log.Critical("Error occurs processing statement: %v", Mysql_error(cd.thrconn))
+							log.Criticalf("Error occurs processing statement: %s", Mysql_error(cd.thrconn))
 						} else {
-							log.Criticalf("Error occurs between line: %d on file %s: %v", ir.preline, ir.filename, Mysql_error(cd.thrconn))
+							log.Criticalf("Error occurs between line: %d on file %s: %s", ir.preline, ir.filename, Mysql_error(cd.thrconn))
 						}
 					}
 				}
@@ -559,12 +565,6 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 */
 
 func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
-	// TODO implement LOAD DATA INFILE
-	return 0
-}
-
-func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
-	// TODO implement LOAD DATA INFILE
 	var infile *osFile
 	var eof bool
 	var data *GString = G_string_sized_new(256)
@@ -578,7 +578,78 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 		errors++
 		return 1
 	}
-	// var r uint = 0
+	var r uint = 0
+	var cd *connection_data = wait_for_available_restore_thread(td, !is_schema && (CommitCount > 1), use_database)
+	G_assert(G_async_queue_length(cd.queue.restore) <= 0)
+	G_assert(G_async_queue_length(cd.queue.result) <= 0)
+	var i uint
+	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
+	var results_added bool
+	var delimiter = DEFAULT_DELIMITER
+	infile_buffer := bufio.NewScanner(infile.file)
+	for eof == false {
+		if Read_data(infile_buffer, data, &eof, &line) {
+			if strings.HasPrefix(data.Str.String(), "DELIMITER") {
+				delimiter = ""
+				delimiter = data.Str.String()[10:]
+				preline = uint(line) + 1
+				G_string_set_size(data, 0)
+			} else if strings.HasPrefix(data.Str.String(), delimiter) {
+				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
+					Remove_definer(data)
+				}
+				assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+				G_async_queue_push(cd.queue.restore, ir)
+				ir = nil
+				process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+				r |= uint(ir.result)
+				G_string_set_size(data, 0)
+				preline = uint(line) + 1
+				if ir.result > 0 {
+					log.Criticalf("(1)Error occurs processing file %s", filename)
+				}
+			}
+		} else {
+			log.Criticalf("error reading file %s (%v)", filename, err)
+			errors++
+			return 1
+		}
+	}
+	var queue *io_restore_result = cd.queue
+	G_async_queue_push(free_results_queue, ir)
+	if results_added {
+		for i = 0; i < 7; i++ {
+			process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+			G_assert(ir.kind_of_statement != CLOSE)
+			G_async_queue_push(free_results_queue, ir)
+		}
+	}
+	for ; td.granted_connections > 0; td.granted_connections-- {
+		G_async_queue_push(queue.restore, &release_connection_statement)
+		process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+		G_assert(ir.kind_of_statement == CLOSE)
+	}
+	G_async_queue_push(restore_queues, queue)
+	G_string_free(data, true)
+	myl_close(filename, infile, true)
+	return int(r)
+}
+
+func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
+	var infile *osFile
+	var eof bool
+	var data *GString = G_string_sized_new(256)
+	var line int
+	var preline uint
+	var path = path.Join(directory, filename)
+	var err error
+	infile, err = myl_open(path, os.O_RDONLY)
+	if err != nil {
+		log.Errorf("cannot open file %s (%v)", filename, err)
+		errors++
+		return 1
+	}
+	var r uint = 0
 	var load_data_filename, load_data_fifo_filename, new_load_data_fifo_filename string
 	var cd *connection_data = wait_for_available_restore_thread(td, !is_schema && (CommitCount > 1), use_database)
 	G_assert(G_async_queue_length(cd.queue.restore) <= 0)
@@ -590,62 +661,128 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	var inBufio *bufio.Scanner = bufio.NewScanner(infile.file)
 	for eof == false {
 		if Read_data(inBufio, data, &eof, &line) {
-			var end_length int
-			if data.Len >= 5 {
-				end_length = data.Len - 5
-			}
-			if strings.Contains(data.Str.String()[end_length:], ";\n") {
+			if strings.HasSuffix(data.Str.String(), ";\n") {
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)
 				}
-			}
-			if strings.HasPrefix(data.Str.String(), "INSERT") {
-				request_another_connection(td, cd.queue, cd.transaction, use_database, header)
-				if !results_added {
-					results_added = true
-					var other_ir *statement
-					for i = 0; i < 7; i++ {
-						other_ir = G_async_queue_pop(free_results_queue).(*statement)
-						G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
-					}
-				}
-				assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
-				G_async_queue_push(cd.queue.restore, ir)
-				ir = nil
-				process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
-			} else if strings.HasPrefix(data.Str.String(), "LOAD DATA ") {
-				var new_data *GString
-				var from = strings.Index(data.Str.String(), "'")
-				from++
-				var to = strings.Index(data.Str.String()[from:], "'")
-				load_data_filename = data.Str.String()[from : to-from]
-				var mutex *sync.Mutex = G_mutex_new()
-				if load_data_mutex_locate(load_data_filename, &mutex) {
-					mutex.Lock()
-				}
-				var command []string
-				var is_fifo bool = get_command_and_basename(load_data_filename, &command, &new_load_data_fifo_filename)
-				if is_fifo {
-					if FifoDirectory != "" {
-						new_data = G_string_new("")
-						G_string_append(new_data, FifoDirectory)
-						G_string_append_c(new_data, '/')
-						G_string_append(new_data, data.Str.String()[from:])
-						from = strings.Index(new_data.Str.String(), "'") + 1
-						G_string_free(data, true)
-						data = new_data
-						to = strings.Index(new_data.Str.String()[from:], "'")
-						var a int
-						for ; a < len(load_data_filename)-len(load_data_fifo_filename); i++ {
 
+				if strings.HasPrefix(data.Str.String(), "INSERT") {
+					request_another_connection(td, cd.queue, cd.transaction, use_database, header)
+					if !results_added {
+						results_added = true
+						var other_ir *statement
+						for i = 0; i < 7; i++ {
+							other_ir = G_async_queue_pop(free_results_queue).(*statement)
+							G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
 						}
 					}
+					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
+					G_async_queue_push(cd.queue.restore, ir)
+					ir = nil
+					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+				} else if strings.HasPrefix(data.Str.String(), "LOAD DATA ") {
+					var new_data *GString
+					var from = strings.Index(data.Str.String(), "'")
+					from++
+					var to = strings.Index(data.Str.String()[from:], "'")
+					load_data_filename = data.Str.String()[from : to-from]
+					var mutex *sync.Mutex = G_mutex_new()
+					if load_data_mutex_locate(load_data_filename, &mutex) {
+						mutex.Lock()
+					}
+					var command []string
+					var is_fifo bool = get_command_and_basename(load_data_filename, &command, &new_load_data_fifo_filename)
+					if is_fifo {
+						if FifoDirectory != "" {
+							new_data = G_string_new("")
+							G_string_append(new_data, FifoDirectory)
+							G_string_append_c(new_data, '/')
+							G_string_append(new_data, data.Str.String()[from:])
+							from = strings.Index(new_data.Str.String(), "'") + 1
+							G_string_free(data, true)
+							data = new_data
+							to = strings.Index(new_data.Str.String()[from:], "'")
+							var a int
+							for ; a < len(load_data_filename)-len(load_data_fifo_filename); i++ {
+								// replica the path
+								to--
+							}
+							// to = '\''
+							if FifoDirectory != "" {
+								new_load_data_fifo_filename = fmt.Sprintf("%s/%s", FifoDirectory, new_load_data_fifo_filename)
+								load_data_fifo_filename = new_load_data_fifo_filename
+							}
+							if err = os.MkdirAll(load_data_fifo_filename, 0666); err != nil {
+								log.Criticalf("cannot create named pipe `%s': %v", load_data_fifo_filename, err)
+							}
+							execute_file_per_thread(load_data_filename, load_data_fifo_filename, command)
+							release_load_data_as_it_is_close(load_data_fifo_filename)
+						}
+					}
+					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, OTHER)
+					G_async_queue_push(cd.queue.restore, ir)
+					ir = nil
+					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+					if is_fifo {
+						M_remove("", load_data_fifo_filename)
+					} else {
+						M_remove("", load_data_filename)
+					}
+				} else {
+					if strings.HasPrefix(data.Str.String(), "/*!") {
+						var from_equal = strings.Index(data.Str.String(), "=")
+						if from_equal != -1 && ignore_set_list != nil {
+							var from = data.Str.String()[3:from_equal]
+							if from != "" && !is_in_ignore_set_list(data.Str.String()) {
+								G_string_append(header, data.Str.String())
+								from = "="
+							} else {
+								from = "="
+								goto STMT_IGNORED
+							}
+						} else {
+							G_string_append(header, data.Str.String())
+						}
+					} else {
+						header = nil
+					}
+					assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+					G_async_queue_push(cd.queue.restore, ir)
+					ir = nil
+					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
 				}
+				r |= uint(ir.result)
+				if ir.result > 0 {
+					log.Criticalf("(1)Error occurs processing file %s", filename)
+				}
+			STMT_IGNORED:
+				G_string_set_size(data, 0)
+				preline = uint(line) + 1
 			}
-
+		} else {
+			log.Criticalf("error reading file %s", filename)
+			errors++
+			return 1
 		}
 	}
-	return 0
+	var queue *io_restore_result = cd.queue
+	G_async_queue_push(free_results_queue, ir)
+	if results_added {
+		for i = 0; i < 7; i++ {
+			process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+			G_assert(ir.kind_of_statement != CLOSE)
+			G_async_queue_push(free_results_queue, ir)
+		}
+	}
+	for ; td.granted_connections > 0; td.granted_connections-- {
+		G_async_queue_push(queue.restore, &release_connection_statement)
+		process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
+		G_assert(ir.kind_of_statement == CLOSE)
+	}
+	G_async_queue_push(restore_queues, queue)
+	G_string_free(data, true)
+	myl_close(filename, infile, true)
+	return int(r)
 }
 
 func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema bool, use_database *database, log_fun func(string, ...any), msg string, args ...any) bool {
@@ -663,14 +800,14 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 					ir.err = ""
 				}
 				G_async_queue_push(queue.restore, ir)
-				r += process_result_vstatement(queue.result, &ir, log_fun, msg, args)
+				r += process_result_vstatement(queue.result, &ir, log_fun, msg, args...)
 			}
 		}
 	}
 	G_async_queue_push(free_results_queue, ir)
 	G_async_queue_push(queue.restore, &release_connection_statement)
 	td.granted_connections--
-	r += process_result_vstatement(queue.result, &ir, log_fun, msg, args)
+	r += process_result_vstatement(queue.result, &ir, log_fun, msg, args...)
 	G_assert(G_async_queue_length(queue.restore) <= 0)
 	G_assert(G_async_queue_length(queue.result) <= 0)
 	G_async_queue_push(restore_queues, queue)
@@ -678,5 +815,5 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 }
 
 func restore_data_in_gstring(td *thread_data, data *GString, is_schema bool, use_database *database) bool {
-	return restore_data_in_gstring_extended(td, data, is_schema, use_database, M_warning, "Failed to execute statement", nil)
+	return restore_data_in_gstring_extended(td, data, is_schema, use_database, M_warning, "Failed to execute statement")
 }

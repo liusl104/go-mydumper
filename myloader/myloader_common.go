@@ -155,7 +155,7 @@ func change_master(kf *ini.File, group string, rs *replication_statements, rep_s
 			}
 			if strings.EqualFold(keys[i].Name(), "SOURCE_AUTO_POSITION") {
 				_auto_position = G_ascii_strtoull(keys[i].Value()) > 0
-				G_string_append_printf(traditional_change_source, "%s = %d", keys[i], _auto_position)
+				G_string_append_printf(traditional_change_source, "%s = %v", keys[i], _auto_position)
 			} else if strings.EqualFold(keys[i].Name(), "SOURCE_SSL") {
 				_source_ssl = G_ascii_strtoull(G_key_file_get_value(kf, group, keys[i].Name())) > 0
 				G_string_append_printf(traditional_change_source, "%s = %d", keys[i], boolToInt(_source_ssl))
@@ -625,7 +625,7 @@ func has_exec_per_thread_extension(filename string) bool {
 	return ExecPerThreadExtension != "" && strings.HasSuffix(filename, ExecPerThreadExtension)
 }
 
-func execute_file_per_thread(sql_fn string, exec string) (*osFile, error) {
+func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osFile, error) {
 	var sql_file *os.File
 	var outfile *osFile
 	var err error
@@ -636,8 +636,8 @@ func execute_file_per_thread(sql_fn string, exec string) (*osFile, error) {
 	}
 	outfile = new(osFile)
 	outfile.file = sql_file
-	switch exec {
-	case GZIP_EXTENSION:
+	switch {
+	case slices.Contains(exec, GZIP_EXTENSION):
 		var out *gzip.Reader
 		out, err = gzip.NewReader(sql_file)
 
@@ -646,7 +646,7 @@ func execute_file_per_thread(sql_fn string, exec string) (*osFile, error) {
 		outfile.metadata = out.Name
 		outfile.read = out.Read
 
-	case ZSTD_EXTENSION:
+	case slices.Contains(exec, ZSTD_EXTENSION):
 		var out *zstd.Decoder
 		out, err = zstd.NewReader(sql_file)
 		outfile.close = func() error {

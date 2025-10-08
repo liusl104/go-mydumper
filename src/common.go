@@ -18,6 +18,7 @@ import (
 )
 
 var (
+	VERSION                   = GitBranch
 	Log_output                *os.File
 	Json                      bool
 	Logger                    *os.File
@@ -39,7 +40,6 @@ var (
 const (
 	MYLOADER_MODE                   = "myloader_mode"
 	DEFAULTS_FILE                   = "/etc/mydumper.cnf"
-	VERSION                         = "0.19.4-lts"
 	DB_LIBRARY                      = "MySQL"
 	MYSQL_VERSION_STR               = "8.0.31"
 	EXIT_FAILURE                    = 1
@@ -692,7 +692,7 @@ func Remove_definer(data *GString) {
 
 func Print_version(program string) {
 	// 使用 fmt 包的 Printf 函数按照指定格式输出版本信息。
-	fmt.Printf("%s v%s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+	fmt.Printf("%s %s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
 
 	// 输出源代码的 Git Commit Hash。
 	fmt.Printf("Git Commit Hash: %s\n", GitHash)

@@ -2,6 +2,7 @@ package mydumper
 
 import (
 	"fmt"
+	"github.com/spf13/pflag"
 	"os"
 	"runtime"
 	"strconv"
@@ -182,4 +183,10 @@ func G_assert(r bool) {
 	if !r {
 		panic("Assertion failed")
 	}
+}
+
+func G_option_context_parse(clist []string) bool {
+	os.Args = append(os.Args, clist...)
+	pflag.Parse()
+	return true
 }
