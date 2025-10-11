@@ -1,17 +1,16 @@
 package mydumper
 
 import (
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os/exec"
 	"slices"
 	"strings"
-	"sync"
 )
 
 var (
 	Num_exec_threads    uint = 4
-	exec_command_thread []*GThreadFunc
+	exec_command_thread []*GThread
 	pid_file_table      map[*command]string
 )
 
@@ -49,9 +48,8 @@ func exec_this_command(bin string, c_arg []string, filename string) {
 
 }
 
-func process_exec_command(queue *GAsyncQueue, thread_id uint) {
-	_ = queue
-	defer exec_command_thread[thread_id].Thread.Done()
+func process_exec_command(a any) {
+	_ = a
 	var arguments = strings.Split(exec_command, " ")
 	var bin = arguments[0]
 	var c_arg []string
@@ -72,12 +70,11 @@ func process_exec_command(queue *GAsyncQueue, thread_id uint) {
 func initialize_exec_command() {
 	log.Warnf("initialize_exec_command: Started")
 	Stream_queue = G_async_queue_new(BufferSize)
-	exec_command_thread = make([]*GThreadFunc, Num_exec_threads)
+	exec_command_thread = make([]*GThread, Num_exec_threads)
 	var i uint
 	pid_file_table = make(map[*command]string)
 	for i = 0; i < Num_exec_threads; i++ {
-		exec_command_thread[i] = G_thread_new("exec_command", new(sync.WaitGroup), int(i))
-		go process_exec_command(Stream_queue, i)
+		exec_command_thread[i] = M_thread_new("exec_command", process_exec_command, Stream_queue, "Exec command thread could not be created")
 	}
 }
 

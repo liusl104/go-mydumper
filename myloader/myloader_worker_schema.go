@@ -1,21 +1,20 @@
 package myloader
 
 import (
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
-	"sync"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
-	refresh_db_queue2     *GAsyncQueue
-	schema_td             []*thread_data
-	second_round          bool
-	schema_threads        []*GThreadFunc
-	init_connection_mutex *sync.Mutex
+	refresh_db_queue2 *GAsyncQueue
+	schema_td         []*thread_data
+	second_round      bool
+
+	schema_threads []*GThread
 )
 
-func schema_queue_push(current_ft file_type) {
-	log.Tracef("refresh_db_queue2 <- %v", current_ft)
+func schema_queue_push(current_ft file_type, message string) {
+	log.Tracef("refresh_db_queue2 <- %v%s", current_ft, message)
 	G_async_queue_push(refresh_db_queue2, current_ft)
 }
 
@@ -35,22 +34,10 @@ func set_db_schema_created(real_db_name *database, conf *configuration) {
 	cj = G_async_queue_try_pop(queue).(*control_job)
 	for cj != nil {
 		G_async_queue_push(object_queue, cj)
-		log.Tracef("refresh_db_queue2 <- %v (requeuing from db queue)", ft)
-		G_async_queue_push(refresh_db_queue2, ft)
+		schema_queue_push(ft, " (requeuing from db queue)")
 		cj = G_async_queue_try_pop(queue).(*control_job)
 	}
 
-}
-func set_db_schema_state_to_created(conf *configuration) {
-	conf.table_list_mutex.Lock()
-	for _, dbt := range conf.table_list {
-		dbt.mutex.Lock()
-		if dbt.schema_state == NOT_FOUND {
-			dbt.schema_state = CREATED
-		}
-		dbt.mutex.Unlock()
-	}
-	conf.table_list_mutex.Unlock()
 }
 
 func set_table_schema_state_to_created(conf *configuration) {
@@ -113,11 +100,11 @@ func process_schema(td *thread_data) bool {
 			G_assert(restore)
 			log.Tracef("retry_queue <- %v: %s", ft, filename)
 			G_async_queue_push(td.conf.retry_queue, job)
-			refresh_db_and_jobs(ft)
+			enroute_into_the_right_queue_based_on_file_type(ft)
 			break
 		}
 		if ft == SCHEMA_TABLE { /* TODO: for spoof view table don't do DATA */
-			refresh_db_and_jobs(DATA)
+			enroute_into_the_right_queue_based_on_file_type(DATA)
 		} else if restore {
 			G_assert(ft == SCHEMA_SEQUENCE && sequences_processed < sequences)
 			sequences_mutex.Lock()
@@ -131,7 +118,7 @@ func process_schema(td *thread_data) bool {
 			sequences_mutex.Lock()
 			if sequences_processed < sequences {
 				log.Tracef("INTERMEDIATE_ENDED waits %d sequences", sequences-sequences_processed)
-				refresh_db_and_jobs(INTERMEDIATE_ENDED)
+				enroute_into_the_right_queue_based_on_file_type(INTERMEDIATE_ENDED)
 				sequences_mutex.Unlock()
 				return true
 			}
@@ -147,7 +134,7 @@ func process_schema(td *thread_data) bool {
 						log.Warnf("Schema file for `%s` not found, continue anyways", real_db_name.name)
 						real_db_name.schema_state = CREATED
 					}
-					refresh_db_and_jobs(INTERMEDIATE_ENDED)
+					enroute_into_the_right_queue_based_on_file_type(INTERMEDIATE_ENDED)
 					real_db_name.mutex.Unlock()
 					return true
 				}
@@ -156,8 +143,7 @@ func process_schema(td *thread_data) bool {
 			}
 			log.Infof("Schema creation enqueing completed")
 			second_round = true
-			log.Tracef("refresh_db_queue2 <- %v (first round)", ft)
-			G_async_queue_push(refresh_db_queue2, ft)
+			schema_queue_push(ft, " (first round)")
 		} else {
 			set_table_schema_state_to_created(td.conf)
 			log.Infof("Table creation enqueing completed")
@@ -169,11 +155,11 @@ func process_schema(td *thread_data) bool {
 				G_async_queue_push(td.conf.table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 				log.Tracef("refresh_db_queue2 <- %v (second round)", SCHEMA_TABLE)
 				if !postpone_load || n < MaxThreadsForIndexCreation-1 {
-					G_async_queue_push(refresh_db_queue2, SCHEMA_TABLE)
+					schema_queue_push(SCHEMA_TABLE, " (second round)")
 				}
 			}
 			if postpone_load {
-				G_async_queue_push(refresh_db_queue2, CJT_RESUME)
+				schema_queue_push(CJT_RESUME, "")
 			}
 		}
 		break
@@ -185,10 +171,10 @@ func process_schema(td *thread_data) bool {
 	return ret
 }
 
-func worker_schema_thread(td *thread_data, thread_id uint) {
-	defer schema_threads[thread_id].Thread.Done()
-	var conf *configuration = td.conf
-	G_async_queue_push(conf.ready, 1)
+func worker_schema_thread(c any) {
+	td := c.(*thread_data)
+	var cnf *configuration = td.conf
+	G_async_queue_push(cnf.ready, 1)
 
 	log.Infof("S-Thread %d: Starting import", td.thread_id)
 	var cont bool = true
@@ -200,27 +186,30 @@ func worker_schema_thread(td *thread_data, thread_id uint) {
 
 func initialize_worker_schema(conf *configuration) {
 	var n uint
-	init_connection_mutex = G_mutex_new()
 	refresh_db_queue2 = G_async_queue_new(BufferSize)
-	schema_threads = make([]*GThreadFunc, MaxThreadsForSchemaCreation)
+	schema_threads = make([]*GThread, MaxThreadsForSchemaCreation)
 	schema_td = make([]*thread_data, MaxThreadsForSchemaCreation)
 	log.Infof("Initializing initialize_worker_schema")
 	for n = 0; n < MaxThreadsForSchemaCreation; n++ {
-		t := new(thread_data)
-		schema_threads[n] = new(GThreadFunc)
+		schema_td[n] = new(thread_data)
 		initialize_thread_data(schema_td[n], conf, WAITING, n+1+NumThreads, nil)
-		schema_td[n] = t
-		go worker_schema_thread(schema_td[n], n)
 	}
 
 }
 
-func wait_schema_worker_to_finish() {
+func start_worker_schema() {
 	var n uint
 	for n = 0; n < MaxThreadsForSchemaCreation; n++ {
-		schema_threads[n].Thread.Wait()
+		schema_threads[n] = M_thread_new("myloader_schema", worker_schema_thread, schema_td[n], "Schema thread could not be created")
 	}
-
+}
+func wait_schema_worker_to_finish() {
+	var n uint
+	log.Tracef("Waiting schema worker to finish")
+	for n = 0; n < MaxThreadsForSchemaCreation; n++ {
+		G_thread_join(schema_threads[n])
+	}
+	log.Tracef("Schema worker finished")
 }
 
 func free_schema_worker_threads() {

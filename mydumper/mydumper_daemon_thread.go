@@ -1,9 +1,9 @@
 package mydumper
 
 import (
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/sevlyar/go-daemon"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
 	"os"
 )
 

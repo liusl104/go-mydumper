@@ -5,7 +5,6 @@ import (
 	"regexp"
 
 	"github.com/spf13/pflag"
-	log "go-mydumper/src/logrus"
 )
 
 const filename_regex string = "^[\\w\\-_ ]+$"
@@ -16,7 +15,7 @@ var filename_re *regexp.Regexp
 var partition_re *regexp.Regexp
 
 func regex_arguments_callback() {
-
+	Regex_list = append(Regex_list, Regex)
 }
 
 func Is_regex_being_used() bool {
@@ -27,17 +26,19 @@ func regex_entries() {
 	// regex_entries
 	pflag.StringVarP(&Regex, "regex", "x", "", "Regular expression for 'db.table' matching")
 }
-
+func load_regex_entries() {
+	regex_entries()
+}
 func Check_filename_regex(word string) bool {
 	return filename_re.MatchString(word)
 }
 
 func init_regex(r **regexp.Regexp, str string) {
-	// var Err error
+	var err error
 	if *r == nil {
-		*r = regexp.MustCompile(str)
+		*r, err = regexp.Compile(str)
 		if *r == nil {
-			log.Fatalf("Regular expression fail")
+			M_critical("Regular expression fail: %s (%v)", str, err)
 		}
 	}
 }
@@ -48,8 +49,7 @@ func InitializeRegex(partition_regex string) {
 		init_regex(&_re, l)
 		re_list = append(re_list, _re)
 	}
-	init_regex(&filename_re, filename_regex)
-	if partition_re != nil {
+	if partition_regex != "" {
 		init_regex(&partition_re, partition_regex)
 	}
 }
@@ -61,7 +61,11 @@ func check_regex(tre *regexp.Regexp, _database_name string, _table_name string) 
 
 func Eval_regex(_database_name string, _table_name string) bool {
 	if re_list != nil {
-		return true
+		var r bool
+		for _, l := range re_list {
+			r = check_regex(l, _database_name, _table_name)
+		}
+		return r
 	}
 	return true
 }

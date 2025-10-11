@@ -3,8 +3,9 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	"github.com/go-ini/ini"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -41,16 +42,23 @@ var (
 	append_if_not_exist     bool
 	change_master_statement *GString
 	schema_sequence_fix     bool
+	replicationStatements   *replication_statements
 )
 
 func initialize_process(c *configuration) {
+	replicationStatements = new(replication_statements)
+	replicationStatements.reset_replica = nil
+	replicationStatements.start_replica = nil
+	replicationStatements.change_replication_source = nil
+	replicationStatements.gtid_purge = nil
+	replicationStatements.start_replica_until = nil
 	conf = c
 	fifo_hash = make(map[*os.File]*fifo)
 	fifo_table_mutex = G_mutex_new()
 }
 
 func append_new_db_table(real_db_name *database, table string, number_rows uint64, alter_table_statement *GString) *db_table {
-	var lkey = build_dbt_key(real_db_name.filename, table)
+	var lkey = Build_dbt_key(real_db_name.filename, table)
 	var dbt *db_table = conf.table_hash[lkey]
 	if dbt == nil {
 		conf.table_hash_mutex.Lock()
@@ -61,6 +69,7 @@ func append_new_db_table(real_db_name *database, table string, number_rows uint6
 			dbt.table = table
 			dbt.real_table = dbt.table
 			dbt.rows = number_rows
+			dbt.rows_inserted = 0
 			dbt.restore_job_list = nil
 			Parse_object_to_export(dbt.object_to_export, conf_per_table.All_object_to_export[lkey])
 			dbt.current_threads = 0
@@ -126,8 +135,30 @@ func free_table_hash(table_hash map[string]*db_table) {
 func myl_open(filename string, mode int) (*osFile, error) {
 	var file *osFile
 	var err error
+	var basename, fifoname string
+	var command []string
+	if get_command_and_basename(filename, &command, &basename) {
+		fifoname = basename
+		if FifoDirectory != "" {
+			var basefilename = path.Base(basename)
+			fifoname = path.Join(FifoDirectory, basefilename)
+		}
+		if G_file_test(fifoname) {
+			a, _ := os.Stat(fifoname)
+			log.Infof("FIFO file: %s", filename)
+			if a.Mode()&os.ModeNamedPipe == 0 {
+				log.Warnf("FIFO file found %s, removing and continuing", fifoname)
+				os.Remove(fifoname)
+			}
+		}
+		err = os.Mkdir(fifoname, 0666)
+		if err != nil {
+			log.Criticalf("cannot create named pipe %s (%v)", fifoname, err)
+		}
+	}
+	// TODO : support write mode
 	mode = os.O_RDONLY
-	file, err = execute_file_per_thread(filename, ExecPerThreadExtension)
+	file, err = execute_file_per_thread(filename, basename, command)
 	if err != nil {
 		log.Errorf("cannot open file %s (%v)", filename, err)
 		return nil, err
@@ -138,17 +169,21 @@ func myl_open(filename string, mode int) (*osFile, error) {
 func myl_close(filename string, file *osFile, rm bool) {
 	fifo_table_mutex.Lock()
 	fifo_table_mutex.Unlock()
+	// TODO: support fifo mode
 	_ = filename
 	_ = file.close()
 }
 
 func load_schema(dbt *db_table, filename string) *control_job {
 	var infile *osFile
-	var data *GString = new(GString)
+	var data *GString = G_string_sized_new(512)
+	var create_table_statement *GString = G_string_sized_new(512)
+	G_string_set_size(data, 0)
+	G_string_set_size(create_table_statement, 0)
 	var eof bool
 	var line int
 	var err error
-	var create_table_statement *GString = new(GString)
+
 	infile, err = myl_open(filename, os.O_RDONLY)
 	if err != nil {
 		log.Errorf("cannot open file %s (%v)", filename, err)
@@ -163,7 +198,7 @@ func load_schema(dbt *db_table, filename string) *control_job {
 				length = data.Len - 5
 			}
 			if strings.Contains(data.Str.String()[length:], ";\n") {
-				if data.Str.String()[:13] == "CREATE TABLE " {
+				if strings.EqualFold(data.Str.String()[:13], "CREATE TABLE ") {
 					if !strings.Contains(data.Str.String()[:30], Identifier_quote_character_str) {
 						log.Errorf("Identifier quote character (%s) not found on %s. Review file and configure --identifier-quote-character properly", Identifier_quote_character_str, filename)
 						return nil
@@ -187,20 +222,18 @@ func load_schema(dbt *db_table, filename string) *control_job {
 					}
 					if append_if_not_exist {
 						if strings.HasPrefix(data.Str.String(), "CREATE TABLE ") && strings.HasPrefix(data.Str.String(), "CREATE TABLE IF") {
-							var tmp_data string
-							tmp_data += "CREATE TABLE IF NOT EXISTS "
-							tmp_data += data.Str.String()[13:]
-							data.Str.Reset()
-							data.Str.WriteString(tmp_data)
-
+							var tmp_data *GString = G_string_sized_new(data.Len)
+							G_string_append(tmp_data, "CREATE TABLE IF NOT EXISTS ")
+							G_string_append(tmp_data, data.Str.String()[13:])
+							data = tmp_data
 						}
 					}
 				}
 				if InnodbOptimizeKeys != "" || SkipConstraints || SkipIndexes {
-					var alter_table_statement, alter_table_constraint_statement *GString = new(GString), new(GString)
+					var alter_table_statement, alter_table_constraint_statement *GString = G_string_sized_new(512), G_string_sized_new(512)
 					if strings.HasPrefix(data.Str.String(), "/*!40") {
-						alter_table_statement = data
-						create_table_statement = data
+						G_string_append(alter_table_statement, data.Str.String())
+						G_string_append(create_table_statement, data.Str.String())
 					} else {
 						var new_create_table_statement *GString = new(GString)
 						var flag = process_create_table_statement(data, new_create_table_statement, alter_table_statement, alter_table_constraint_statement, dbt, dbt.rows == 0 || dbt.rows >= 1000000 || SkipConstraints || SkipIndexes)
@@ -211,7 +244,7 @@ func load_schema(dbt *db_table, filename string) *control_job {
 								alter_table_statement = nil
 							}
 							if !SkipIndexes {
-								if InnodbOptimizeKeys != "" {
+								if OptimizeKeys != "" {
 									dbt.indexes = alter_table_statement
 								} else if alter_table_statement != nil {
 									G_string_append(create_table_statement, alter_table_statement.Str.String())
@@ -222,12 +255,12 @@ func load_schema(dbt *db_table, filename string) *control_job {
 								G_async_queue_push(conf.post_table_queue, new_control_job(JOB_RESTORE, rj, dbt.database))
 								dbt.constraints = alter_table_constraint_statement
 							} else {
-								alter_table_constraint_statement = nil
+								G_string_free(alter_table_constraint_statement, true)
 							}
 							G_string_set_size(data, 0)
 						} else {
-							alter_table_statement = nil
-							alter_table_constraint_statement = nil
+							G_string_free(alter_table_statement, true)
+							G_string_free(alter_table_constraint_statement, true)
 							G_string_set_size(create_table_statement, 0)
 							G_string_append(create_table_statement, data.Str.String())
 						}
@@ -241,12 +274,13 @@ func load_schema(dbt *db_table, filename string) *control_job {
 	}
 
 	if schema_sequence_fix {
-		var statement = Filter_sequence_schemas(create_table_statement.Str.String())
-		G_string_assign(create_table_statement, statement)
+		var st = Filter_sequence_schemas(create_table_statement.Str.String())
+		G_string_assign(create_table_statement, st)
 	}
 	var rj *restore_job = new_schema_restore_job(filename, JOB_TO_CREATE_TABLE, dbt, dbt.database, create_table_statement, "")
 	var cj *control_job = new_control_job(JOB_RESTORE, rj, dbt.database)
 	myl_close(filename, infile, true)
+	G_string_free(data, true)
 	return cj
 }
 
@@ -425,35 +459,45 @@ func process_metadata_global(file string) {
 		wrong_quote = "`"
 	}
 	for j = 0; j < length; j++ {
-		var group = groups[j]
+		var group = Newline_protect(groups[j])
 		if strings.HasPrefix(group, "config") {
-			if j > 0 {
-				log.Critical("Wrong metadata: [config] group must be first")
-			}
-			value = get_value(kf, "config", "quote_character")
-			if value != "" {
-				if strings.EqualFold(value, "BACKTICK") {
-					Identifier_quote_character = BACKTICK
-					Identifier_quote_character_str = "`"
-					wrong_quote = "\""
-					delimiter = delim_bt
-				} else if strings.EqualFold(value, "DOUBLE_QUOTE") {
-					Identifier_quote_character = DOUBLE_QUOTE
-					Identifier_quote_character_str = "\""
-					delimiter = delim_dq
-					wrong_quote = "`"
-				} else {
-					log.Criticalf("Wrong quote_character = %s in metadata", value)
+			var keys []*ini.Section
+			keys, err = kf.SectionsByName(group)
+			if err != nil {
+				log.Errorf("Loading configuration on section %s: %v", group, err)
+			} else {
+				var i int
+				var list []string
+				for i = 0; i < len(keys); i++ {
+					list = append(list, fmt.Sprintf("--%s", keys[i].Name()))
+					value = G_key_file_get_value(kf, group, keys[i].Name())
+					if value != "" {
+						list = append(list, value)
+					}
 				}
-				log.Tracef("metadata: quote character is %v", Identifier_quote_character)
+				G_option_context_parse(list)
+				log.Infof("Config file loaded")
+				value = get_value(kf, "config", "quote_character")
 			}
+			if Identifier_quote_character == BACKTICK {
+				wrong_quote = "\""
+				delimiter = delim_bt
+				Identifier_quote_character_str = "`"
+			} else if Identifier_quote_character == DOUBLE_QUOTE {
+				delimiter = delim_dq
+				wrong_quote = "`"
+				Identifier_quote_character_str = "\""
+			} else {
+				log.Criticalf("Wrong quote_character in metadata")
+			}
+			log.Tracef("metadata: quote character is %s", Identifier_quote_character)
 		} else if strings.HasPrefix(group, wrong_quote) {
 			log.Errorf("metadata is broken: group %s has wrong quoting: %s; must be: %s", group, wrong_quote, Identifier_quote_character)
-		} else if strings.HasPrefix(group, Identifier_quote_character) {
+		} else if strings.HasPrefix(group, Identifier_quote_character_str) {
 			database_table = strings.SplitN(group, delimiter, 2)
 			if database_table[1] != "" {
 				// database_table[1][strlen(database_table[1])-1]='\0'
-				database_table[1] = ""
+				database_table[1] = database_table[1][:len(database_table[1])-1]
 				if SourceDb == "" || strings.Compare(database_table[1], SourceDb) == 0 {
 					var real_db_name = get_db_hash(database_table[0], database_table[0])
 					dbt = append_new_db_table(real_db_name, database_table[1], 0, nil)
@@ -494,16 +538,18 @@ func process_metadata_global(file string) {
 					}
 				}
 			} else {
-				database_table[0] = ""
-				var database *database = get_db_hash(database_table[0], database_table[0])
-				database.schema_checksum = get_value(kf, group, "schema_checksum")
-				database.post_checksum = get_value(kf, group, "post_checksum")
-				database.triggers_checksum = get_value(kf, group, "triggers_checksum")
+				database_table[0] = database_table[0][:len(database_table[0])-1]
+				if SourceDb == "" || strings.Compare(database_table[0], SourceDb) == 0 {
+					var db *database = get_db_hash(database_table[0], database_table[0])
+					db.schema_checksum = get_value(kf, group, "schema_checksum")
+					db.post_checksum = get_value(kf, group, "post_checksum")
+					db.triggers_checksum = get_value(kf, group, "triggers_checksum")
+				}
 			}
 		} else if strings.HasPrefix(group, "replication") {
-			change_master(kf, group, change_master_statement)
+			change_master(kf, group, replicationStatements, ReplicaData)
 		} else if strings.HasPrefix(group, "master") || strings.HasPrefix(group, "source") {
-			change_master(kf, group, change_master_statement)
+			change_master(kf, group, replicationStatements, SourceData)
 		} else if strings.HasPrefix(group, "myloader_session_variables") {
 			Load_hash_of_all_variables_perproduct_from_key_file(kf, set_session_hash, "myloader_session_variables")
 			Refresh_set_session_from_hash(Set_session, set_session_hash)
@@ -511,7 +557,9 @@ func process_metadata_global(file string) {
 			log.Tracef("metadata: skipping group %s", group)
 		}
 	}
-
+	if Stream != "" {
+		metadata_has_been_processed()
+	}
 	M_remove(directory, file)
 }
 

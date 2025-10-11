@@ -2,8 +2,8 @@ package myloader
 
 import (
 	"fmt"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"os/signal"
 	"strings"
@@ -71,26 +71,7 @@ func initialize_restore_job(pm_str string) {
 	single_threaded_create_table = G_mutex_new()
 	progress_mutex = G_mutex_new()
 	shutdown_triggered_mutex = G_mutex_new()
-	detailed_errors = new(restore_errors)
-	if pm_str != "" {
-		if strings.EqualFold(pm_str, "TRUNCATE") {
-			purge_mode = TRUNCATE
-		} else if strings.EqualFold(pm_str, "DROP") {
-			purge_mode = DROP
-		} else if strings.EqualFold(pm_str, "NONE") {
-			purge_mode = NONE
-		} else if strings.EqualFold(pm_str, "FAIL") {
-			purge_mode = FAIL
-		} else if strings.EqualFold(pm_str, "DELETE") {
-			purge_mode = DELETE
-		} else {
-			log.Errorf("Purge mode unknown")
-		}
-	} else if OverwriteTables {
-		purge_mode = DROP
-	} else {
-		purge_mode = FAIL
-	}
+
 }
 
 func new_data_restore_job_internal(index uint, part uint, sub_part uint) *data_restore_job {
@@ -111,9 +92,9 @@ func new_schema_restore_job_internal(database *database, statement *GString, obj
 
 func new_restore_job(filename string, dbt *db_table, job_type restore_job_type) *restore_job {
 	var rj = new(restore_job)
-	rj.data = new(restore_job_data)
-	rj.data.srj = new(schema_restore_job)
-	rj.data.drj = new(data_restore_job)
+	/*	rj.data = new(restore_job_data)
+		rj.data.srj = new(schema_restore_job)
+		rj.data.drj = new(data_restore_job)*/
 	rj.filename = filename
 	rj.dbt = dbt
 	rj.job_type = job_type
@@ -127,13 +108,14 @@ func new_data_restore_job(filename string, job_type restore_job_type, dbt *db_ta
 }
 
 func new_schema_restore_job(filename string, job_type restore_job_type, dbt *db_table, database *database, statement *GString, object string) *restore_job {
-	var rj = new_restore_job(filename, dbt, job_type)
-	rj.data.srj = new_schema_restore_job_internal(database, statement, object)
-	return rj
+	var srj = new_restore_job(filename, dbt, job_type)
+	srj.data.srj = new_schema_restore_job_internal(database, statement, object)
+	return srj
 }
 
 func free_restore_job(rj *restore_job) {
 	rj.filename = ""
+	rj = nil
 }
 
 func free_schema_restore_job(srj *schema_restore_job) {
@@ -155,35 +137,28 @@ func overwrite_table(td *thread_data, dbt *db_table) bool {
 	if purge_mode == DROP {
 		log.Infof("Dropping table or view (if exists) %s.%s", dbt.database.real_database, dbt.real_table)
 		G_string_printf(data, "DROP TABLE IF EXISTS %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
-		if restore_data_in_gstring_extended(td, data, true, dbt.database, overwrite_table_message, "Drop table %s.%s failed", dbt.database.real_database, dbt.real_table) != 0 {
-			truncate_or_delete_failed = true
-		}
+		truncate_or_delete_failed = restore_data_in_gstring_extended(td, data, true, dbt.database, overwrite_table_message, "Drop table %s.%s failed", dbt.database.real_database, dbt.real_table)
 		G_string_printf(data, "DROP VIEW IF EXISTS %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
-		if restore_data_in_gstring(td, data, true, dbt.database) != 0 {
-			log.Critical("Drop view failed")
+		if restore_data_in_gstring(td, data, true, dbt.database) {
+			truncate_or_delete_failed = true
+			log.Criticalf("Drop view failed")
 		}
+
 	} else if purge_mode == TRUNCATE {
 		log.Infof("Truncating table %s.%s", dbt.database.real_database, dbt.real_table)
 		G_string_printf(data, "TRUNCATE TABLE %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
-		if restore_data_in_gstring(td, data, true, dbt.database) != 0 {
-			truncate_or_delete_failed = false
-		} else {
-			truncate_or_delete_failed = true
-		}
+		truncate_or_delete_failed = restore_data_in_gstring(td, data, true, dbt.database)
 		if truncate_or_delete_failed {
 			log.Warnf("Truncate failed, we are going to try to create table or view")
 		}
 	} else if purge_mode == DELETE {
 		log.Infof("Deleting content of table %s.%s", dbt.database.real_database, dbt.real_table)
-		G_string_printf(data, "DELETE FROM %s%s%s.%s%s%s", q, dbt.database.real_database, q, q, dbt.real_table, q)
-		if restore_data_in_gstring(td, data, true, dbt.database) != 0 {
-			truncate_or_delete_failed = false
-		} else {
-			truncate_or_delete_failed = true
-		}
+		G_string_printf(data, "DELETE FROM %s%s%s.%s%s%s;\nCOMMIT", q, dbt.database.real_database, q, q, dbt.real_table, q)
+		truncate_or_delete_failed = restore_data_in_gstring(td, data, true, dbt.database)
 		if truncate_or_delete_failed {
 			log.Warnf("Delete failed, we are going to try to create table or view")
 		}
+		restore_data_in_gstring(td, data, true, dbt.database)
 	}
 	return truncate_or_delete_failed
 }
@@ -246,10 +221,20 @@ func get_total_created(conf *configuration, total *uint) {
 	conf.table_hash_mutex.Unlock()
 }
 
+func execute_drop_database(td *thread_data, database string) {
+	var data *GString = G_string_new("DROP DATABASE IF EXISTS ")
+	G_string_append_printf(data, "`%s`", database)
+	log.Tracef("Droping database %s", database)
+	if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to drop database: %s", database) {
+		atomic.AddUint64(&detailed_errors.schema_errors, 1)
+	}
+}
 func process_restore_job(td *thread_data, rj *restore_job) bool {
+	var dbt = rj.dbt
+	var total uint
 	if td.conf.pause_resume != nil {
-		task := G_async_queue_try_pop(td.conf.pause_resume)
 		var resume_mutex *sync.Mutex
+		task := G_async_queue_try_pop(td.conf.pause_resume)
 		if task != nil {
 			resume_mutex = task.(*sync.Mutex)
 			log.Infof("Thread %d: Stop", td.thread_id)
@@ -261,27 +246,26 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	}
 	if shutdown_triggered {
 		G_async_queue_push(file_list_to_do, rj.filename)
-		td.status = COMPLETED
-		return false
+		goto cleanup
 	}
-	var dbt = rj.dbt
-	var total uint
+
 	td.status = STARTED
 	switch rj.job_type {
 	case JOB_RESTORE_STRING:
 		if SourceDb == "" || strings.Compare(dbt.database.name, SourceDb) == 0 {
+			get_total_done(td.conf, &total)
 			log.Infof("Thread %d: restoring %s %s.%s from %s. Tables %d of %d completed", td.thread_id,
 				rj.data.srj.object, dbt.database.real_database, dbt.real_table, rj.filename, total, len(td.conf.table_hash))
-			if restore_data_in_gstring(td, rj.data.srj.statement, false, rj.data.srj.database) != 0 {
+			if restore_data_in_gstring(td, rj.data.srj.statement, false, rj.data.srj.database) {
 				increse_object_error(rj.data.srj.object)
-				log.Infof("Failed %s: %s", rj.data.srj.object, rj.data.srj.statement)
+				log.Infof("Failed %s: %s", rj.data.srj.object, rj.data.srj.statement.Str.String())
 			}
 		}
 		free_schema_restore_job(rj.data.srj)
 		break
 	case JOB_TO_CREATE_TABLE:
 		dbt.schema_state = CREATING
-		if (SourceDb != "" || strings.Compare(dbt.database.name, SourceDb) == 0) && NoSchemas && !dbt.object_to_export.No_schema {
+		if (SourceDb == "" || strings.Compare(dbt.database.name, SourceDb) == 0) && NoSchemas && !dbt.object_to_export.No_schema {
 			if SerialTblCreation {
 				single_threaded_create_table.Lock()
 			}
@@ -293,20 +277,20 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					if dbt.retry_count != 0 {
 						dbt.retry_count--
 						dbt.schema_state = NOT_CREATED
-						M_warning("Drop table %s.%s failed: retry %d of %d", dbt.database.real_database, dbt.real_table, retry_count-dbt.retry_count, retry_count)
+						log.Warnf("Drop table %s.%s failed: retry %d of %d", dbt.database.real_database, dbt.real_table, retry_count-dbt.retry_count, retry_count)
 						return true
 					} else {
-						M_critical("Drop table %s.%s failed: exiting", dbt.database.real_database, dbt.real_table)
+						log.Criticalf("Drop table %s.%s failed: exiting", dbt.database.real_database, dbt.real_table)
 					}
 				} else if dbt.retry_count < retry_count {
-					M_warning("Drop table %s.%s succeeded!", dbt.database.real_database, dbt.real_table)
+					log.Warnf("Drop table %s.%s succeeded!", dbt.database.real_database, dbt.real_table)
 				}
 			}
 			if (purge_mode == TRUNCATE || purge_mode == DELETE) && overwrite_error {
 				log.Infof("Skipping table creation %s.%s from %s", dbt.database.real_database, dbt.real_table, rj.filename)
 			} else {
 				log.Infof("Thread %d: Creating table %s.%s from content in %s. On db: %s", td.thread_id, dbt.database.real_database, dbt.real_table, rj.filename, dbt.database.name)
-				if restore_data_in_gstring(td, rj.data.srj.statement, true, rj.data.srj.database) != 0 {
+				if restore_data_in_gstring(td, rj.data.srj.statement, true, rj.data.srj.database) {
 					atomic.AddUint64(&detailed_errors.schema_errors, 1)
 					if purge_mode == FAIL {
 						log.Errorf("Thread %d: issue restoring %s", td.thread_id, rj.filename)
@@ -328,6 +312,8 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	case JOB_RESTORE_FILENAME:
 		if SourceDb == "" || strings.Compare(dbt.database.name, SourceDb) == 0 {
 			progress_mutex.Lock()
+			progress++
+			get_total_done(td.conf, &total)
 			log.Infof("Thread %d: restoring %s.%s part %d of %d from %s | Progress %d of %d. Tables %d of %d completed", td.thread_id,
 				dbt.database.real_database, dbt.real_table, rj.data.drj.index, dbt.count, rj.filename, progress, total_data_sql_files, total, len(td.conf.table_hash))
 			progress_mutex.Unlock()
@@ -347,6 +333,11 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 				if dbt != nil {
 					dbt.schema_state = CREATING
 				}
+
+				if strings.EqualFold(rj.data.srj.object, CREATE_DATABASE) && DropDatabase {
+					execute_drop_database(td, rj.data.srj.database.real_database)
+				}
+
 				var db *database
 				if strings.EqualFold(rj.data.srj.object, CREATE_DATABASE) {
 					db = rj.data.srj.database
@@ -367,6 +358,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	default:
 		log.Critical("Something very bad happened!")
 	}
+cleanup:
 	td.status = COMPLETED
 	return false
 }
@@ -382,7 +374,7 @@ func signal_thread(data any) {
 }
 
 func sig_triggered(user_data any, signal os.Signal) bool {
-	var conf *configuration = user_data.(*configuration)
+	var cnf *configuration = user_data.(*configuration)
 	var i uint
 	var queue *GAsyncQueue
 	shutdown_triggered_mutex.Lock()
@@ -395,10 +387,10 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 				pause_mutex_per_thread[i] = G_mutex_new()
 			}
 		}
-		if conf.pause_resume == nil {
-			conf.pause_resume = G_async_queue_new(BufferSize)
+		if cnf.pause_resume == nil {
+			cnf.pause_resume = G_async_queue_new(BufferSize)
 		}
-		queue = conf.pause_resume
+		queue = cnf.pause_resume
 		for i = 0; i < NumThreads; i++ {
 			pause_mutex_per_thread[i].Lock()
 			G_async_queue_push(queue, pause_mutex_per_thread[i])

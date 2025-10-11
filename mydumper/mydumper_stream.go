@@ -3,13 +3,12 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -23,8 +22,8 @@ var (
 	initial_metadata_lock_queue    *GAsyncQueue
 	metadata_partial_queue         *GAsyncQueue
 	metadata_partial_writer_alive  bool
-	metadata_partial_writer_thread *GThreadFunc
-	stream_thread                  *GThreadFunc
+	metadata_partial_writer_thread *GThread
+	stream_thread                  *GThread
 )
 
 type stream_queue_element struct {
@@ -57,8 +56,8 @@ func stream_queue_push(dbt *db_table, filename string) {
 	metadata_partial_queue_push(dbt)
 }
 
-func process_stream(data any) {
-	defer stream_thread.Thread.Done()
+func process_stream(c any) {
+	_ = c
 	var f *os.File
 	var buf []byte = make([]byte, STREAM_BUFFER_SIZE)
 	var buflen int
@@ -255,11 +254,9 @@ func initialize_stream() {
 	initial_metadata_lock_queue = G_async_queue_new(BufferSize)
 	Stream_queue = G_async_queue_new(BufferSize)
 	metadata_partial_queue = G_async_queue_new(BufferSize)
-	stream_thread = G_thread_new("stream_thread", new(sync.WaitGroup), 0)
-	metadata_partial_writer_thread = G_thread_new("metadata_partial_writer_thread", new(sync.WaitGroup), 0)
-	metadata_partial_writer_alive = true
-	go process_stream(nil)
-	go metadata_partial_writer(nil)
+	stream_thread = M_thread_new("stream", process_stream, Stream_queue, "Stream thread could not be created")
+	metadata_partial_writer_thread = M_thread_new("metadata_writer", metadata_partial_writer, nil, "Metadata partial writer thread could not be created")
+
 }
 
 func wait_stream_to_finish() {

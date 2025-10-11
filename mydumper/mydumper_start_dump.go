@@ -1,11 +1,13 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/shirou/gopsutil/disk"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	"maps"
 	"os"
 	"os/signal"
 	"path"
@@ -18,7 +20,7 @@ import (
 )
 
 var (
-	SourceData                         int
+	// SourceDataStr                         int
 	TidbSnapshot                       string
 	NoLocks                            bool
 	NoBackupLocks                      bool
@@ -31,12 +33,9 @@ var (
 	Longquery                          uint64 = 60
 	Killqueries                        bool
 	Exec_command                       string
-	PmmPath                            string
-	PmmResolution                      string
 	UpdatedSince                       int
 	DumpTablespaces                    bool
-	chunk_builder                      *GThreadFunc
-	threads                            *GThreadFunc
+	threads                            []*GThread
 	td                                 []*thread_data
 	all_dbts                           map[string]*db_table
 	conf_per_table                     *Configuration_per_table = new(Configuration_per_table)
@@ -51,12 +50,16 @@ var (
 	need_dummy_read                    bool
 	need_dummy_toku_read               bool
 	pause_mutex_per_thread             []*sync.Mutex
-	disk_check_thread                  *GThreadFunc
-	sthread                            *GThreadFunc
-	pmmthread                          *GThreadFunc
+	disk_check_thread                  *GThread
+	sthread                            *GThread
+	pmmthread                          *GThread
 	ready_table_dump_mutex             *sync.Mutex
 	replica_stopped                    bool
 	exec_command                       string
+	initial_source_log                 string
+	initial_source_pos                 string
+	initial_source_gtid                string
+	ftwrl_completed                    bool
 )
 
 type job_type uint8
@@ -87,7 +90,7 @@ const (
 	JOB_DUMP_DATABASE
 	JOB_DUMP_ALL_DATABASES
 	JOB_DUMP_TABLE_LIST
-	JOB_WRITE_MASTER_STATUS
+	JOB_WRITE_SOURCE_AND_REPLICA_STATUS
 )
 
 const (
@@ -101,40 +104,34 @@ const (
 	UNASSIGNED chunk_states = iota
 	ASSIGNED
 	DUMPING_CHUNK
+	UNSPLITTABLE
 	COMPLETED
 )
 
-type configuration struct {
-	use_any_index               string
-	initial_queue               *GAsyncQueue
-	schema_queue                *GAsyncQueue
-	non_innodb                  *table_queuing
-	innodb                      *table_queuing
-	post_data_queue             *GAsyncQueue
-	ready                       *GAsyncQueue
-	ready_non_innodb_queue      *GAsyncQueue
-	db_ready                    *GAsyncQueue
-	binlog_ready                *GAsyncQueue
-	unlock_tables               *GAsyncQueue
-	pause_resume                *GAsyncQueue
-	gtid_pos_checked            *GAsyncQueue
-	are_all_threads_in_same_pos *GAsyncQueue
-	lock_tables_statement       *GString
-	mutex                       *sync.Mutex
-	done                        int
+type Configuration struct {
+	use_any_index                   string
+	initial_queue                   *GAsyncQueue
+	initial_completed_queue         *GAsyncQueue
+	schema_queue                    *GAsyncQueue
+	non_transactional               *table_queuing
+	transactional                   *table_queuing
+	post_data_queue                 *GAsyncQueue
+	ready                           *GAsyncQueue
+	ready_non_transactional_queue   *GAsyncQueue
+	db_ready                        *GAsyncQueue
+	source_and_replica_status_queue *GAsyncQueue
+	unlock_tables                   *GAsyncQueue
+	pause_resume                    *GAsyncQueue
+	gtid_pos_checked                *GAsyncQueue
+	are_all_threads_in_same_pos     *GAsyncQueue
+	lock_tables_statement           *GString
+	mutex                           *sync.Mutex
+	loop                            *sync.WaitGroup
+	done                            int
 }
 type MList struct {
-	list  []*db_table
+	list  *list.List
 	mutex *sync.Mutex
-}
-type thread_data struct {
-	conf                          *configuration
-	thread_id                     uint
-	table_name                    string
-	thrconn                       *DBConnection
-	less_locking_stage            bool
-	binlog_snapshot_gtid_executed string
-	pause_resume_mutex            *sync.Mutex
 }
 
 type job struct {
@@ -175,6 +172,7 @@ type integer_step struct {
 	estimated_remaining_steps uint64
 	check_max                 bool
 	check_min                 bool
+	rows_in_explain           uint64
 }
 
 type char_step struct {
@@ -224,6 +222,7 @@ type binlog_job struct {
 }
 type chunk_functions struct {
 	process  func(tj *table_job, csi *chunk_step_item)
+	free     func(csi *chunk_step_item)
 	get_next func(dbt *db_table) *chunk_step_item
 }
 type table_queuing struct {
@@ -256,48 +255,28 @@ type dump_table_job struct {
 	collation   string
 	engine      string
 }
-type chunk_step_item struct {
-	chunk_step      *chunk_step
-	chunk_type      chunk_type
-	next            *chunk_step_item
-	chunk_functions *chunk_functions
-	where           string
-	include_null    bool
-	prefix          string
-	field           string
-	number          uint64
-	deep            uint
-	position        uint
-	mutex           *sync.Mutex
-	needs_refresh   bool
-	status          chunk_states
-}
+
 type table_job_file struct {
 	filename string
 	file     *file_write
 }
 
 type table_job struct {
-	partition string
-	nchunk    uint64
-	sub_part  uint
-	where     string
-	// chunk_step        *chunk_step
-	chunk_step_item *chunk_step_item
-	order_by        string
-	dbt             *db_table
-	// sql_filename      string
-	// sql_file          *file_write
-	// dat_filename      string
-	// dat_file          *file_write
-	sql               *table_job_file
-	rows              *table_job_file
-	exec_out_filename string
-	filesize          float64
-	st_in_file        uint
-	child_process     int
-	char_chunk_part   uint
-	td                *thread_data
+	partition            string
+	part                 uint64
+	sub_part             uint
+	where                *GString
+	chunk_step_item      *chunk_step_item
+	dbt                  *db_table
+	sql                  *table_job_file
+	rows                 *table_job_file
+	exec_out_filename    string
+	filesize             float64
+	st_in_file           uint
+	child_process        int
+	char_chunk_part      uint
+	td                   *thread_data
+	num_rows_of_last_run uint64
 }
 
 type chunk_step struct {
@@ -329,7 +308,7 @@ type db_table struct {
 	insert_statement               *GString
 	load_data_header               *GString
 	load_data_suffix               *GString
-	is_innodb                      bool
+	is_transactional               bool
 	is_sequence                    bool
 	has_json_fields                bool
 	character_set                  string
@@ -340,13 +319,12 @@ type db_table struct {
 	anonymized_function            []*Function_pointer
 	where                          string
 	limit                          string
-	columns_on_select              string
 	columns_on_insert              string
 	partition_regex                *regexp.Regexp
 	num_threads                    uint
-	chunks                         []any
-	chunks_queue                   *GAsyncQueue
+	chunks                         *list.List
 	chunks_mutex                   *sync.Mutex
+	chunks_queue                   *GAsyncQueue
 	primary_key                    []string
 	primary_key_separated_by_comma string
 	multicolumn                    bool
@@ -360,6 +338,7 @@ type db_table struct {
 	min_chunk_step_size            uint64
 	starting_chunk_step_size       uint64
 	max_chunk_step_size            uint64
+	is_fixed_length                bool
 	status                         db_table_states
 	max_threads_per_table          uint
 	current_threads_running        uint
@@ -377,32 +356,22 @@ type lock_function func(conn *DBConnection)
 
 func initialize_start_dump() {
 	all_dbts = make(map[string]*db_table)
-	Initialize_set_names()
+	initialize_table()
 	initialize_working_thread()
 	Initialize_conf_per_table(conf_per_table)
 
 	// until we have an unique option on lock int_types we need to ensure this
-	if NoLocks || TrxConsistencyOnly {
-		LessLocking = false
+	if SyncThreadLockMode == NO_LOCK || SyncThreadLockMode == SAFE_NO_LOCK {
+		TrxTables = 1
 	}
 
 	// clarify binlog coordinates with trx_consistency_only
-	if TrxConsistencyOnly {
-		log.Warnf("Using trx_consistency_only, binlog coordinates will not be  accurate if you are writing to non transactional tables.")
+	if TrxTables != 0 {
+		log.Warnf("Using --trx-tables options, binlog coordinates will not be accurate if you are writing to non transactional tables.")
 	}
 
 	if DB != "" {
 		db_items = strings.Split(DB, ",")
-	}
-
-	if PmmPath != "" {
-		pmm = true
-		if PmmResolution == "" {
-			PmmResolution = "high"
-		}
-	} else if PmmResolution != "" {
-		pmm = true
-		PmmPath = fmt.Sprintf("/usr/local/percona/pmm2/collectors/textfile-collector/%s-resolution", PmmResolution)
 	}
 
 	/*if o.Stream.Stream && o.Exec.Exec_command != "" {
@@ -444,8 +413,8 @@ func is_disk_space_ok(val uint) bool {
 	return usage.Free/1024/1024 > uint64(val)
 }
 
-func monitor_disk_space_thread(queue *GAsyncQueue) {
-	defer disk_check_thread.Thread.Done()
+func monitor_disk_space_thread(c any) {
+	queue := c.(*GAsyncQueue)
 	var i uint
 	for i = 0; i < NumThreads; i++ {
 		pause_mutex_per_thread[i] = G_mutex_new()
@@ -478,6 +447,57 @@ func monitor_disk_space_thread(queue *GAsyncQueue) {
 	// return
 }
 
+func determine_columns_on_show_processlist(fields []*mysql.Field, num_fields uint, id_col *int, user_col *int, command_col *int, time_col *int, info_col *int) {
+	var i int
+	for i = 0; i < int(num_fields); i++ {
+		if id_col != nil && strings.EqualFold(string(fields[i].Name), "Id") {
+			*id_col = i
+		} else if user_col != nil && strings.EqualFold(string(fields[i].Name), "User") {
+			*user_col = i
+		} else if command_col != nil && strings.EqualFold(string(fields[i].Name), "Command") {
+			*command_col = i
+		} else if time_col != nil && strings.EqualFold(string(fields[i].Name), "Time") {
+			*time_col = i
+		} else if info_col != nil && strings.EqualFold(string(fields[i].Name), "Info") {
+			*info_col = i
+		}
+	}
+	if (id_col != nil && *id_col < 0) || (command_col != nil && *command_col < 0) || (time_col != nil && *time_col < 0) {
+		log.Criticalf("Error obtaining information from processlist")
+	}
+}
+
+func monitor_ftwrl_thread(c any) {
+	thread_id := c.(int64)
+	var conn *DBConnection
+	var res *MYSQL_RES
+	conn = Mysql_init()
+	M_connect(conn)
+	var query string
+	for !ftwrl_completed {
+		time.Sleep(time.Duration(ftwrl_max_wait_time) * time.Millisecond)
+		res = M_store_result(conn, "SHOW PROCESSLIST", M_warning, "Could not check PROCESSLIST")
+		if res == nil {
+			break
+		} else {
+			var row []mysql.FieldValue
+			var id_col int = -1
+			var info_col int = -1
+			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &id_col, nil, nil, nil, &info_col)
+			for row = Mysql_fetch_row(res); row != nil; row = Mysql_fetch_row(res) {
+				if row[id_col].AsInt64() == thread_id {
+					if strings.EqualFold(string(row[info_col].AsString()), FLUSH_TABLES_WITH_READ_LOCK) || strings.EqualFold(string(row[info_col].AsString()), FLUSH_NO_WRITE_TO_BINLOG_TABLES) {
+						query = fmt.Sprintf("KILL QUERY %d", row[id_col].AsInt64())
+						M_query_warning(conn, query, "Could not KILL slow query")
+					}
+				}
+			}
+		}
+		Mysql_free_result(res)
+	}
+	conn.Close()
+}
+
 func sig_triggered(user_data any, signal os.Signal) bool {
 	if signal == syscall.SIGTERM {
 		shutdown_triggered = true
@@ -489,10 +509,10 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 				pause_mutex_per_thread[i] = G_mutex_new()
 			}
 		}
-		if user_data.(*configuration).pause_resume == nil {
-			user_data.(*configuration).pause_resume = G_async_queue_new(BufferSize)
+		if user_data.(*Configuration).pause_resume == nil {
+			user_data.(*Configuration).pause_resume = G_async_queue_new(BufferSize)
 		}
-		var queue = user_data.(*configuration).pause_resume
+		var queue = user_data.(*Configuration).pause_resume
 		if !DaemonMode {
 			var datetimestr = M_date_time_new_now_local()
 			fmt.Printf("%s: Ctrl+c detected! Are you sure you want to cancel(Y/N)?", datetimestr)
@@ -525,7 +545,8 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	return false
 }
 
-func signal_thread(conf *configuration) {
+func signal_thread(c any) {
+	conf := c.(*Configuration)
 	defer sthread.Thread.Done()
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, os.Kill)
@@ -561,15 +582,10 @@ func detect_quote_character(conn *DBConnection) {
 	var query = "SELECT FIND_IN_SET('ANSI', @@SQL_MODE) OR FIND_IN_SET('ANSI_QUOTES', @@SQL_MODE)"
 	res = conn.Execute(query)
 	if conn.Err != nil {
-		log.Warnf("We were not able to determine ANSI mode: %v", conn.Err)
 		Identifier_quote_character = BACKTICK
 		Identifier_quote_character_str = "`"
 		fields_enclosed_by = "\""
 		identifier_quote_character_protect = Backtick_protect
-		return
-	}
-	if len(res.Values) == 0 {
-		log.Warnf("We were not able to determine ANSI mode")
 		return
 	}
 	for _, row = range res.Values {
@@ -588,38 +604,42 @@ func detect_quote_character(conn *DBConnection) {
 }
 
 func detect_sql_mode(conn *DBConnection) {
-	var res *mysql.Result
-	var row []mysql.FieldValue
 	var query = "SELECT @@SQL_MODE"
-	res = conn.Execute(query)
-	if conn.Err != nil {
-		log.Criticalf("Error getting SQL_MODE: %v", conn.Err)
-	}
-	if len(res.Values) == 0 {
-		log.Critical("Error getting SQL_MODE")
+	var mr *M_ROW = M_store_result_single_row(conn, query, "Error getting SQL_MODE")
+	if mr.Res != nil || mr.Row == nil {
+		M_store_result_row_free(mr)
+		return
 	}
 	var str string
-	for _, row = range res.Values {
-		if !strings.Contains(string(row[0].AsString()), "NO_AUTO_VALUE_ON_ZERO") {
-			str = fmt.Sprintf("'NO_AUTO_VALUE_ON_ZERO,%s'", row[0].AsString())
-		} else {
-			str = fmt.Sprintf("'%s'", row[0].AsString())
-		}
-		str = strings.ReplaceAll(str, "NO_BACKSLASH_ESCAPES", "")
-		str = strings.ReplaceAll(str, ",,", ",")
 
-		str = strings.ReplaceAll(str, "PIPES_AS_CONCAT", "")
-		str = strings.ReplaceAll(str, ",,", ",")
-		str = strings.ReplaceAll(str, "NO_KEY_OPTIONS", "")
-		str = strings.ReplaceAll(str, ",,", ",")
-		str = strings.ReplaceAll(str, "NO_TABLE_OPTIONS", "")
-		str = strings.ReplaceAll(str, ",,", ",")
-		str = strings.ReplaceAll(str, "NO_FIELD_OPTIONS", "")
-		str = strings.ReplaceAll(str, ",,", ",")
-		str = strings.ReplaceAll(str, "STRICT_TRANS_TABLES", "")
-		str = strings.ReplaceAll(str, ",,", ",")
-		Sql_mode = str
+	if !strings.EqualFold(string(mr.Row[0].AsString()), "NO_AUTO_VALUE_ON_ZERO") {
+		str = fmt.Sprintf("'NO_AUTO_VALUE_ON_ZERO,%s'", mr.Row[0].AsString())
+	} else {
+		str = fmt.Sprintf("'%s'", mr.Row[0].AsString())
 	}
+	str = strings.ReplaceAll(str, "NO_BACKSLASH_ESCAPES", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	/*
+	   The below 4 will be returned back if there is ORACLE in SQL_MODE. We can
+	   not remove ORACLE from dump files because restoring PACKAGE requires it. But we
+	   may remove ORACLE from mydumper session because SHOW CREATE PACKAGE works
+	   without ORACLE (see initialize_sql_mode()).
+	   The dump must retain all table options, so we cut out NO_TABLE_OPTIONS here:
+	   it doesn't play any role in dump files, but we are interested it doesn't
+	   appear in mydumpmer session.
+	*/
+	str = strings.ReplaceAll(str, "PIPES_AS_CONCAT", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	str = strings.ReplaceAll(str, "NO_KEY_OPTIONS", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	str = strings.ReplaceAll(str, "NO_TABLE_OPTIONS", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	str = strings.ReplaceAll(str, "NO_FIELD_OPTIONS", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	str = strings.ReplaceAll(str, "STRICT_TRANS_TABLES", "")
+	str = strings.ReplaceAll(str, ",,", ",")
+	Sql_mode = str
+	M_store_result_row_free(mr)
 }
 
 func create_main_connection() (conn *DBConnection) {
@@ -631,14 +651,13 @@ func create_main_connection() (conn *DBConnection) {
 	Set_session = G_string_new("")
 	Set_global = G_string_new("")
 	Set_global_back = G_string_new("")
-	_ = Detect_server_version(conn)
-	Detected_server = Get_product()
+	Server_detect(conn)
 	var set_session_hash = mydumper_initialize_hash_of_session_variables()
 	var set_global_hash = make(map[string]string)
 	if Key_file != nil {
 		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_global_hash, "mydumper_global_variables")
 		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_session_hash, "mydumper_session_variables")
-		Load_per_table_info_from_key_file(Key_file, conf_per_table, nil)
+		Load_per_table_info_from_key_file(Key_file, conf_per_table, init_function_pointer)
 	}
 	Sql_mode = set_session_hash["SQL_MODE"]
 	if Sql_mode == "" {
@@ -647,25 +666,34 @@ func create_main_connection() (conn *DBConnection) {
 	}
 	Refresh_set_session_from_hash(Set_session, set_session_hash)
 	Refresh_set_global_from_hash(Set_global, Set_global_back, set_global_hash)
-	// free_hash_table(set_session_hash)
+	Free_hash_table(set_session_hash)
 	Execute_gstring(conn, Set_session)
 	Execute_gstring(conn, Set_global)
 	detect_quote_character(conn)
 	initialize_headers()
 	initialize_write()
-	switch Detected_server {
+	switch Get_product() {
 	case SERVER_TYPE_MYSQL:
 		set_transaction_isolation_level_repeatable_read(conn)
+		break
 	case SERVER_TYPE_MARIADB:
 		set_transaction_isolation_level_repeatable_read(conn)
+		break
 	case SERVER_TYPE_TIDB:
 		DataChecksums = false
+		break
 	case SERVER_TYPE_PERCONA:
 		set_transaction_isolation_level_repeatable_read(conn)
+		break
 	case SERVER_TYPE_UNKNOWN:
 		set_transaction_isolation_level_repeatable_read(conn)
+		break
 	case SERVER_TYPE_CLICKHOUSE:
 		DataChecksums = false
+		break
+	case SERVER_TYPE_DOLT:
+		set_transaction_isolation_level_repeatable_read(conn)
+		break
 	default:
 		log.Criticalf("Cannot detect server type")
 	}
@@ -674,14 +702,18 @@ func create_main_connection() (conn *DBConnection) {
 }
 
 func get_not_updated(conn *DBConnection, file *os.File) {
-	var res *mysql.Result
 	var query string
+	var row []mysql.FieldValue
 	query = fmt.Sprintf("SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND UPDATE_TIME < NOW() - INTERVAL '%d' DAY", UpdatedSince)
-	res = conn.Execute(query)
-	if conn.Err != nil {
+	var res = M_store_result(conn, query, M_warning, "Updated since query failed")
+	if res == nil {
 		return
 	}
-	for _, row := range res.Values {
+	for {
+		row = Mysql_fetch_row(res)
+		if row == nil {
+			break
+		}
 		no_updated_tables = append(no_updated_tables, string(row[0].AsString()))
 		_, _ = file.WriteString(fmt.Sprintf("%s\n", row[0].AsString()))
 	}
@@ -694,46 +726,32 @@ func long_query_wait(conn *DBConnection) {
 	var p3 string
 	for {
 		var longquery_count int
-		res := conn.Execute("SHOW PROCESSLIST")
-		if conn.Err != nil {
-			log.Warnf("Could not check PROCESSLIST, no long query guard enabled: %v", conn.Err)
+		res := M_store_result(conn, "SHOW PROCESSLIST", M_warning, "Could not check PROCESSLIST, no long query guard enabled")
+		if res == nil {
 			break
 		} else {
-
+			var row []mysql.FieldValue
 			/* Just in case PROCESSLIST output column order changes */
-			var fields = res.Fields
-			var i int
 			var tcol = -1
 			var ccol = -1
 			var icol = -1
 			var ucol = -1
-			for i = 0; i < res.ColumnNumber(); i++ {
-				if string(fields[i].Name) == "Command" {
-					ccol = i
-				} else if string(fields[i].Name) == "Time" {
-					tcol = i
-				} else if string(fields[i].Name) == "Id" {
-					icol = i
-				} else if string(fields[i].Name) == "User" {
-					ucol = i
+			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &icol, &ucol, &ccol, &tcol, nil)
+			for {
+				row = Mysql_fetch_row(res)
+				if row == nil {
+					break
 				}
-			}
-			if tcol < 0 || ccol < 0 || icol < 0 {
-				log.Critical("Error obtaining information from processlist")
-			}
-			for _, row := range res.Values {
 				if row[ccol].Value() != nil && string(row[ccol].AsString()) != "Query" {
 					continue
 				}
 				if row[ucol].Value() != nil && (string(row[ucol].AsString()) == "system user" || string(row[ucol].AsString()) == "event_scheduler") {
 					continue
 				}
-				if row[tcol].AsUint64() > Longquery {
+				if row[tcol].Value() != nil && row[tcol].AsUint64() > Longquery {
 					if Killqueries {
 						p3 = fmt.Sprintf("KILL %d", row[icol].AsUint64())
-						_ = conn.Execute(p3)
-						if conn.Err != nil {
-							log.Warnf("Could not KILL slow query: %v", conn.Err)
+						if M_query_warning(conn, p3, "Could not KILL slow query") {
 							longquery_count++
 						} else {
 							log.Warnf("Killed a query that was running for %ds", row[tcol].AsUint64())
@@ -743,11 +761,12 @@ func long_query_wait(conn *DBConnection) {
 					}
 				}
 			}
+			Mysql_free_result(res)
 			if longquery_count == 0 {
 				break
 			} else {
 				if LongqueryRetries == 0 {
-					log.Criticalf("There are queries in PROCESSLIST running longer than %ds, aborting dump, use --long-query-guard to change the guard value, kill queries (--kill-long-queries) or use different server for dump", Longquery)
+					log.Criticalf("There are queries in PROCESSLIST running longer than %ds, aborting dump,\n\t use --long-query-guard to change the guard value, kill queries (--kill-long-queries) or use \n\tdifferent server for dump", Longquery)
 				}
 				LongqueryRetries--
 				log.Warnf("There are queries in PROCESSLIST running longer than %ds, retrying in %d seconds (%d left).", Longquery, LongqueryRetryInterval, LongqueryRetries)
@@ -756,147 +775,142 @@ func long_query_wait(conn *DBConnection) {
 		}
 	}
 }
-func mysql_query_verbose(conn *DBConnection, q string) error {
-	_ = conn.Execute(q)
-	if conn.Err == nil {
-		log.Infof("%s: OK", q)
-
-	} else {
-		log.Errorf("%s: %v", q, conn.Err)
-	}
-	return conn.Err
-}
 
 func send_backup_stage_on_block_commit(conn *DBConnection) {
-	err := mysql_query_verbose(conn, "BACKUP STAGE BLOCK_COMMIT")
-	if err != nil {
-		log.Criticalf("Couldn't acquire BACKUP STAGE BLOCK_COMMIT: %v", err)
-		errors++
-	}
+	M_query_verbose(conn, "BACKUP STAGE BLOCK_COMMIT", M_critical, "Could not send BACKUP STAGE BLOCK_COMMIT")
 }
 
 func send_mariadb_backup_locks(conn *DBConnection) {
-	err := mysql_query_verbose(conn, "BACKUP STAGE START")
-	if err != nil {
-		log.Criticalf("Couldn't acquire BACKUP STAGE START: %v", err)
-	}
-	err = mysql_query_verbose(conn, "BACKUP STAGE BLOCK_DDL")
-	if err != nil {
-		log.Criticalf("Couldn't acquire BACKUP STAGE BLOCK_DDL: %v", err)
-		errors++
-	}
+	M_query_verbose(conn, "BACKUP STAGE START", M_critical, "Couldn't acquire BACKUP STAGE START")
+	M_query_verbose(conn, "BACKUP STAGE BLOCK_DDL", M_critical, "Couldn't acquire BACKUP STAGE BLOCK_DDL")
 }
 
 func send_percona57_backup_locks(conn *DBConnection) {
-	err := mysql_query_verbose(conn, "LOCK TABLES FOR BACKUP")
-	if err != nil {
-		log.Criticalf("Couldn't acquire LOCK TABLES FOR BACKUP, snapshots will not be consistent: %v", err)
-		errors++
-	}
-	err = mysql_query_verbose(conn, "LOCK BINLOG FOR BACKUP")
-	if err != nil {
-		log.Criticalf("Couldn't acquire LOCK BINLOG FOR BACKUP, snapshots will not be consistent: %v", err)
-		errors++
-	}
+	M_query_verbose(conn, "LOCK TABLES FOR BACKUP", M_critical, "Couldn't acquire LOCK TABLES FOR BACKUP, snapshots will not be consistent")
+	M_query_verbose(conn, "LOCK BINLOG FOR BACKUP", M_critical, "Couldn't acquire LOCK BINLOG FOR BACKUP, snapshots will not be consistent")
 }
 
 func send_ddl_lock_instance_backup(conn *DBConnection) {
-	err := mysql_query_verbose(conn, "LOCK INSTANCE FOR BACKUP")
-	if err != nil {
-		log.Criticalf("Couldn't acquire LOCK INSTANCE FOR BACKUP: %v", err)
-		errors++
-	}
+	M_query_verbose(conn, "LOCK INSTANCE FOR BACKUP", M_critical, "Couldn't acquire LOCK INSTANCE FOR BACKUP")
 }
 
 func send_unlock_tables(conn *DBConnection) {
-	_ = mysql_query_verbose(conn, "UNLOCK TABLES")
+	M_query_verbose(conn, "UNLOCK TABLES", M_warning, "Failed to UNLOCK TABLES")
 }
 
 func send_unlock_binlogs(conn *DBConnection) {
-	_ = mysql_query_verbose(conn, "UNLOCK BINLOG")
+	M_query_verbose(conn, "UNLOCK BINLOG", M_warning, "Failed to UNLOCK BINLOG")
 }
 
 func send_ddl_unlock_instance_backup(conn *DBConnection) {
-	_ = mysql_query_verbose(conn, "UNLOCK INSTANCE")
+	M_query_verbose(conn, "UNLOCK INSTANCE", M_warning, "Failed to UNLOCK INSTANCE")
 }
 
 func send_backup_stage_end(conn *DBConnection) {
-	_ = mysql_query_verbose(conn, "BACKUP STAGE END")
+	M_query_verbose(conn, "BACKUP STAGE END", M_warning, "Failed to BACKUP STAGE END")
 
 }
 
 func send_flush_table_with_read_lock(conn *DBConnection) {
-	err := mysql_query_verbose(conn, "FLUSH NO_WRITE_TO_BINLOG TABLES")
-	if err != nil {
-		log.Warnf("Flush tables failed, we are continuing anyways: %v", err)
+	var id = conn.Conn.GetConnectionID()
+	M_thread_new("mon_ftwrl", monitor_ftwrl_thread, &id, "FTWRL monitor thread could not be created")
+	var i = 0
+try_FLUSH_NO_WRITE_TO_BINLOG_TABLES:
+	i++
+	if M_query_verbose(conn, FLUSH_NO_WRITE_TO_BINLOG_TABLES, M_warning, "Flush tables failed, we are continuing anyways") &&
+		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
+		goto try_FLUSH_NO_WRITE_TO_BINLOG_TABLES
 	}
-	log.Infof("Acquiring FTWRL")
-	err = mysql_query_verbose(conn, "FLUSH TABLES WITH READ LOCK")
-	if err != nil {
-		log.Criticalf("Couldn't acquire global lock, snapshots will not be consistent: %v", err)
-		errors++
+try_FLUSH_TABLES_WITH_READ_LOCK:
+	if M_query_verbose(conn, FLUSH_TABLES_WITH_READ_LOCK, M_critical, "Couldn't acquire global lock, snapshots will not be consistent") &&
+		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
+		goto try_FLUSH_TABLES_WITH_READ_LOCK
 	}
+	ftwrl_completed = true
+
 }
 
-func default_locking() (acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function lock_function) {
-	acquire_ddl_lock_function = nil
-	release_ddl_lock_function = nil
-	acquire_global_lock_function = send_flush_table_with_read_lock
-	release_global_lock_function = send_unlock_tables
-	release_binlog_function = nil
+func initialize_tidb_snapshot(conn *DBConnection) {
+	if TidbSnapshot != "" {
+		// Generate a @@tidb_snapshot to use for the worker threads since
+		// the tidb-snapshot argument was not specified when starting mydumper
+		var mr *M_ROW = M_store_result_row(conn, Show_binary_log_status, M_critical, M_warning, "Couldn't generate @@tidb_snapshot")
+		TidbSnapshot = string(mr.Row[1].AsString())
+		M_store_result_row_free(mr)
+	}
+	// Need to set the @@tidb_snapshot for the master thread
+	set_tidb_snapshot(conn)
+	log.Infof("Set to tidb_snapshot '%s'", TidbSnapshot)
+}
+
+func default_locking() (acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function *lock_function) {
+	*acquire_ddl_lock_function = nil
+	*release_ddl_lock_function = nil
+	*acquire_global_lock_function = send_flush_table_with_read_lock
+	*release_global_lock_function = send_unlock_tables
+	*release_binlog_function = nil
 	return
 }
 
-func determine_ddl_lock_function(conn *DBConnection) (acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function lock_function) {
+func determine_ddl_lock_function(conn **DBConnection, acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function *lock_function) {
 	switch Get_product() {
 	case SERVER_TYPE_PERCONA:
 		switch Get_major() {
 		case 8:
-			acquire_ddl_lock_function = send_ddl_lock_instance_backup
-			release_ddl_lock_function = send_ddl_unlock_instance_backup
-			acquire_global_lock_function = send_flush_table_with_read_lock
-			release_global_lock_function = send_unlock_tables
+			*acquire_ddl_lock_function = send_ddl_lock_instance_backup
+			*release_ddl_lock_function = send_ddl_unlock_instance_backup
+			*acquire_global_lock_function = send_flush_table_with_read_lock
+			*release_global_lock_function = send_unlock_tables
+			break
 		case 5:
 			if Get_secondary() == 7 {
 				if NoBackupLocks {
-					acquire_ddl_lock_function = nil
-					release_ddl_lock_function = nil
+					*acquire_ddl_lock_function = nil
+					*release_ddl_lock_function = nil
 				} else {
-					acquire_ddl_lock_function = send_percona57_backup_locks
-					release_ddl_lock_function = send_unlock_tables
+					*acquire_ddl_lock_function = send_percona57_backup_locks
+					*release_ddl_lock_function = send_unlock_tables
 				}
-				acquire_global_lock_function = send_flush_table_with_read_lock
-				release_global_lock_function = send_unlock_tables
+				*acquire_global_lock_function = send_flush_table_with_read_lock
+				*release_global_lock_function = send_unlock_tables
 
-				release_binlog_function = send_unlock_binlogs
-				conn = create_connection()
+				*release_binlog_function = send_unlock_binlogs
+				*conn = create_connection()
 			} else {
 				acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = default_locking()
 			}
 		default:
 			acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = default_locking()
 		}
+		break
 	case SERVER_TYPE_MYSQL:
 		switch Get_major() {
 		case 8:
-			acquire_ddl_lock_function = send_ddl_lock_instance_backup
-			release_ddl_lock_function = send_ddl_unlock_instance_backup
-			acquire_global_lock_function = send_flush_table_with_read_lock
-			release_global_lock_function = send_unlock_tables
+			*acquire_ddl_lock_function = send_ddl_lock_instance_backup
+			*release_ddl_lock_function = send_ddl_unlock_instance_backup
+			*acquire_global_lock_function = send_flush_table_with_read_lock
+			*release_global_lock_function = send_unlock_tables
+			break
 		default:
 			acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = default_locking()
 		}
+		break
 	case SERVER_TYPE_MARIADB:
 		if (Get_major() == 10 && Get_secondary() >= 5) || Get_major() > 10 {
-			acquire_ddl_lock_function = send_mariadb_backup_locks
-			release_ddl_lock_function = nil
-			acquire_global_lock_function = send_backup_stage_on_block_commit
-			release_global_lock_function = send_backup_stage_end
+			*acquire_ddl_lock_function = send_mariadb_backup_locks
+			*release_ddl_lock_function = nil
+			*acquire_global_lock_function = send_backup_stage_on_block_commit
+			*release_global_lock_function = send_backup_stage_end
 		} else {
 			acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = default_locking()
 		}
+		break
+	case SERVER_TYPE_TIDB:
+		*acquire_global_lock_function = initialize_tidb_snapshot
+		break
 	default:
 		acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = default_locking()
+		break
 	}
 	return
 }
@@ -933,7 +947,7 @@ func print_dbt_on_metadata(mdfile *os.File, dbt *db_table) {
 	print_dbt_on_metadata_gstring(dbt, data)
 	fmt.Fprintf(mdfile, data.Str.String())
 	mdfile.Sync()
-	if CheckRowCount && (dbt.rows != dbt.rows_total) {
+	if CheckRowCount && !dbt.object_to_export.No_data && (dbt.rows != dbt.rows_total) {
 		log.Criticalf("Row count mismatch found for %s.%s: got %d of %d expected", dbt.database.name, dbt.table, dbt.rows, dbt.rows_total)
 	}
 
@@ -944,7 +958,8 @@ func send_lock_all_tables(conn *DBConnection) {
 	var query string
 	var dbtb string
 	var dt []string
-	var res *mysql.Result
+	var row []mysql.FieldValue
+	var res *MYSQL_RES
 	var tables_lock []string
 	var success bool
 	var retry uint
@@ -954,13 +969,13 @@ func send_lock_all_tables(conn *DBConnection) {
 		for _, t := range Tables {
 			dt = strings.Split(t, ".")
 			query = fmt.Sprintf("SHOW TABLES IN %s LIKE '%s'", dt[0], dt[1])
-			res = conn.Execute(query)
-			if conn.Err != nil {
-				log.Errorf("Error showing tables in: %s - Could not execute query: %v", dt[0], conn.Err)
-				errors++
-				return
-			} else {
-				for _, row := range res.Values {
+			res = M_store_result_critical(conn, query, "Error showing tables in: %s - Could not execute query", dt[0])
+			if res != nil {
+				for {
+					row = Mysql_fetch_row(res)
+					if row == nil {
+						break
+					}
 					if TablesSkiplistFile != "" && Check_skiplist(dt[0], string(row[0].AsString())) {
 						continue
 					}
@@ -989,12 +1004,13 @@ func send_lock_all_tables(conn *DBConnection) {
 		} else {
 			query = fmt.Sprintf("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_TYPE ='BASE TABLE' AND TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'data_dictionary')")
 		}
-		res = conn.Execute(query)
-		if conn.Err != nil {
-			log.Criticalf("Couldn't get table list for lock all tables: %v", conn.Err)
-			errors++
-		} else {
-			for _, row := range res.Values {
+		res = M_store_result_critical(conn, query, "Couldn't get table list for lock all tables")
+		if res != nil {
+			for {
+				row = Mysql_fetch_row(res)
+				if row == nil {
+					break
+				}
 				if TablesSkiplistFile != "" && Check_skiplist(string(row[0].AsString()), string(row[1].AsString())) {
 					continue
 				}
@@ -1013,6 +1029,7 @@ func send_lock_all_tables(conn *DBConnection) {
 	if len(tables_lock) > 0 {
 		// Try three times to get the lock, this is in case of tmp tables
 		// disappearing
+		log.Infof("Initialing Lock All tables")
 		for len(tables_lock) > 0 && !success && retry < 4 {
 			query = ""
 			query += "LOCK TABLE"
@@ -1020,15 +1037,13 @@ func send_lock_all_tables(conn *DBConnection) {
 				query += fmt.Sprintf("%s READ,", iter)
 			}
 			query = strings.Trim(query, ",")
-			_ = conn.Execute(query)
-			if conn.Err != nil {
-
-				var tmp_fail []string = strings.Split(conn.Err.Error(), "'")
+			if M_query_warning(conn, query, "Lock Table failed") {
+				var tmp_fail []string = strings.Split(Mysql_error(conn), "'")
 				tmp_fail = strings.Split(tmp_fail[1], ".")
 				var failed_table string = fmt.Sprintf("`%s`.`%s`", tmp_fail[0], tmp_fail[1])
 				var tmp_list []string
 				for _, t := range tables_lock {
-					// tables_lock = g_list_remove(tables_lock, iter->data);
+					// tables_lock = g_list_remove(tables_lock, iter.data);
 					if t == failed_table {
 						continue
 					}
@@ -1047,96 +1062,60 @@ func send_lock_all_tables(conn *DBConnection) {
 		log.Warnf("No table found to lock")
 		//    exit(EXIT_FAILURE);
 	}
+	Mysql_free_result(res)
 }
 
-func write_replica_info(conn *DBConnection, file *os.File) {
-	var slave *mysql.Result
-	var fields []mysql.Field
-	var row []mysql.FieldValue
-	var slavehost string
-	var slavelog string
-	var slavepos string
-	var slavegtid string
-	var channel_name string
-	var gtid_title string
-	var i uint
-	var isms bool
-	rest := conn.Execute("SELECT @@default_master_connection")
-	if rest != nil && conn.Err == nil {
-		log.Infof("Multisource slave detected.")
-		isms = true
+func m_stop_replica(conn *DBConnection) {
+	var slave *MYSQL_RES
+	var rest *MYSQL_RES
+	if Get_product() == SERVER_TYPE_MARIADB {
+		rest = M_store_result(conn, "SELECT @@default_master_connection", M_warning, "Variable @@default_master_connection not found")
+		if rest != nil && Mysql_num_rows(rest) != 0 {
+			Mysql_free_result(rest)
+			log.Infof("Multisource slave detected.")
+			isms = true
+		}
 	}
-	var slave_count uint
+
 	if isms {
-		M_query(conn, Show_all_replicas_status, M_critical, fmt.Sprintf("Error executing %s", Show_all_replicas_status))
+		M_query_critical(conn, Show_all_replicas_status, "Error executing %s", Show_all_replicas_status)
 	} else {
-		M_query(conn, Show_replica_status, M_critical, fmt.Sprintf("Error executing %s", Show_replica_status))
+		M_query_critical(conn, Show_replica_status, "Error executing %s", Show_replica_status)
 	}
-	slave = conn.Result
-	if slave == nil || len(slave.Values) == 0 {
-		return
+	slave = Mysql_store_result(conn)
+
+	if slave == nil || Mysql_num_rows(slave) == 0 {
+		goto cleanup
 	}
 	log.Infof("Stopping replica")
-	_ = conn.Execute(Stop_replica_sql_thread)
-	if conn.Err != nil {
-		log.Warnf("Not able to stop replica: %v", conn.Err)
-	}
+	replica_stopped = !M_query_warning(conn, Stop_replica_sql_thread, "Not able to stop replica")
 	if Source_control_command == AWS {
 		Discard_mysql_output(conn)
 	}
-	if isms {
-		M_query(conn, Show_all_replicas_status, M_critical, fmt.Sprintf("Error executing %s", Show_all_replicas_status))
-	} else {
-		M_query(conn, Show_replica_status, M_critical, fmt.Sprintf("Error executing %s", Show_replica_status))
+
+cleanup:
+	if slave != nil {
+		Mysql_free_result(slave)
 	}
-	slave = conn.Result
-	var replication_section_str string
-	for _, row = range slave.Values {
-		if string(fields[i].Name) == "exec_master_log_pos" || string(fields[i].Name) == "exec_source_log_pos" {
-			slavepos = string(row[i].AsString())
-		} else if string(fields[i].Name) == "relay_master_log_file" || string(fields[i].Name) == "relay_source_log_file" {
-			slavelog = string(row[i].AsString())
-		} else if string(fields[i].Name) == "master_host" || string(fields[i].Name) == "source_host" {
-			slavehost = string(row[i].AsString())
-		} else if "Executed_Gtid_Set" == string(fields[i].Name) {
-			gtid_title = "Executed_Gtid_Set"
-			slavegtid = Remove_new_line(string(row[i].AsString()))
-		} else if "Gtid_Slave_Pos" == string(fields[i].Name) || string("Gtid_source_Pos") == string(fields[i].Name) {
-			gtid_title = string(fields[i].Name)
-			slavegtid = Remove_new_line(string(row[i].AsString()))
-		} else if ("connection_name" == string(fields[i].Name) || "Channel_Name" == string(fields[i].Name)) && len(row[i].AsString()) > 1 {
-			channel_name = string(row[i].AsString())
-		}
-		replication_section_str += fmt.Sprintf("# %s = ", fields[i].Name)
-		if fields[i].Type != mysql.MYSQL_TYPE_LONG && fields[i].Type != mysql.MYSQL_TYPE_LONGLONG && fields[i].Type != mysql.MYSQL_TYPE_INT24 && fields[i].Type != mysql.MYSQL_TYPE_SHORT {
-			replication_section_str += fmt.Sprintf("'%s'\n", Remove_new_line(string(row[i].AsString())))
-		} else {
-			replication_section_str += fmt.Sprintf("%s\n", string(row[i].AsString()))
-		}
-	}
-	if slavehost != "" {
-		slave_count++
-		if channel_name != "" {
-			fmt.Fprintf(file, "[replication%s%s]", ".", channel_name)
-		} else {
-			fmt.Fprintf(file, "[replication%s%s]", "", "")
-		}
-		fmt.Fprintf(file, "\n# relay_master_log_file = '%s'\n# exec_master_log_pos = %s\n# %s = %s\n", slavelog, slavepos, gtid_title, slavegtid)
-		fmt.Fprintf(file, "%s", replication_section_str)
-		fmt.Fprintf(file, "# myloader_exec_reset_slave = 0 # 1 means execute the command\n# myloader_exec_change_master = 0 # 1 means execute the command\n# myloader_exec_start_slave = 0 # 1 means execute the command\n")
-		log.Infof("Written slave status")
-	}
-	if slave_count > 1 {
-		log.Warnf("Multisource replication found. Do not trust in the exec_master_log_pos as it might cause data inconsistencies. Search 'Replication and Transaction Inconsistencies' on MySQL Documentation")
-	}
-	file.Sync()
 }
 
-func StartDump() error {
+func StartDump(conf *Configuration) error {
+	var conn, second_conn *DBConnection
+	var metadata_partial_filename, metadata_filename string
+	var u string
+	var acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function lock_function
+	var dbt *db_table
+	var n uint
+	var err error
+	var nufile *os.File
+	var mdfile *os.File
+	// var disk_check_thread *GThread
+	// var sthread *GThread
+
 	if ClearDumpDir {
 		clear_dump_directory(dump_directory)
-	} else if !DirtyDumpDir && !is_empty_dir(dump_directory) {
-		log.Errorf("Directory is not empty (use --clear or --dirty): %s", dump_directory)
+	} else if !(DirtyDumpDir || MergeDumpDir) && !is_empty_dir(dump_directory) {
+		log.Errorf("Directory is not empty (use --clear, --dirty or --merge): %s", dump_directory)
 	}
 
 	Check_num_threads()
@@ -1151,45 +1130,24 @@ func StartDump() error {
 		Tables = Get_table_list(TablesList)
 	}
 	if TablesSkiplistFile != "" {
-		_ = Read_tables_skiplist(TablesSkiplistFile)
+		Read_tables_skiplist(TablesSkiplistFile, &Errors)
 	}
 	InitializeRegex(PartitionRegex)
-	var conn *DBConnection
+
 	conn = create_main_connection()
-	if conn.Err != nil {
-		return conn.Err
-	}
 	Main_connection = conn
-	var second_conn = conn
-	var conf *configuration = new(configuration)
+	second_conn = conn
 	conf.use_any_index = "1"
-	var metadata_partial_filename, metadata_filename string
-	var u string
-	var acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function lock_function
-	var dbt *db_table
-	var n uint
-	var nufile *os.File
 
 	if DiskLimits != "" {
 		conf.pause_resume = G_async_queue_new(BufferSize)
-		disk_check_thread = G_thread_new("disk_space_monitor", new(sync.WaitGroup), 0)
-		go monitor_disk_space_thread(conf.pause_resume)
+		disk_check_thread = M_thread_new("mon_disk", monitor_disk_space_thread, conf.pause_resume, "Monitor thread could not be created")
+	}
+	if Throttle_variable != "" {
+		M_thread_new("mon_thro", Monitor_throttling_thread, nil, "Monitor throttling thread could not be created")
 	}
 	if !DaemonMode {
-		sthread = G_thread_new("signal_handler", new(sync.WaitGroup), 0)
-		go signal_thread(conf)
-		time.Sleep(10 * time.Microsecond)
-		if sthread == nil {
-			log.Critical("Could not create signal threads")
-		}
-	}
-	if pmm {
-		log.Infof("Using PMM resolution %s at %s", PmmResolution, PmmPath)
-		pmmthread = G_thread_new("pmm_thread", new(sync.WaitGroup), 0)
-		go pmm_thread(conf)
-		if pmmthread == nil {
-			log.Critical("Could not create pmm thread")
-		}
+		sthread = M_thread_new("signal", signal_thread, conf, "Signal thread could not be created")
 	}
 	if Stream != "" {
 		metadata_partial_filename = fmt.Sprintf("%s/metadata.header", dump_directory)
@@ -1197,10 +1155,14 @@ func StartDump() error {
 		metadata_partial_filename = fmt.Sprintf("%s/metadata.partial", dump_directory)
 	}
 	metadata_filename = fmt.Sprintf("%s/metadata", dump_directory)
-
-	mdfile, err := os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
+	if MergeDumpDir {
+		if err := os.Rename(metadata_filename, metadata_partial_filename); err != nil {
+			log.Criticalf("We were not able to rename metadata (%s) file to %s", metadata_filename, metadata_partial_filename)
+		}
+	}
+	mdfile, err = os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_APPEND, 0660)
 	if err != nil {
-		log.Criticalf("Couldn't write metadata file %s (%v)", metadata_partial_filename, err)
+		log.Criticalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
 	}
 	if UpdatedSince > 0 {
 		u = fmt.Sprintf("%s/not_updated_tables", dump_directory)
@@ -1211,7 +1173,8 @@ func StartDump() error {
 		get_not_updated(conn, nufile)
 	}
 
-	if !NoLocks && Is_mysql_like() {
+	// If we are locking, we need to be sure there is no long running queries
+	if SyncThreadLockMode != NO_LOCK && SyncThreadLockMode != SAFE_NO_LOCK && Is_mysql_like() {
 		// We check SHOW PROCESSLIST, and if there're queries
 		// larger than preset value, we terminate the process.
 		// This avoids stalling whole server with flush.
@@ -1220,165 +1183,168 @@ func StartDump() error {
 	var datetimestr = time.Now().Format(time.DateTime)
 	fmt.Fprintf(mdfile, "# Started dump at: %s\n", datetimestr)
 	log.Infof("Started dump at: %s", datetimestr)
-
+	G_assert(Identifier_quote_character == BACKTICK || Identifier_quote_character == DOUBLE_QUOTE)
 	/* Write dump config into beginning of metadata, stream this first */
-	if Identifier_quote_character == BACKTICK || Identifier_quote_character == DOUBLE_QUOTE {
-		var qc string
-		if Identifier_quote_character == BACKTICK {
-			qc = "BACKTICK"
-		} else {
-			qc = "DOUBLE_QUOTE"
-		}
-		fmt.Fprintf(mdfile, "[config]\nquote_character = %s\n", qc)
-		fmt.Fprintf(mdfile, "\n[myloader_session_variables]")
-		fmt.Fprintf(mdfile, "\nSQL_MODE=%s \n\n", Sql_mode)
-		mdfile.Sync()
+	var qc string
+	if Identifier_quote_character == BACKTICK {
+		qc = "BACKTICK"
 	} else {
-		log.Criticalf("--identifier-quote-character not is %s or %s", BACKTICK, DOUBLE_QUOTE)
+		qc = "DOUBLE_QUOTE"
 	}
+	fmt.Fprintf(mdfile, "[config]\nquote_character = %s\n", qc)
+	if LoadData || Csv {
+		fmt.Fprintf(mdfile, "local-infile = 1\n")
+	}
+	fmt.Fprintf(mdfile, "\n[myloader_session_variables]")
+	fmt.Fprintf(mdfile, "\nSQL_MODE=%s /*!40101\n", Sql_mode)
+	mdfile.Sync()
+
 	if Stream != "" {
+		if exec_command != "" {
+			log.Errorf("--exec and --stream are not comptabile, use --exec-per-thread instead as file extension is needed to stream the out file")
+		}
 		initialize_stream()
-		stream_queue_push(nil, metadata_partial_filename)
 		mdfile.Close()
+		stream_queue_push(nil, metadata_partial_filename)
 		metadata_partial_filename = fmt.Sprintf("%s/metadata.partial", dump_directory)
-		mdfile, err = os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0660)
+		mdfile, err = os.OpenFile(metadata_partial_filename, os.O_WRONLY, 0660)
 		if err != nil {
 			log.Criticalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
 		}
 	}
-	if Detected_server == SERVER_TYPE_TIDB {
-		log.Infof("Skipping locks because of TiDB")
-		if TidbSnapshot == "" {
-
-			// Generate a @@tidb_snapshot to use for the worker threads since
-			// the tidb-snapshot argument was not specified when starting mydumper
-			var res *mysql.Result
-			M_query(conn, Show_binary_log_status, M_critical, "Couldn't generate @@tidb_snapshot")
-			res = conn.Result
-			TidbSnapshot = string(res.Values[0][1].AsString())
-		}
-		// Need to set the @@tidb_snapshot for the master thread
-		set_tidb_snapshot(conn)
-		log.Infof("Set to tidb_snapshot '%s'", TidbSnapshot)
-
-	} else {
-		if !NoLocks {
-			// This backup will lock the database
-			acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function = determine_ddl_lock_function(second_conn)
-			if SkipDdlLocks {
-				acquire_ddl_lock_function = nil
-				release_ddl_lock_function = nil
-			}
-			if LockAllTables {
-				send_lock_all_tables(conn)
-			} else {
-
-				if acquire_ddl_lock_function != nil {
-					log.Infof("Acquiring DDL lock")
-					acquire_ddl_lock_function(second_conn)
-				}
-
-				if acquire_global_lock_function != nil {
-					log.Infof("Acquiring Global lock")
-					acquire_global_lock_function(conn)
-				}
-			}
-		} else {
-			log.Warnf("Executing in no-locks mode, snapshot might not be consistent")
+	// Initilizing exec_command
+	if exec_command != "" {
+		initialize_exec_command()
+	}
+	// Write replica information
+	if Get_product() != SERVER_TYPE_TIDB {
+		if ReplicaData.Enabled {
+			m_stop_replica(conn)
 		}
 	}
-
+	// Determine the locking mechanisim that is going to be used
+	// and send locks to database if needed
+	switch SyncThreadLockMode {
+	case NO_LOCK:
+		log.Infof("Executing in NO_LOCK mode, we are not able to ensure that backup will be consistent")
+		break
+	case SAFE_NO_LOCK:
+		log.Infof("Executing in SAFE_NO_LOCK mode. This backup will fail if all threads are not in the same point in time, which garanty consitency")
+		break
+	case LOCK_ALL:
+		send_lock_all_tables(conn)
+		break
+	case AUTO:
+		determine_ddl_lock_function(&second_conn, &acquire_global_lock_function, &release_global_lock_function, &acquire_ddl_lock_function, &release_ddl_lock_function, &release_binlog_function)
+		break
+	case FTWRL:
+		determine_ddl_lock_function(&second_conn, &acquire_global_lock_function, &release_global_lock_function, &acquire_ddl_lock_function, &release_ddl_lock_function, &release_binlog_function)
+		acquire_global_lock_function = send_flush_table_with_read_lock
+		release_global_lock_function = send_unlock_tables
+		break
+	case GTID:
+		log.Infof("Using binlog_snapshot_gtid_executed which doesn't lock the database but uses best effort to sync the threads")
+		break
+	}
+	if SkipDdlLocks {
+		acquire_ddl_lock_function = nil
+		release_ddl_lock_function = nil
+	}
+	if acquire_ddl_lock_function != nil {
+		log.Infof("Acquiring DDL lock")
+		acquire_ddl_lock_function(second_conn)
+	}
+	if acquire_global_lock_function != nil {
+		log.Infof("Acquiring Global lock")
+		acquire_global_lock_function(conn)
+	}
 	// TODO: this should be deleted on future releases.
 	server_version = Mysql_get_server_version()
 	if server_version < 40108 {
-		conn.Execute("CREATE TABLE IF NOT EXISTS mysql.mydumperdummy (a INT) ENGINE=INNODB")
+		M_query_warning(conn, "CREATE TABLE IF NOT EXISTS mysql.mydumperdummy (a INT) ENGINE=INNODB", "Not able to create dummy table for InnoDB")
 		need_dummy_read = true
 	}
 	if Get_product() != SERVER_TYPE_MARIADB || server_version < 100300 {
 		nroutines = 2
 	}
+
 	// tokudb do not support consistent snapshot
-	conn.Execute("SELECT @@tokudb_version")
-	rest := conn.Result
+	var rest *MYSQL_RES = M_store_result(conn, "SELECT @@tokudb_version", M_message, "@@tokudb_version not found")
 	if rest != nil {
-		log.Infof("TokuDB detected, creating dummy table for CS")
-		_ = conn.Execute("CREATE TABLE IF NOT EXISTS mysql.tokudbdummy (a INT) ENGINE=TokuDB")
-		if err == nil {
+		if Mysql_num_rows(rest) != 0 {
+			Mysql_free_result(rest)
+			log.Infof("TokuDB detected, creating dummy table for CS")
+			M_query_warning(conn, "CREATE TABLE IF NOT EXISTS mysql.tokudbdummy (a INT) ENGINE=TokuDB", "Not able to create dummy table for TokuDB")
 			need_dummy_toku_read = true
 		}
+		Mysql_free_result(rest)
 	}
 
-	// Do not start a transaction when lock all tables instead of FTWRL,
-	// since it can implicitly release read locks we hold
-	// TODO: this should be deleted as main connection is not being used for export data
-	//  if (!lock_all_tables) {
-	//    g_message("Sending start transaction in main connection");
-	//    mysql_query(conn, "START TRANSACTION /*!40108 WITH CONSISTENT SNAPSHOT */");
-	//  }
-
 	if need_dummy_read {
-		_ = conn.Execute("SELECT /*!40001 SQL_NO_CACHE */ * FROM mysql.mydumperdummy")
+		rest = M_store_result(conn, "SELECT /*!40001 SQL_NO_CACHE */ * FROM mysql.mydumperdummy", M_warning, "Select on mysql.mydumperdummy has failed")
+		if rest != nil {
+			Mysql_free_result(rest)
+		}
 
 	}
 	if need_dummy_toku_read {
-		_ = conn.Execute("SELECT /*!40001 SQL_NO_CACHE */ * FROM mysql.tokudbdummy")
-
+		rest = M_store_result(conn, "SELECT /*!40001 SQL_NO_CACHE */ * FROM mysql.tokudbdummy", M_warning, "Select on mysql.tokudbdummy has failed")
+		if rest != nil {
+			Mysql_free_result(rest)
+		}
 	}
-
-	/*if o.Exec.Exec_command != "" {
-		initialize_exec_command(o)
-		o.Stream.Stream = true
-	}*/
+	log.Tracef("Initilizing the Configuration")
 
 	conf.initial_queue = G_async_queue_new(BufferSize)
+	conf.initial_completed_queue = G_async_queue_new(BufferSize)
 	conf.schema_queue = G_async_queue_new(BufferSize)
 	conf.post_data_queue = G_async_queue_new(BufferSize)
-	if conf.innodb == nil {
-		conf.innodb = new(table_queuing)
-		conf.non_innodb = new(table_queuing)
+	if conf.transactional == nil {
+		conf.transactional = new(table_queuing)
+		conf.non_transactional = new(table_queuing)
 	}
-	conf.innodb.queue = G_async_queue_new(BufferSize)
-	conf.innodb.deferQueue = G_async_queue_new(BufferSize)
-	if give_me_another_innodb_chunk_step_queue != nil && give_me_another_non_innodb_chunk_step_queue != nil &&
-		innodb_table != nil && non_innodb_table != nil {
-		log.Debugf("variables ok")
-	} else {
-		log.Critical("check variables fail")
-	}
-	conf.innodb.request_chunk = give_me_another_innodb_chunk_step_queue
-	conf.innodb.table_list = innodb_table
-	conf.innodb.descr = "InnoDB"
+	conf.transactional.queue = G_async_queue_new(BufferSize)
+	conf.transactional.deferQueue = G_async_queue_new(BufferSize)
+	// These are initialized in the guts of initialize_start_dump() above
+	G_assert(give_me_another_transactional_chunk_step_queue != nil && give_me_another_non_transactional_chunk_step_queue != nil && transactional_table != nil && non_transactional_table != nil)
+	conf.transactional.request_chunk = give_me_another_transactional_chunk_step_queue
+	conf.transactional.table_list = transactional_table
+	conf.transactional.descr = "transactional"
 	conf.ready = G_async_queue_new(BufferSize)
-	conf.non_innodb.queue = G_async_queue_new(BufferSize)
-	conf.non_innodb.deferQueue = G_async_queue_new(BufferSize)
-	conf.non_innodb.request_chunk = give_me_another_non_innodb_chunk_step_queue
-	conf.non_innodb.table_list = non_innodb_table
-	conf.non_innodb.descr = "Non-InnoDB"
-	conf.ready_non_innodb_queue = G_async_queue_new(BufferSize)
+	conf.non_transactional.queue = G_async_queue_new(BufferSize)
+	conf.non_transactional.deferQueue = G_async_queue_new(BufferSize)
+	conf.non_transactional.request_chunk = give_me_another_non_transactional_chunk_step_queue
+	conf.non_transactional.table_list = non_transactional_table
+	conf.non_transactional.descr = "non-transactional"
+	conf.ready_non_transactional_queue = G_async_queue_new(BufferSize)
 	conf.unlock_tables = G_async_queue_new(BufferSize)
 	conf.gtid_pos_checked = G_async_queue_new(BufferSize)
 	conf.are_all_threads_in_same_pos = G_async_queue_new(BufferSize)
 	conf.db_ready = G_async_queue_new(BufferSize)
-	conf.binlog_ready = G_async_queue_new(BufferSize)
+	conf.source_and_replica_status_queue = G_async_queue_new(BufferSize)
 	//  ready_database_dump_mutex = g_rec_mutex_new();
 	//  g_rec_mutex_lock(ready_database_dump_mutex);
 	ready_table_dump_mutex = G_rec_mutex_new()
 	ready_table_dump_mutex.Lock()
 
-	log.Infof("conf created")
+	log.Tracef("Begin Job Creation")
 
 	if Is_mysql_like() {
-		create_job_to_dump_metadata(conf, mdfile)
+		create_job_to_write_source_and_replica_status(conf, mdfile)
+	} else {
+		G_async_queue_push(conf.source_and_replica_status_queue, 1)
 	}
-
+	log.Tracef("Create tablespace jobs")
 	// Begin Job Creation
-
 	if DumpTablespaces {
-		create_job_to_dump_tablespaces(conf, dump_directory)
+		create_job_to_dump_tablespaces(conf)
 	}
-	if len(Tables) > 0 {
+
+	if Tables != nil && len(Tables) > 0 {
+		log.Tracef("Specific tables")
 		create_job_to_dump_table_list(Tables, conf)
-	} else if len(db_items) > 0 {
+	} else if db_items != nil && len(db_items) > 0 {
+		log.Tracef("Specific databases")
 		var i int
 		for i = 0; i < len(db_items); i++ {
 			var this_db *database = new_database(conn, db_items[i], true)
@@ -1388,77 +1354,44 @@ func StartDump() error {
 			}
 		}
 	} else {
+		log.Tracef("All databases")
 		create_job_to_dump_all_databases(conf)
 	}
 	log.Infof("End job creation")
+	start_chunk_builder(conf)
 
-	if !NoData {
-		chunk_builder = G_thread_new("ChunkBuilderThread", new(sync.WaitGroup), 0)
-		go chunk_builder_thread(conf)
-	}
-
-	if LessLocking {
-		td = make([]*thread_data, NumThreads*(1+1))
+	G_async_queue_pop(conf.source_and_replica_status_queue)
+	G_async_queue_unref(conf.source_and_replica_status_queue)
+	var source_log, source_pos, source_gtid string
+	get_binlog_position(conn, &source_log, &source_pos, &source_gtid)
+	if strings.EqualFold(source_log, initial_source_log) ||
+		strings.EqualFold(source_pos, initial_source_pos) ||
+		strings.EqualFold(source_gtid, initial_source_gtid) {
+		if SyncThreadLockMode == NO_LOCK {
+			log.Warnf("There are differences in the binlog position at the beginning of the backup and after syncing threads, so we cannot guarantee the backup to be consistent due to the use of NO_LOCK. Continues anyway, use SAFE_NO_LOCK otherwise.")
+			log.Tracef("Backup will be inconsistent %s %s %d || %s %s %d || %s %s %d", source_log, initial_source_log, strings.Compare(source_log, initial_source_log), source_pos, initial_source_pos, strings.Compare(source_pos, initial_source_pos), source_gtid, initial_source_gtid, strings.Compare(source_gtid, initial_source_gtid))
+		} else if SyncThreadLockMode == SAFE_NO_LOCK {
+			log.Debugf("Backup will be inconsistent %s %s %d || %s %s %d || %s %s %d", source_log, initial_source_log, strings.Compare(source_log, initial_source_log), source_pos, initial_source_pos, strings.Compare(source_pos, initial_source_pos), source_gtid, initial_source_gtid, strings.Compare(source_gtid, initial_source_gtid))
+			log.Errorf("There are differences in the binlog position at the beginning of the backup and after syncing threads, so we cannot guarantee the backup to be consistent. Stopping backup due to the use of SAFE_NO_LOCK.")
+		}
 	} else {
-		td = make([]*thread_data, NumThreads*(0+1))
+		log.Infof("Backup will be consistent")
 	}
-	threads = G_thread_new("WorkingThread", new(sync.WaitGroup), -1)
-	threads.Thread.Add(int(NumThreads))
-	for n = 0; n < NumThreads; n++ {
-		td[n] = new(thread_data)
-		td[n].conf = conf
-		td[n].thread_id = n + 1
-		td[n].less_locking_stage = false
-		td[n].binlog_snapshot_gtid_executed = ""
-		td[n].pause_resume_mutex = nil
-		td[n].table_name = ""
-		go working_thread(td[n], n)
-	}
-	// var binlog_snapshot_gtid_executed string
-	var binlog_snapshot_gtid_executed_status_local bool
-	var start_transaction_retry uint
-	for !binlog_snapshot_gtid_executed_status_local && start_transaction_retry < MAX_START_TRANSACTION_RETRIES {
-		binlog_snapshot_gtid_executed_status_local = true
-		for n = 0; n < NumThreads; n++ {
-			G_async_queue_pop(conf.gtid_pos_checked)
-		}
-		binlog_snapshot_gtid_executed = td[0].binlog_snapshot_gtid_executed
-		for n = 1; n < NumThreads; n++ {
-			binlog_snapshot_gtid_executed_status_local = binlog_snapshot_gtid_executed_status_local && strings.Compare(td[n].binlog_snapshot_gtid_executed, binlog_snapshot_gtid_executed) == 0
-		}
-		for n = 0; n < NumThreads; n++ {
-			if binlog_snapshot_gtid_executed_status_local {
-				G_async_queue_push(conf.are_all_threads_in_same_pos, 1)
-			} else {
-				G_async_queue_push(conf.are_all_threads_in_same_pos, 2)
-			}
-		}
-		start_transaction_retry++
-	}
-	for n = 0; n < NumThreads; n++ {
-		G_async_queue_pop(conf.ready)
-	}
-
 	// IMPORTANT: At this point, all the threads are in sync
-
-	if TrxConsistencyOnly {
+	if TrxTables != 0 {
+		// Releasing locks as user instructed that all tables are transactional
 		log.Infof("Transactions started, unlocking tables")
-		if release_global_lock_function != nil {
-			release_global_lock_function(conn)
-		}
-
-		//    mysql_query(conn, "UNLOCK TABLES /* trx-only */");
 		if release_binlog_function != nil {
-			G_async_queue_pop(conf.binlog_ready)
 			log.Infof("Releasing binlog lock")
 			release_binlog_function(second_conn)
 		}
-		if replica_stopped {
+		if release_global_lock_function != nil {
+			release_global_lock_function(conn)
+		}
+		if Is_mysql_like() && replica_stopped {
 			log.Infof("Starting replica")
-			_ = conn.Execute(Start_replica_sql_thread)
-			if err != nil {
-				log.Warnf("Not able to start replica: %v", err)
-			}
+			M_query_warning(conn, Start_replica_sql_thread, "Not able to start replica")
+
 			if Source_control_command == AWS {
 				Discard_mysql_output(conn)
 			}
@@ -1466,84 +1399,35 @@ func StartDump() error {
 		}
 	}
 
+	// Every time a schema job is created a counter increases
+	// Every time that a schema jobs is completed, the counter decreases
+	// When the counter reaches to 0, it releases conf.db_ready
 	log.Infof("Waiting database finish")
 	G_async_queue_pop(conf.db_ready)
 	no_updated_tables = nil
+	// We let working threads know that initial_queue has been completed
+	// sending them a JOB_SHUTDOWN job.
 	for n = 0; n < NumThreads; n++ {
-		var j = new(job)
-		j.types = JOB_SHUTDOWN
-		G_async_queue_push(conf.initial_queue, j)
-	}
-
-	for n = 0; n < NumThreads; n++ {
-		G_async_queue_pop(conf.ready)
-	}
-
-	log.Infof("Shutdown jobs for less locking enqueued")
-	for n = 0; n < NumThreads; n++ {
-		var j = new(job)
-		j.types = JOB_SHUTDOWN
-		G_async_queue_push(conf.schema_queue, j)
-	}
-
-	if LessLocking {
-		build_lock_tables_statement(conf)
-	}
-
-	for n = 0; n < NumThreads; n++ {
-		G_async_queue_push(conf.ready_non_innodb_queue, 1)
-	}
-
-	if !NoLocks && !TrxConsistencyOnly {
-		for n = 0; n < NumThreads; n++ {
-			G_async_queue_pop(conf.unlock_tables)
-		}
-		log.Infof("Non-InnoDB dump complete, releasing global locks")
-		if release_global_lock_function != nil {
-			release_global_lock_function(conn)
-		}
-		//    mysql_query(conn, "UNLOCK TABLES /* FTWRL */");
-		log.Infof("Global locks released")
-		if release_binlog_function != nil {
-			G_async_queue_pop(conf.binlog_ready)
-			log.Infof("Releasing binlog lock")
-			release_binlog_function(second_conn)
-		}
-	}
-	if replica_stopped {
-		log.Infof("Starting replica")
-		_ = conn.Execute(Start_replica_sql_thread)
-		if err != nil {
-			log.Warnf("Not able to start replica: %v", err)
-		}
-		if Source_control_command == AWS {
-			Discard_mysql_output(conn)
-		}
-	}
-	G_async_queue_unref(conf.binlog_ready)
-
-	for n = 0; n < NumThreads; n++ {
-		var j = new(job)
+		var j *job = new(job)
 		j.types = JOB_SHUTDOWN
 		G_async_queue_push(conf.post_data_queue, j)
-		//G_async_queue_push(td[n].conf.innodb.queue, j)
-		// G_async_queue_push(td[n].conf.innodb.deferQueue, j)
 	}
-	if !NoData {
-		chunk_builder.Thread.Wait()
-	}
-
-	log.Infof("Waiting threads to complete")
-	threads.Thread.Wait()
+	// At this point the main process, needs to wait the working threads to finish
+	wait_working_thread_to_finish()
+	// Backup is done
+	// Starting to finalize it
 	finalize_working_thread()
+	finalize_chunk()
 	finalize_write()
+	// Releasing DDL lock if possible
 	if release_ddl_lock_function != nil {
 		log.Infof("Releasing DDL lock")
 		release_ddl_lock_function(second_conn)
 	}
-	log.Infof("Queue count: %d %d %d %d %d", G_async_queue_length(conf.initial_queue), G_async_queue_length(conf.schema_queue),
-		G_async_queue_length(conf.non_innodb.queue)+G_async_queue_length(conf.non_innodb.deferQueue),
-		G_async_queue_length(conf.innodb.queue)+G_async_queue_length(conf.innodb.deferQueue),
+	log.Infof("Queue count: %d %d %d %d %d", G_async_queue_length(conf.initial_queue),
+		G_async_queue_length(conf.schema_queue),
+		G_async_queue_length(conf.non_transactional.queue)+G_async_queue_length(conf.non_transactional.deferQueue),
+		G_async_queue_length(conf.transactional.queue)+G_async_queue_length(conf.transactional.deferQueue),
 		G_async_queue_length(conf.post_data_queue))
 	// close main connection
 	if conn != second_conn {
@@ -1553,22 +1437,24 @@ func StartDump() error {
 	conn.Close()
 	log.Infof("Main connection closed")
 	wait_close_files()
-
-	for _, dbt = range all_dbts {
+	var keys = maps.Keys(all_dbts)
+	for _, key := range slices.Sorted(keys) {
+		dbt = all_dbts[key]
+		G_assert(dbt != nil)
 		print_dbt_on_metadata(mdfile, dbt)
 	}
+	// There are scenarios where we need to wait files to flush to disk
 	write_database_on_disk(mdfile)
-	if pmm {
-		kill_pmm_thread()
-	}
-	G_async_queue_unref(conf.innodb.deferQueue)
-	conf.innodb.descr = ""
-	G_async_queue_unref(conf.innodb.queue)
-	conf.innodb.queue = nil
-	G_async_queue_unref(conf.non_innodb.deferQueue)
-	conf.non_innodb.deferQueue = nil
-	G_async_queue_unref(conf.non_innodb.queue)
-	conf.non_innodb.queue = nil
+
+	table_schemas = nil
+	G_async_queue_unref(conf.transactional.deferQueue)
+	conf.transactional.descr = ""
+	G_async_queue_unref(conf.transactional.queue)
+	conf.transactional.queue = nil
+	G_async_queue_unref(conf.non_transactional.deferQueue)
+	conf.non_transactional.deferQueue = nil
+	G_async_queue_unref(conf.non_transactional.queue)
+	conf.non_transactional.queue = nil
 	G_async_queue_unref(conf.unlock_tables)
 	conf.unlock_tables = nil
 	G_async_queue_unref(conf.ready)
@@ -1580,43 +1466,60 @@ func StartDump() error {
 	G_async_queue_unref(conf.post_data_queue)
 	conf.post_data_queue = nil
 
-	G_async_queue_unref(conf.ready_non_innodb_queue)
-	conf.ready_non_innodb_queue = nil
-
+	G_async_queue_unref(conf.ready_non_transactional_queue)
+	conf.ready_non_transactional_queue = nil
+	fmt.Fprintf(mdfile, "[config]\nmax-statement-size = %d\n", max_statement_size)
 	datetimestr = time.Now().Format(time.DateTime)
 	fmt.Fprintf(mdfile, "# Finished dump at: %s\n", datetimestr)
 	mdfile.Close()
 	if UpdatedSince > 0 {
 		nufile.Close()
 	}
-	os.Rename(metadata_partial_filename, metadata_filename)
+	if err = os.Rename(metadata_partial_filename, metadata_filename); err != nil {
+		log.Criticalf("We were not able to rename metadata file")
+	}
 	if Stream != "" {
 		stream_queue_push(nil, metadata_filename)
-	}
-	log.Infof("Finished dump at: %s", datetimestr)
-	if Stream != "" {
-		stream_queue_push(nil, "")
-		wait_stream_to_finish()
-		if No_delete == false && OutputDirectoryParam == "" {
-			err = os.RemoveAll(output_directory)
-			if err != nil {
+		if exec_command != "" {
+			wait_exec_command_to_finish()
+		} else {
+			stream_queue_push(nil, "")
+			wait_exec_command_to_finish()
+		}
+		if No_delete == false && OutputDirectoryStr == "" {
+			if err = os.RemoveAll(output_directory); err != nil {
 				log.Criticalf("Backup directory not removed: %s", output_directory)
 			}
 		}
 	}
-
+	for _, key := range slices.Sorted(keys) {
+		dbt = all_dbts[key]
+		G_assert(dbt != nil)
+		free_db_table(dbt)
+	}
+	keys = nil
+	log.Infof("Finished dump at: %s", datetimestr)
+	if sthread != nil {
+		G_thread_unref(sthread)
+	}
 	free_databases()
+	if disk_check_thread != nil {
+		DiskLimits = ""
+	}
+	Set_session = nil
+	Set_global = nil
+	Set_global_back = nil
+	G_hash_table_unref(conf_per_table.All_anonymized_function)
+	G_hash_table_unref(conf_per_table.All_where_per_table)
+	G_hash_table_unref(conf_per_table.All_limit_per_table)
+	G_hash_table_unref(conf_per_table.All_num_threads_per_table)
 	finalize_masquerade()
+	G_async_queue_unref(conf.gtid_pos_checked)
+	G_async_queue_unref(conf.are_all_threads_in_same_pos)
+	G_async_queue_unref(conf.db_ready)
 	Free_regex()
 	free_common()
 	finalize_masquerade()
 	Free_set_names()
-	if NoLocks {
-		if it_is_a_consistent_backup {
-			log.Infof("This is a consistent backup.")
-		} else {
-			log.Warnf("This is NOT a consistent backup.")
-		}
-	}
 	return nil
 }

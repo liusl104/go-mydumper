@@ -2,15 +2,35 @@ package myloader
 
 import (
 	"bufio"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"strings"
 )
 
+var (
+	metadata_sync_queue *GAsyncQueue
+)
+
+func initialize_directory() {
+	metadata_sync_queue = G_async_queue_new(BufferSize)
+}
+func wait_directory_to_process_metadata() {
+	G_async_queue_pop(metadata_sync_queue)
+	G_async_queue_unref(metadata_sync_queue)
+}
 func process_directory(conf *configuration) {
 	var err error
 	var filename string
+	var fileMode os.FileInfo
+	fileMode, err = os.Stat("metadata")
+	if err == nil && fileMode.Mode() == os.ModeIrregular {
+		process_metadata_global("metadata")
+		G_async_queue_push(metadata_sync_queue, 1)
+		log.Infof("metadata pushed")
+	} else {
+		log.Errorf("metadata file was not found")
+	}
 	if Resume {
 		log.Info("Using resume file")
 		var file *os.File
@@ -19,7 +39,7 @@ func process_directory(conf *configuration) {
 			log.Fatalf("open resume file fail:%v", err)
 		}
 		var i int
-		var data *GString = new(GString)
+		var data *GString = G_string_sized_new(256)
 		var eof bool
 		var line int
 		reader := bufio.NewScanner(file)

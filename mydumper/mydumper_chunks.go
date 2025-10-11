@@ -1,28 +1,58 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
-	"strings"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"math"
+	"sync"
 	"time"
 )
 
+const MIN_CHUNK_STEP_SIZE = 1000
+
+type chunk_step_item struct {
+	chunk_step      *chunk_step
+	chunk_type      chunk_type
+	next            *chunk_step_item
+	chunk_functions *chunk_functions
+	multicolumn     bool
+	where           *GString
+	include_null    bool
+	prefix          *GString
+	field           string
+	part            uint64
+	deep            uint
+	position        uint
+	mutex           *sync.Mutex
+	needs_refresh   bool
+	status          chunk_states
+}
+
 var (
-	give_me_another_innodb_chunk_step_queue     *GAsyncQueue
-	give_me_another_non_innodb_chunk_step_queue *GAsyncQueue
+	give_me_another_transactional_chunk_step_queue     *GAsyncQueue
+	give_me_another_non_transactional_chunk_step_queue *GAsyncQueue
+	chunk_builder                                      *GThread
 )
 
 func initialize_chunk() {
-	give_me_another_innodb_chunk_step_queue = G_async_queue_new(BufferSize)
-	give_me_another_non_innodb_chunk_step_queue = G_async_queue_new(BufferSize)
-	initialize_char_chunk()
+	give_me_another_transactional_chunk_step_queue = G_async_queue_new(BufferSize)
+	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new(BufferSize)
+}
+func start_chunk_builder(conf *Configuration) {
+	if !NoData {
+		chunk_builder = M_thread_new("chunk_builder", chunk_builder_thread, conf, "Chunk builder thread could not be created")
+	}
 }
 
 func finalize_chunk() {
-	G_async_queue_unref(give_me_another_innodb_chunk_step_queue)
-	G_async_queue_unref(give_me_another_non_innodb_chunk_step_queue)
+	G_async_queue_unref(give_me_another_transactional_chunk_step_queue)
+	G_async_queue_unref(give_me_another_non_transactional_chunk_step_queue)
+	if !NoData {
+		G_thread_join(chunk_builder)
+	}
 }
 
 func process_none_chunk(tj *table_job, csi *chunk_step_item) {
@@ -31,8 +61,10 @@ func process_none_chunk(tj *table_job, csi *chunk_step_item) {
 }
 
 func initialize_chunk_step_as_none(csi *chunk_step_item) {
+	csi.part = 0
 	csi.chunk_type = NONE
 	csi.chunk_functions.process = process_none_chunk
+	csi.chunk_functions.free = nil
 	csi.chunk_step = nil
 }
 
@@ -43,126 +75,128 @@ func new_none_chunk_step() *chunk_step_item {
 	return csi
 }
 
-func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint, prefix string, rows uint64) *chunk_step_item {
+func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint, rows uint64, prefix *GString) *chunk_step_item {
 	var csi *chunk_step_item
 	var query, cache string
-	var row []mysql.FieldValue
-	var minmax *mysql.Result
 	var field = dbt.primary_key[position]
 	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var where_option, where_option_prefix string
-	if WhereOption != "" || prefix != "" {
+	if WhereOption != "" || prefix != nil {
 		where_option = "WHERE"
 		where_option_prefix = "AND"
 	}
 	query = fmt.Sprintf("SELECT %s MIN(%s%s%s),MAX(%s%s%s),LEFT(MIN(%s%s%s),1),LEFT(MAX(%s%s%s),1) FROM %s%s%s.%s%s%s %s %s %s %s",
 		cache,
-		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field,
-		Identifier_quote_character_str,
-		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field,
-		Identifier_quote_character_str,
-		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table,
-		Identifier_quote_character_str, where_option, WhereOption, where_option_prefix, prefix)
-	minmax = conn.Execute(query)
-	if conn.Err != nil {
+		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
+		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
+		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
+		where_option, WhereOption, where_option_prefix, prefix)
+	var mr *M_ROW = M_store_result_row(conn, query, M_message, nil, "")
+	if mr.Res == nil || mr.Row != nil {
+		M_store_result_row_free(mr)
+		return new_none_chunk_step()
+	}
+	if mr.Row[0].Value() == nil {
+		M_store_result_row_free(mr)
 		log.Infof("It is NONE with minmax == NULL")
 		return new_none_chunk_step()
 	}
-	if len(minmax.Values) == 0 {
-		log.Infof("It is NONE with minmax == NULL")
-		return new_none_chunk_step()
-	}
-	var fields []*mysql.Field = minmax.Fields
-	var lengths = minmax.Fields
+	var fields []*mysql.Field = Mysql_fetch_fields(mr.Res)
 	var diff_btwn_max_min, unmin, unmax uint64
 	var nmin, nmax int64
 	// var lengths = minmax.Fields
-	for _, row = range minmax.Values {
-		if row[0].Value() == nil {
-			log.Infof("It is NONE with minmax == NULL")
-			return new_none_chunk_step()
-		}
-		switch fields[0].Type {
-		case mysql.MYSQL_TYPE_TINY, mysql.MYSQL_TYPE_SHORT, mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_LONGLONG, mysql.MYSQL_TYPE_INT24:
-			log.Debugf("Integer PK found on `%s`.`%s`", dbt.database.name, dbt.table)
-			unmin = row[0].AsUint64()
-			unmax = row[1].AsUint64()
-			nmin = row[0].AsInt64()
-			nmax = row[1].AsInt64()
-			if (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0 {
-				diff_btwn_max_min = gint64_abs(int64(unmax - unmin))
-			} else {
-				diff_btwn_max_min = gint64_abs(nmax - nmin)
-			}
-			var unsign bool = (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0
-			if diff_btwn_max_min > dbt.min_chunk_step_size {
-				var types *int_types = new(int_types)
-				types.sign = new(signed_int)
-				types.unsign = new(unsigned_int)
-				var min_css uint64 = dbt.min_chunk_step_size
-				var max_css uint64 = dbt.max_chunk_step_size
-				var starting_css uint64 = dbt.starting_chunk_step_size
-				var is_step_fixed_length bool = min_css != 0 && min_css == starting_css && max_css == starting_css
 
-				if unsign {
-					types.unsign.min = unmin
-					types.unsign.max = unmax
+	switch fields[0].Type {
+	case mysql.MYSQL_TYPE_TINY, mysql.MYSQL_TYPE_SHORT, mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_LONGLONG, mysql.MYSQL_TYPE_INT24:
+		log.Debugf("Integer PK found on `%s`.`%s`", dbt.database.name, dbt.table)
+		unmin = mr.Row[0].AsUint64()
+		unmax = mr.Row[1].AsUint64()
+		nmin = mr.Row[0].AsInt64()
+		nmax = mr.Row[1].AsInt64()
+		var unsign bool = (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0
+		if unsign {
+			diff_btwn_max_min = gint64_abs(int64(unmax - unmin))
+		} else {
+			diff_btwn_max_min = gint64_abs(nmax - nmin)
+		}
+		M_store_result_row_free(mr)
+
+		if diff_btwn_max_min > dbt.min_chunk_step_size {
+			var types *int_types = new(int_types)
+			types.sign = new(signed_int)
+			types.unsign = new(unsigned_int)
+			if unsign {
+				log.Tracef("Min: %d | Max %d", unmin, unmax)
+				types.unsign.min = unmin
+				types.unsign.max = unmax
+			} else {
+				log.Tracef("Min: %d | Max %d", nmin, nmax)
+				types.sign.min = nmin
+				types.sign.max = nmax
+			}
+			var _starting_chunk_step_size uint64
+			var percentage_of_fragmentation uint64 = diff_btwn_max_min / rows
+			log.Tracef("percentage_of_fragmentation of `%s`.`%s` %f", dbt.database.name, dbt.table, math.Log(float64(percentage_of_fragmentation)))
+			if dbt.starting_chunk_step_size == 0 {
+				if dbt.max_chunk_step_size != 0 {
+					if rows/uint64(NumThreads) > dbt.max_chunk_step_size {
+						_starting_chunk_step_size = dbt.max_chunk_step_size
+					} else {
+						_starting_chunk_step_size = uint64(float64(rows) / ((math.Log(float64(percentage_of_fragmentation)) + 1) * float64(NumThreads)))
+					}
 				} else {
-					types.sign.min = nmin
-					types.sign.max = nmax
+					_starting_chunk_step_size = uint64(float64(rows) / ((math.Log(float64(percentage_of_fragmentation)) + 1) * float64(NumThreads)))
 				}
-
-				csi = new_integer_step_item(true, prefix, field, unsign, types, 0, is_step_fixed_length, starting_css, min_css, max_css, 0, false, false, nil, position)
-
-				if dbt.multicolumn && csi.position == 0 {
-					if (csi.chunk_step.integer_step.is_unsigned && (rows/(csi.chunk_step.integer_step.types.unsign.max-csi.chunk_step.integer_step.types.unsign.min) > dbt.min_chunk_step_size)) ||
-						(!csi.chunk_step.integer_step.is_unsigned && (rows/gint64_abs(csi.chunk_step.integer_step.types.sign.max-csi.chunk_step.integer_step.types.sign.min) > dbt.min_chunk_step_size)) {
-						csi.chunk_step.integer_step.min_chunk_step_size = 1
-						csi.chunk_step.integer_step.is_step_fixed_length = true
-						csi.chunk_step.integer_step.max_chunk_step_size = 1
-						csi.chunk_step.integer_step.step = 1
-					} else {
-						dbt.multicolumn = false
-					}
+				if dbt.max_chunk_step_size == 0 {
+					max_chunk_step_size = uint64(float64(diff_btwn_max_min) / (math.Log(float64(percentage_of_fragmentation)+1) * float64(NumThreads)))
 				}
-
-				if csi.chunk_step.integer_step.is_step_fixed_length {
-					if csi.chunk_step.integer_step.is_unsigned {
-						csi.chunk_step.integer_step.types.unsign.min = (csi.chunk_step.integer_step.types.unsign.min / csi.chunk_step.integer_step.step) * csi.chunk_step.integer_step.step
-					} else {
-						csi.chunk_step.integer_step.types.sign.min = (csi.chunk_step.integer_step.types.sign.min / int64(csi.chunk_step.integer_step.step)) * int64(csi.chunk_step.integer_step.step)
-					}
-				}
-
-				if dbt.min_chunk_step_size == dbt.starting_chunk_step_size && dbt.max_chunk_step_size == dbt.starting_chunk_step_size && dbt.min_chunk_step_size != 0 {
-					dbt.chunk_filesize = 0
-				}
-				return csi
-
-			} else {
-				log.Debugf("Integer PK on `%s`.`%s` performing full table scan", dbt.database.name, dbt.table)
-				return new_none_chunk_step()
 			}
-		case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VAR_STRING:
-
-			if minmax.Values != nil {
-				return new_none_chunk_step()
+			if _starting_chunk_step_size < dbt.min_chunk_step_size {
+				_starting_chunk_step_size = dbt.min_chunk_step_size
 			}
-			csi = new_char_step_item(conn, true, prefix, dbt.primary_key[0], 0, 0, row, lengths, nil)
+			G_assert(_starting_chunk_step_size > 0)
+			csi = new_integer_step_item(true, prefix, field, unsign, types, 0, dbt.is_fixed_length, _starting_chunk_step_size, dbt.min_chunk_step_size, dbt.max_chunk_step_size, 0, false, false, nil, position, dbt.multicolumn, rows)
+			if csi.chunk_step.integer_step.is_step_fixed_length {
+				if csi.chunk_step.integer_step.is_unsigned {
+					csi.chunk_step.integer_step.types.unsign.min = (csi.chunk_step.integer_step.types.unsign.min / csi.chunk_step.integer_step.step) * csi.chunk_step.integer_step.step
+				} else {
+					csi.chunk_step.integer_step.types.sign.min = csi.chunk_step.integer_step.types.sign.min / int64(csi.chunk_step.integer_step.step) * int64(csi.chunk_step.integer_step.step)
+				}
+			}
 			return csi
-		default:
-			log.Infof("It is NONE: default")
+		} else {
+			if position == 0 {
+				log.Tracef("Integer PK on `%s`.`%s` performing full table scan", dbt.database.name, dbt.table)
+				return new_none_chunk_step()
+			}
+		}
+		break
+	case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VAR_STRING:
+		log.Tracef("String type %d", position)
+		M_store_result_row_free(mr)
+		if position > 0 {
+			dbt.multicolumn = false
+		} else {
 			return new_none_chunk_step()
 		}
+		break
+	default:
+		M_store_result_row_free(mr)
+		log.Infof("It is NONE: default")
+		if position > 0 {
+			dbt.multicolumn = false
+		} else {
+			return new_none_chunk_step()
+		}
+		break
 	}
 	return nil
 }
 
-func get_rows_from_explain(conn *DBConnection, dbt *db_table, where string, field string) uint64 {
+func get_rows_from_explain(conn *DBConnection, dbt *db_table, where *GString, field string) uint64 {
 	var query string
-	var row []mysql.FieldValue
 	var res *mysql.Result
 	var cache string
 	if Is_mysql_like() {
@@ -175,47 +209,50 @@ func get_rows_from_explain(conn *DBConnection, dbt *db_table, where string, fiel
 	} else {
 		field_column = "*"
 	}
-	if where != "" {
+	if where != nil {
 		where_column = " WHERE "
 	}
 	query = fmt.Sprintf("EXPLAIN SELECT %s %s%s%s FROM %s%s%s.%s%s%s%s%s", cache, q, field_column, q,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
-		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str, where_column, where)
-	res = conn.Execute(query)
-	if conn.Err != nil {
-		log.Fatalf("Error executing EXPLAIN query `%s`: %s", query, conn.Err)
-	}
-	if len(res.Values) == 0 {
+		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str, where_column, where.Str.String())
+	log.Tracef("EXPLAIN: %s", query)
+	var mr *M_ROW = M_store_result_row(conn, query, M_critical, M_warning, "Failed to execute EXPLAIN: %s", query)
+	if mr.Res == nil || mr.Row != nil {
+		M_store_result_row_free(mr)
 		return 0
 	}
-	var row_col int = 0
+	var row_col uint
 	determine_explain_columns(res, &row_col)
-	for _, row = range res.Values {
-		if row[row_col].Value() == nil {
-			return 0
-		}
+	if mr.Row[row_col].Value() == nil {
+		M_store_result_row_free(mr)
+		return 0
 	}
-	var rows_in_explain uint64 = row[row_col].AsUint64()
+	var rows_in_explain uint64 = mr.Row[row_col].AsUint64()
+	M_store_result_row_free(mr)
 	return rows_in_explain
 }
 
-func get_rows_from_count(conn *DBConnection, dbt *db_table) uint64 {
+func get_rows_from_count(conn *DBConnection, dbt *db_table, where *GString) uint64 {
 	var cache, query string
+	var whereOpt, whereKey string
 	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
-	query = fmt.Sprintf("SELECT %s COUNT(*) FROM %s%s%s.%s%s%s", cache,
+	if where != nil {
+		whereKey = " WHERE "
+		whereOpt = where.Str.String()
+	}
+	query = fmt.Sprintf("SELECT %s COUNT(*) FROM %s%s%s.%s%s%s%s%s", cache,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
-		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
-	res := conn.Execute(query)
-	if conn.Err != nil {
-		log.Errorf("Error executing EXPLAIN query `%s`: %v", query, conn.Err)
+		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
+		whereKey, whereOpt)
+	var mr *M_ROW = M_store_result_row(conn, query, M_critical, M_warning, "Failed to get count")
+	if mr.Res == nil || mr.Row != nil || mr.Row[0].Value() == nil {
+		M_store_result_row_free(mr)
 		return 0
 	}
-	var rows uint64
-	for _, row := range res.Values {
-		rows = row[0].AsUint64()
-	}
+	var rows uint64 = mr.Row[0].AsUint64()
+	M_store_result_row_free(mr)
 	return rows
 }
 
@@ -224,10 +261,10 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 	var csi *chunk_step_item
 	var rows uint64
 	if CheckRowCount {
-		rows = get_rows_from_count(conn, dbt)
+		rows = get_rows_from_count(conn, dbt, nil)
 		log.Infof("%s.%s has %s%d rows", dbt.database.name, dbt.table, "", rows)
 	} else {
-		rows = get_rows_from_explain(conn, dbt, "", "")
+		rows = get_rows_from_explain(conn, dbt, nil, "")
 		log.Infof("%s.%s has %s%d rows", dbt.database.name, dbt.table, "~", rows)
 	}
 	dbt.rows_total = rows
@@ -240,7 +277,7 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 			csi = new_real_partition_step_item(partitions, 0, 0)
 		} else {
 			if dbt.split_integer_tables {
-				csi = initialize_chunk_step_item(conn, dbt, 0, "", rows)
+				csi = initialize_chunk_step_item(conn, dbt, 0, rows, nil)
 			} else {
 				csi = new_none_chunk_step()
 			}
@@ -248,130 +285,99 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 	} else {
 		csi = new_none_chunk_step()
 	}
-	dbt.chunks = append(dbt.chunks, csi)
+	dbt.chunks.PushBack(csi)
 	G_async_queue_push(dbt.chunks_queue, csi)
 	dbt.status = READY
 	dbt.chunks_mutex.Unlock()
 }
 
-func get_primary_key(conn *DBConnection, dbt *db_table, conf *configuration) {
-	var indexes *mysql.Result
-	var row []mysql.FieldValue
-	var query string = fmt.Sprintf("SHOW INDEX FROM %s%s%s.%s%s%s", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
-		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
-	indexes = conn.Execute(query)
-	if conn.Err != nil {
-		log.Errorf("Error executing SHOW INDEX query `%s`: %s", query, conn.Err)
-	}
-	for _, row = range indexes.Values {
-		if strings.Compare(string(row[2].AsString()), "PRIMARY") == 0 {
-			dbt.primary_key = append(dbt.primary_key, string(row[4].AsString()))
-		}
-	}
-	if len(dbt.primary_key) != 0 {
-		return
-	}
-	for _, row = range indexes.Values {
-		if row[1].AsUint64() == 0 {
-			dbt.primary_key = append(dbt.primary_key, string(row[4].AsString()))
-		}
-	}
-	if len(dbt.primary_key) != 0 {
-		return
-	}
-	if len(dbt.primary_key) == 0 && conf.use_any_index != "" {
-		var max_cardinality uint64
-		var cardinality uint64
-		var field string
-		for _, row = range indexes.Values {
-			if row[3].AsUint64() == 1 {
-				if row[6].Value() != nil {
-					cardinality = row[6].AsUint64()
-				}
-				if cardinality > max_cardinality {
-					field = string(row[4].AsString())
-					max_cardinality = cardinality
-				}
-			}
-		}
-		if field != "" {
-			dbt.primary_key = append(dbt.primary_key, field)
-		}
-	}
-}
-
 func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
 	dbt_list.mutex.Lock()
+	var iter *list.Element
 	var dbt *db_table
 	var are_there_jobs_defining bool
 	var lcs *chunk_step_item
-	for _, dbt = range dbt_list.list {
-		dbt.chunks_mutex.Lock()
-		if dbt.status != DEFINING {
-			if dbt.status == UNDEFINED {
-				*dbt_pointer = dbt
-				dbt.status = DEFINING
-				are_there_jobs_defining = true
-				dbt.chunks_mutex.Unlock()
-				break
-			}
-			G_assert(dbt.status == READY)
-			if dbt.chunks == nil {
-				dbt.chunks_mutex.Unlock()
-				continue
-			}
-			lcs = g_list_first(dbt.chunks).(*chunk_step_item)
-			if lcs.chunk_type == NONE {
-				*dbt_pointer = dbt
-				*csi = lcs
-				dbt_list.list = remore_dbt_list(dbt_list.list, dbt)
-				dbt.chunks_mutex.Unlock()
-				break
-			}
-			if dbt.max_threads_per_table <= dbt.current_threads_running {
-				dbt.chunks_mutex.Unlock()
-				continue
-			}
-			dbt.current_threads_running++
-			lcs = lcs.chunk_functions.get_next(dbt)
-			if lcs != nil {
-				*dbt_pointer = dbt
-				*csi = lcs
-				dbt.chunks_mutex.Unlock()
-				break
+	var finish bool
+	var current_max_threads_running uint
+	for current_max_threads_running = 0; current_max_threads_running < MaxThreadsPerTable && !finish; current_max_threads_running++ {
+		dbt_list.mutex.Lock()
+		iter = dbt_list.list.Front()
+		for iter != nil && !finish {
+			dbt = iter.Value.(*db_table)
+			dbt.chunks_mutex.Lock()
+			if dbt.status != DEFINING {
+				if dbt.status == UNDEFINED {
+					*dbt_pointer = dbt
+					dbt.status = DEFINING
+					are_there_jobs_defining = true
+					dbt.chunks_mutex.Unlock()
+					finish = true
+					iter.Next()
+					continue
+				}
+				G_assert(dbt.status == READY)
+				if dbt.chunks == nil {
+					dbt.chunks_mutex.Unlock()
+					iter = iter.Next()
+					continue
+				}
+				// Reading first chunk
+				lcs = dbt.chunks.Front().Value.(*chunk_step_item)
+				// If it is a full table scan, we assign it and exit
+				if lcs.chunk_type == NONE {
+					*dbt_pointer = iter.Value.(*db_table)
+					*csi = lcs
+					dbt_list.list.Remove(iter)
+					dbt.chunks_mutex.Unlock()
+					finish = true
+					iter = iter.Next()
+					continue
+				}
+				// if we reach the max limit of threads per table, we continue with next table
+				if dbt.max_threads_per_table <= dbt.current_threads_running {
+					dbt.chunks_mutex.Unlock()
+					iter = iter.Next()
+					continue
+				}
+				if dbt.current_threads_running > current_max_threads_running {
+					dbt.chunks_mutex.Unlock()
+					iter = iter.Next()
+					continue
+				}
+				lcs = lcs.chunk_functions.get_next(dbt)
+				if lcs != nil {
+					dbt.current_threads_running++
+					*dbt_pointer = dbt
+					*csi = lcs
+					dbt.chunks_mutex.Unlock()
+					finish = true
+					iter = iter.Next()
+					continue
+				} else {
+					// TODO
+					// If there is no more chunks on this table, we remove it from the list, and continue with the next table
+					iter = iter.Next()
+					// Assign iter previous removing dbt from list is important as we might break the list
+					dbt_list.list.Remove(iter)
+					dbt.chunks_mutex.Unlock()
+					continue
+				}
 			} else {
-				dbt_list.list = remore_dbt_list(dbt_list.list, dbt)
 				dbt.chunks_mutex.Unlock()
-				continue
+				are_there_jobs_defining = true
 			}
-		} else {
-			dbt.chunks_mutex.Unlock()
-			are_there_jobs_defining = true
 		}
+		dbt_list.mutex.Unlock()
 	}
-	dbt_list.mutex.Unlock()
+
 	return are_there_jobs_defining
 }
 
-func g_list_first(list []any) any {
-	return list[0]
-}
-
-func remore_dbt_list(dbt_list []*db_table, dbt *db_table) []*db_table {
-	var i int
-	for i = 0; i < len(dbt_list); i++ {
-		if dbt_list[i] == dbt {
-			dbt_list = append(dbt_list[:i], dbt_list[i+1:]...)
-			break
-		}
-	}
-	return dbt_list
-
-}
 func enqueue_shutdown_jobs(queue *GAsyncQueue) {
 	var n uint
+	var j *job
 	for n = 0; n < NumThreads; n++ {
-		var j = new(job)
+		j = new(job)
 		j.types = JOB_SHUTDOWN
 		G_async_queue_push(queue, j)
 	}
@@ -386,7 +392,7 @@ func table_job_enqueue(q *table_queuing) {
 	var dbt *db_table
 	var csi *chunk_step_item
 	var are_there_jobs_defining bool
-	log.Infof("Starting %s tables", q.descr)
+	log.Infof("Starting to enqueue %s tables", q.descr)
 	for {
 		G_async_queue_pop(q.request_chunk)
 		if shutdown_triggered {
@@ -402,27 +408,33 @@ func table_job_enqueue(q *table_queuing) {
 				continue
 			}
 			if csi != nil {
-				switch csi.chunk_type {
-				case INTEGER:
-					if UseDefer {
-						create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
-						create_job_defer(dbt, q.queue)
-					} else {
-						create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
+				if dbt.status == DEFINING {
+					create_job_to_determine_chunk_type(dbt, G_async_queue_push, q.queue)
+					continue
+				}
+				if csi != nil {
+					switch csi.chunk_type {
+					case INTEGER:
+						if UseDefer {
+							create_job_to_dump_chunk(dbt, "", csi.part, csi, G_async_queue_push, q.deferQueue)
+							create_job_defer(dbt, q.queue)
+						} else {
+							create_job_to_dump_chunk(dbt, "", csi.part, csi, G_async_queue_push, q.queue)
+						}
+						break
+					case CHAR:
+						create_job_to_dump_chunk(dbt, "", csi.part, csi, G_async_queue_push, q.queue)
+						break
+					case PARTITION:
+						create_job_to_dump_chunk(dbt, "", csi.part, csi, G_async_queue_push, q.queue)
+						break
+					case NONE:
+						create_job_to_dump_chunk(dbt, "", csi.part, csi, G_async_queue_push, q.queue)
+						break
+					default:
+						log.Errorf("This should not happen %v", csi.chunk_type)
+						break
 					}
-					break
-				case CHAR:
-					create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
-					break
-				case PARTITION:
-					create_job_to_dump_chunk(dbt, "", csi.number, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
-					break
-				case NONE:
-					create_job_to_dump_chunk(dbt, "", 0, dbt.primary_key_separated_by_comma, csi, G_async_queue_push, q.queue)
-					break
-				default:
-					log.Errorf("This should not happen %v", csi.chunk_type)
-					break
 				}
 			}
 		} else {
@@ -434,25 +446,13 @@ func table_job_enqueue(q *table_queuing) {
 			break
 		}
 	}
-	log.Infof("%s tables completed", q.descr)
+	log.Infof("Enqueuing of %s tables completed", q.descr)
 	enqueue_shutdown(q)
 }
 
-func chunk_builder_thread(conf *configuration) {
-	defer chunk_builder.Thread.Done()
-	table_job_enqueue(conf.non_innodb)
-	table_job_enqueue(conf.innodb)
+func chunk_builder_thread(c any) {
+	conf := c.(*Configuration)
+	table_job_enqueue(conf.non_transactional)
+	table_job_enqueue(conf.transactional)
 	return
-}
-
-func build_where_clause_on_table_job(tj *table_job) {
-	var csi *chunk_step_item = tj.chunk_step_item
-	tj.where = ""
-	tj.where += csi.where
-	csi = csi.next
-	for csi != nil && csi.chunk_type != NONE {
-		tj.where += " AND "
-		tj.where += csi.where
-		csi = csi.next
-	}
 }

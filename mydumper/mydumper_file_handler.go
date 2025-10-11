@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"strings"
 	"sync"
@@ -17,9 +17,16 @@ var (
 	fifo_table_mutex *sync.Mutex
 	pipe_creation    *sync.Mutex
 	open_pipe        int64
-	cft              *GThreadFunc
+	cft              *GThread
+	is_pipe          bool
 	fifo_hash        map[string]string
 )
+
+type filename_queue_element struct {
+	dbt      *db_table
+	filename string
+	done     *GAsyncQueue
+}
 
 func m_open_file(filename *string, t string) (f *file_write, err error) {
 
@@ -29,13 +36,13 @@ func m_open_file(filename *string, t string) (f *file_write, err error) {
 	if strings.ToLower(t) == "w" {
 		ff, err = os.OpenFile(*filename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0660)
 		if err != nil {
-			log.Errorf("open file %s failed: %v", *filename, err)
+			log.Criticalf("open file %s failed: %v", *filename, err)
 			return
 		}
 	} else {
 		ff, err = os.OpenFile(*filename, os.O_RDONLY, 0660)
 		if err != nil {
-			log.Errorf("open file %s failed: %v", *filename, err)
+			log.Criticalf("open file %s failed: %v", *filename, err)
 			return
 		}
 	}
@@ -50,24 +57,26 @@ func m_open_file(filename *string, t string) (f *file_write, err error) {
 // , thread_id uint, file *os.File, filename string, size uint, dbt *db_table
 func m_close_file(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	var err error
-	if file.filename == "" {
-		log.Warnf("Thread %d: File is nil", thread_id)
-		return nil
-	}
-	err = file.close()
-	file.status = 0
-	if size > 0 {
-		if Stream != "" {
-			stream_queue_push(dbt, filename)
+	if file != nil {
+		log.Tracef("Thread %d: Closing file %s", thread_id, filename)
+		err = file.close()
+		file.status = 0
+		if size > 0 {
+			if Stream != "" {
+				stream_queue_push(dbt, filename)
+			}
+		} else if !BuildEmptyFiles {
+			err = os.Remove(filename)
+			if err != nil {
+				log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
+			} else {
+				log.Debugf("Thread %d: File removed: %s", thread_id, filename)
+			}
 		}
-	} else if !BuildEmptyFiles {
-		err = os.Remove(filename)
-		if err != nil {
-			log.Warnf("Thread %d: Failed to remove empty file : %s", thread_id, filename)
-		} else {
-			log.Debugf("Thread %d: File removed: %s", thread_id, filename)
-		}
+	} else {
+		M_critical("Trying to close %s with thread: %d", filename, thread_id)
 	}
+
 	return err
 }
 
@@ -94,15 +103,6 @@ func close_file_queue_push(f *fifo) {
 		}
 	}
 	return
-}
-
-func wait_close_files() {
-	var f *fifo = new(fifo)
-	f.gpid = -10
-	f.child_pid = -10
-	f.filename = ""
-	close_file_queue_push(f)
-	cft.Thread.Wait()
 }
 
 func release_pid() {
@@ -245,7 +245,8 @@ func final_step_close_file(thread_id uint, filename string, f *fifo, size float6
 	return nil
 }
 
-func close_file_thread() {
+func close_file_thread(c any) {
+	_ = c
 	defer cft.Thread.Done()
 	var f *fifo
 	var err error
@@ -274,10 +275,19 @@ func close_file_thread() {
 		G_atomic_int_dec_and_test(&open_pipe)
 	}
 	return
-
 }
-
-func initialize_file_handler(is_pipe bool) {
+func wait_close_files() {
+	var f *fifo = new(fifo)
+	f.gpid = -10
+	f.child_pid = -10
+	f.filename = ""
+	close_file_queue_push(f)
+	cft.Thread.Wait()
+}
+func set_pipe_backup() {
+	is_pipe = true
+}
+func initialize_file_handler() {
 	if is_pipe {
 		m_open = m_open_pipe
 		m_close = m_close_pipe
@@ -294,6 +304,13 @@ func initialize_file_handler(is_pipe bool) {
 	pipe_creation = G_mutex_new()
 	file_hash = make(map[string]map[string][]string)
 	fifo_table_mutex = G_mutex_new()
-	cft = G_thread_new("close_file_thread", new(sync.WaitGroup), 0)
-	go close_file_thread()
+	cft = M_thread_new("close_file_thread", close_file_thread, nil, "Close file thread could not be created")
+}
+
+func new_filename_queue_element(dbt *db_table, filename string, done *GAsyncQueue) *filename_queue_element {
+	var sf = new(filename_queue_element)
+	sf.dbt = dbt
+	sf.filename = filename
+	sf.done = done
+	return sf
 }

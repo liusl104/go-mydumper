@@ -1,8 +1,9 @@
 package mydumper
 
-func kill_pmm_thread() {
+func Initialize_pmm() {
 
 }
-func pmm_thread(conf *configuration) {
-	defer pmmthread.Thread.Done()
+
+func Start_pmm_thread(conf *Configuration) {
+
 }

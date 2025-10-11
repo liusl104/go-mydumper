@@ -2,6 +2,7 @@ package mydumper
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -14,65 +15,92 @@ import (
 
 	"github.com/go-ini/ini"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	log "go-mydumper/src/logrus"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
-	Log_output         *os.File
-	Json               bool
-	Logger             *os.File
-	ignore_errors_list []uint16
-	Help               bool
-	show_warnings      bool
-	No_delete          bool
-	stream             bool
-	Ignore_errors_list []uint16
-	CheckRowCount      bool
-	Stream_queue       *GAsyncQueue
+	VERSION                   = GitBranch
+	Log_output                *os.File
+	Json                      bool
+	Logger                    *os.File
+	IgnoreErrorsList          []int16
+	Help                      bool
+	show_warnings             bool
+	No_delete                 bool
+	stream                    bool
+	CheckRowCount             bool
+	IgnoreErrors              string
+	Stream_queue              *GAsyncQueue
+	SetNamesInConnForSct      string
+	SetNamesInFileForSct      string
+	SetNamesInFileByDefault   string
+	Throttle_time             int = 0
+	Throttle_max_usleep_limit int = 60000000
 )
 
 const (
-	MYLOADER_MODE              = "myloader_mode"
-	DEFAULTS_FILE              = "/etc/mydumper.cnf"
-	VERSION                    = "0.16.7-5"
-	DB_LIBRARY                 = "MySQL"
-	MYSQL_VERSION_STR          = "8.0.31"
-	EXIT_FAILURE               = 1
-	EXIT_SUCCESS               = 0
-	WIDTH                      = 40
-	MIN_THREAD_COUNT           = 2
-	IS_INNODB_TABLE            = 2
-	INCLUDE_CONSTRAINT         = 4
-	IS_ALTER_TABLE_PRESENT     = 8
-	START_SLAVE                = "START SLAVE"
-	START_SLAVE_SQL_THREAD     = "START SLAVE SQL_THREAD"
-	CALL_START_REPLICATION     = "CALL mysql.rds_start_replication();"
-	STOP_SLAVE_SQL_THREAD      = "STOP SLAVE SQL_THREAD"
-	STOP_SLAVE                 = "STOP SLAVE"
-	CALL_STOP_REPLICATION      = "CALL mysql.rds_stop_replication();"
-	RESET_SLAVE                = "RESET SLAVE"
-	CALL_RESET_EXTERNAL_MASTER = "CALL mysql.rds_reset_external_master()"
-	SHOW_SLAVE_STATUS          = "SHOW SLAVE STATUS"
-	SHOW_ALL_SLAVES_STATUS     = "SHOW ALL SLAVES STATUS"
-	START_REPLICA              = "START REPLICA"
-	START_REPLICA_SQL_THREAD   = "START REPLICA SQL_THREAD"
-	STOP_REPLICA               = "STOP REPLICA"
-	STOP_REPLICA_SQL_THREAD    = "STOP REPLICA SQL_THREAD"
-	RESET_REPLICA              = "RESET REPLICA"
-	SHOW_REPLICA_STATUS        = "SHOW REPLICA STATUS"
-	SHOW_ALL_REPLICAS_STATUS   = "SHOW ALL REPLICAS STATUS"
-	SHOW_MASTER_STATUS         = "SHOW MASTER STATUS"
-	SHOW_BINLOG_STATUS         = "SHOW BINLOG STATUS"
-	SHOW_BINARY_LOG_STATUS     = "SHOW BINARY LOG STATUS"
-	CHANGE_MASTER              = "CHANGE MASTER"
-	CHANGE_REPLICATION_SOURCE  = "CHANGE REPLICATION SOURCE"
-	ZSTD_EXTENSION             = ".zst"
-	GZIP_EXTENSION             = ".gz"
-	BZIP2_EXTENSION            = ".bz2"
-	LZ4_EXTENSION              = ".lz4"
+	MYLOADER_MODE                   = "myloader_mode"
+	DEFAULTS_FILE                   = "/etc/mydumper.cnf"
+	DB_LIBRARY                      = "MySQL"
+	MYSQL_VERSION_STR               = "8.0.31"
+	EXIT_FAILURE                    = 1
+	EXIT_SUCCESS                    = 0
+	WIDTH                           = 40
+	MIN_THREAD_COUNT                = 2
+	IS_INNODB_TABLE                 = 2
+	IS_TRX_TABLE                    = 2
+	INCLUDE_CONSTRAINT              = 4
+	IS_ALTER_TABLE_PRESENT          = 8
+	START_SLAVE                     = "START SLAVE"
+	START_SLAVE_SQL_THREAD          = "START SLAVE SQL_THREAD"
+	CALL_START_REPLICATION          = "CALL mysql.rds_start_replication();"
+	STOP_SLAVE_SQL_THREAD           = "STOP SLAVE SQL_THREAD"
+	STOP_SLAVE                      = "STOP SLAVE"
+	CALL_STOP_REPLICATION           = "CALL mysql.rds_stop_replication();"
+	RESET_SLAVE                     = "RESET SLAVE"
+	CALL_RESET_EXTERNAL_MASTER      = "CALL mysql.rds_reset_external_master()"
+	SHOW_SLAVE_STATUS               = "SHOW SLAVE STATUS"
+	SHOW_ALL_SLAVES_STATUS          = "SHOW ALL SLAVES STATUS"
+	START_REPLICA                   = "START REPLICA"
+	START_REPLICA_SQL_THREAD        = "START REPLICA SQL_THREAD"
+	STOP_REPLICA                    = "STOP REPLICA"
+	STOP_REPLICA_SQL_THREAD         = "STOP REPLICA SQL_THREAD"
+	RESET_REPLICA                   = "RESET REPLICA"
+	SHOW_REPLICA_STATUS             = "SHOW REPLICA STATUS"
+	SHOW_ALL_REPLICAS_STATUS        = "SHOW ALL REPLICAS STATUS"
+	SHOW_MASTER_STATUS              = "SHOW MASTER STATUS"
+	SHOW_BINLOG_STATUS              = "SHOW BINLOG STATUS"
+	SHOW_BINARY_LOG_STATUS          = "SHOW BINARY LOG STATUS"
+	CHANGE_MASTER                   = "CHANGE MASTER"
+	CHANGE_REPLICATION_SOURCE       = "CHANGE REPLICATION SOURCE"
+	FLUSH_TABLES_WITH_READ_LOCK     = "FLUSH TABLES WITH READ LOCK"
+	FLUSH_NO_WRITE_TO_BINLOG_TABLES = "FLUSH NO_WRITE_TO_BINLOG TABLES"
+	ZSTD_EXTENSION                  = ".zst"
+	GZIP_EXTENSION                  = ".gz"
+	GZIP                            = "gzip"
+	ZSTD                            = "zstd"
+	BZIP2_EXTENSION                 = ".bz2"
+	LZ4_EXTENSION                   = ".lz4"
+	EMPTY_STRING                    = ""
+	CAST                            = "CAST("
+	AS_BINARY                       = "AS BINARY)"
+	BINARY_CHARSET                  = "binary"
+	AUTO_CHARSET                    = "auto"
 )
 
-type Function_pointer func(string)
+type Function_pointer struct {
+	Fun_ptr         func(str string) mysql.FieldValue
+	Is_pre          bool
+	Value           string
+	Parse           []string
+	Delimiters      []string
+	Memory          map[string]string
+	Replace_null    bool
+	Max_length      int
+	Null_max_length int
+	Unique_list     []string
+	Unique          bool
+}
 type file_write struct {
 	write  write_fun
 	close  close_fun
@@ -104,9 +132,16 @@ func Initialize_share_common() {
 
 }
 
+func get_zstd_cmd() {
+
+}
+
+func get_gzip_cmd() {
+
+}
 func Initialize_hash_of_session_variables() map[string]string {
 	var set_session_hash = make(map[string]string)
-	if Detected_server == SERVER_TYPE_MYSQL || Detected_server == SERVER_TYPE_MARIADB {
+	if Is_mysql_like() {
 		set_session_hash["WAIT_TIMEOUT"] = "2147483"
 		set_session_hash["NET_WRITE_TIMEOUT"] = "2147483"
 	}
@@ -125,7 +160,9 @@ func Initialize_set_names() {
 		Set_names_statement = "/*!40101 SET NAMES binary*/"
 	}
 }
-
+func set_names_statement_template(_set_names string) string {
+	return fmt.Sprintf("/*!40101 SET NAMES %s*/", _set_names)
+}
 func Free_set_names() {
 	SetNamesStr = ""
 	Set_names_statement = ""
@@ -156,21 +193,14 @@ func generic_checksum(conn *DBConnection, database, table, query_template string
 	} else {
 		query = fmt.Sprintf(query_template, database, table)
 	}
-
-	result := conn.Execute(query)
-	if conn.Err != nil {
-		log.Criticalf("Error dumping checksum (%s.%s): %v", database, table, conn.Err)
-		return ""
-	}
+	conn.Query = query
+	var mr *M_ROW = M_store_result_single_row(conn, query, "Error dumping checksum (%s.%s)", database, table)
 	var r string
-
-	for _, row := range result.Values {
-		if result.Fields[column_number].Type <= mysql.MYSQL_TYPE_INT24 {
-			r = fmt.Sprintf("%d", row[column_number].AsInt64())
-		} else {
-			r = fmt.Sprintf("%s", row[column_number].AsString())
-		}
+	/* There should never be more than one Row */
+	if mr.Row != nil {
+		r = fmt.Sprintf("%s", mr.Row[column_number].Value())
 	}
+	M_store_result_row_free(mr)
 	return r
 }
 
@@ -224,7 +254,6 @@ func parse_key_file_group(kf *ini.File, group string) {
 		return
 	}
 	keys := section.Keys()
-
 	for _, key := range keys {
 		if strings.EqualFold(key.Name(), "host") {
 			Hostname = key.Value()
@@ -251,7 +280,7 @@ func load_hash_from_key_file(kf *ini.File, set_session_hash map[string]string, g
 
 }
 
-func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_table, init_function_pointer *Function_pointer) {
+func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_table, init_function_pointer func(str string) *Function_pointer) {
 	var groups = kf.SectionStrings()
 	var i int
 	var keys []*ini.Key
@@ -264,7 +293,8 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 				if strings.HasPrefix(key.Name(), "`") && strings.HasSuffix(key.Name(), "`") {
 					if init_function_pointer != nil {
 						value = G_key_file_get_value(kf, groups[i], key.Name())
-						ht[key.Name()] = init_function_pointer
+						var fp *Function_pointer = init_function_pointer(value)
+						ht[key.Name()] = fp
 					}
 				} else {
 					if strings.Compare(key.Name(), "where") == 0 {
@@ -292,7 +322,7 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 						init_regex(&r, key.Value())
 						cpt.All_partition_regex_per_table[groups[i]] = r
 					}
-					if strings.Compare(key.Name(), "rows") == 0 {
+					if strings.Compare(key.Name(), "Rows") == 0 {
 						cpt.All_rows_per_table[groups[i]] = key.Value()
 					}
 				}
@@ -320,7 +350,7 @@ func Load_hash_of_all_variables_perproduct_from_key_file(kf *ini.File, set_sessi
 	load_hash_from_key_file(kf, set_session_hash, s.Str.String())
 }
 
-func free_hash_table(hash map[string]string) {
+func Free_hash_table(hash map[string]string) {
 	for key, _ := range hash {
 		delete(hash, key)
 	}
@@ -393,7 +423,7 @@ func Execute_gstring(conn *DBConnection, ss *GString) {
 		var i int
 		for i = 0; i < len(line); i++ {
 			if len(line[i]) > 3 {
-				conn.Execute(line[i])
+				_ = conn.Execute(line[i])
 				if conn.Err != nil {
 					log.Warnf("Set session failed: %s", line[i])
 				}
@@ -427,6 +457,25 @@ func escape_tab_with(to []byte) {
 	to[j] = from[i]
 	from = nil
 }
+
+// Create_dir create directory
+func Create_dir(directory string) bool {
+	err := os.Mkdir(directory, 0750)
+	if err != nil {
+		M_critical("Unable to create `%s': %v", directory, err)
+		return false
+	}
+	return true
+}
+
+func g_dir_make_tmp() string {
+	tmpDir, err := os.MkdirTemp(os.TempDir(), "mydumper_")
+	if err != nil {
+		log.Fatalf("Unable to create `%s': %v", tmpDir, err)
+	}
+	return tmpDir
+}
+
 func create_fifo_dir(new_fifo_directory string) {
 	if new_fifo_directory == "" {
 		log.Warnf("Fifo directoy provided was invalid")
@@ -485,6 +534,7 @@ func M_remove(directory, filename string) bool {
 	return true
 }
 func matchText(a string, b string) bool {
+	// TODO : optimize
 	return strings.EqualFold(a, b)
 }
 
@@ -643,7 +693,7 @@ func Remove_definer(data *GString) {
 
 func Print_version(program string) {
 	// 使用 fmt 包的 Printf 函数按照指定格式输出版本信息。
-	fmt.Printf("%s v%s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
+	fmt.Printf("%s %s, built against %s %s with SSL support\n", program, VERSION, DB_LIBRARY, MYSQL_VERSION_STR)
 
 	// 输出源代码的 Git Commit Hash。
 	fmt.Printf("Git Commit Hash: %s\n", GitHash)
@@ -691,10 +741,12 @@ func Check_num_threads() {
 	// 如果线程数量小于最小线程数量，则记录警告并将其设置为最小线程数量
 	if NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", NumThreads, MIN_THREAD_COUNT)
-		// NumThreads = MIN_THREAD_COUNT
+		NumThreads = MIN_THREAD_COUNT
 	}
 }
-
+func M_message(msg string, args ...any) {
+	log.Infof(msg, args...)
+}
 func M_error(msg string, args ...any) {
 	Execute_gstring(main_connection, Set_global_back)
 	log.Errorf(msg, args...)
@@ -703,6 +755,7 @@ func M_error(msg string, args ...any) {
 func M_critical(msg string, args ...any) {
 	Execute_gstring(main_connection, Set_global_back)
 	log.Criticalf(msg, args...)
+	os.Exit(EXIT_FAILURE)
 }
 
 func M_warning(msg string, args ...any) {
@@ -720,15 +773,16 @@ func Filter_sequence_schemas(create_table string) string {
 
 func Read_data(infile *bufio.Scanner, data *GString, eof *bool, line *int) bool {
 	if !infile.Scan() {
-		*eof = true
-		return false
+		*eof = false
+		return true
 	}
 	G_string_append(data, infile.Text())
 	*line++
 	if infile.Err() != nil {
-		return false
+		*eof = true
+		return true
 	}
-	return true
+	return false
 }
 func M_date_time_new_now_local() string {
 	return time.Now().Format("2006-01-02 15:04:05.000000")
@@ -849,8 +903,12 @@ func Global_process_create_table_statement(statement *GString, create_table_stat
 				G_string_append(create_table_statement, "\n")
 			}
 		}
-		if strings.HasPrefix(split_file[i], "ENGINE=InnoDB") {
-			flag |= IS_INNODB_TABLE
+		if strings.HasPrefix(split_file[i], "ENGINE=") {
+			for j := 0; j < len(OptimizeKeyEngines); j++ {
+				if strings.HasPrefix(split_file[i], OptimizeKeyEngines[j]) {
+					flag |= IS_TRX_TABLE
+				}
+			}
 		}
 	}
 	G_string_replace(create_table_statement, ",\n)", "\n)")
@@ -900,32 +958,147 @@ func Parse_object_to_export(object_to_export *Object_to_export, val string) {
 func Build_dbt_key(a, b string) string {
 	return fmt.Sprintf("%s%s%s.%s%s%s", Identifier_quote_character, a, Identifier_quote_character, Identifier_quote_character, b, Identifier_quote_character)
 }
-func Common_arguments_callback() bool {
-	if SourceControlCommand != "" {
-		if strings.ToUpper(SourceControlCommand) == "TRADITIONAL" {
-			Source_control_command = TRADITIONAL
-			return true
+
+func Discard_mysql_output(conn *DBConnection) {
+	conn.Result.Close()
+}
+
+func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) {
+	if msg != "" && log_fun_1 != nil {
+		var c = fmt.Sprintf(msg, args...)
+		if log_fun_2 != nil && slices.Contains(IgnoreErrorsList, conn.Code) {
+			log_fun_2("%s - ERROR %d: %v", c, Mysql_errno(conn), Mysql_error(conn))
+		} else {
+			if Mysql_errno(conn) != 0 {
+				log_fun_1("%s - ERROR %d: %s", c, Mysql_errno(conn), Mysql_error(conn))
+				Errors++
+			} else {
+				log_fun_1("%s", c)
+			}
 		}
-		if strings.ToUpper(SourceControlCommand) == "AWS" {
-			Source_control_command = AWS
-			return true
-		}
+	}
+}
+
+func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
+	conn.Query = query
+	res, err := conn.Conn.Execute(query)
+	if err == nil {
+		conn.Result = res
+		conn.Code = 0
+		conn.Err = nil
+		return true
+	} else {
+		var myerr *mysql.MyError
+		errors.As(err, &myerr)
+		conn.Code = int16(myerr.Code)
+		conn.Err = err
+		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
 	return false
 }
-
-func Discard_mysql_output(conn *DBConnection) {
-	_ = conn
-}
-
-func M_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
-	conn.Execute(query)
-	if conn.Err != nil {
-		if !slices.Contains(ignore_errors_list, conn.Code) {
-			var c = fmt.Sprintf(msg, args...)
-			log_fun("%s - ERROR %d: %v", c, conn.Code, conn.Err)
-			return false
-		}
+func m_query(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
+	conn.Query = query
+	stmt, err := conn.Conn.Prepare(query)
+	if err == nil {
+		conn.Stmt = stmt
+		conn.Code = 0
+		conn.Err = nil
+		return false
+	} else {
+		var myerr *mysql.MyError
+		errors.As(err, &myerr)
+		conn.Code = int16(myerr.Code)
+		conn.Err = err
+		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
 	return true
+}
+
+/*func m_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
+	return m_queryv(conn, query, log_fun, nil, msg, args...)
+}*/
+
+// Executes the query, if there is an error it send critical stopping the process unless the error is ignored
+func M_query_warning(conn *DBConnection, query string, fmt string, args ...any) bool {
+	return m_queryv(conn, query, M_warning, nil, fmt, args...)
+}
+
+// Executes the query, if there is an error it send critical stopping the process unless the error is ignored
+func M_query_critical(conn *DBConnection, query string, fmt string, args ...any) bool {
+	return m_queryv(conn, query, M_critical, M_warning, fmt, args...)
+}
+
+func m_query_ext(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) bool {
+	return m_queryv(conn, query, log_fun_1, log_fun_2, fmt, args...)
+}
+
+func M_query_verbose(conn *DBConnection, q string, log_fun func(fmt string, a ...any), fmt string, args ...any) bool {
+	var res bool = m_queryv(conn, q, log_fun, nil, fmt, args...)
+	if !res {
+		log.Infof("%s: OK", q)
+	}
+	return res
+}
+
+func m_resultv(m_result func(conn *DBConnection) *MYSQL_RES, conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
+	if m_query(conn, query, log_fun_1, log_fun_2, fmt, args...) {
+		return nil
+	}
+	res := m_result(conn)
+	if res == nil {
+		m_log(conn, log_fun_1, log_fun_2, fmt, args...)
+	}
+	return res
+}
+
+func M_store_result_critical(conn *DBConnection, query string, fmt string, args ...any) *MYSQL_RES {
+	return m_resultv(Mysql_store_result, conn, query, M_critical, M_warning, fmt, args...)
+}
+
+func M_store_result(conn *DBConnection, query string, log_fun func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
+	return m_resultv(mysql_use_result, conn, query, log_fun, nil, fmt, args...)
+}
+
+func M_store_result_row(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) *M_ROW {
+	var mr *M_ROW = new(M_ROW)
+	mr.Row = nil
+	mr.Res = m_resultv(Mysql_store_result, conn, query, log_fun_1, log_fun_2, fmt, args...)
+	if mr.Res != nil {
+		mr.Row = Mysql_fetch_row(mr.Res)
+	}
+	return mr
+}
+
+func M_store_result_single_row(conn *DBConnection, query string, fmt string, args ...any) *M_ROW {
+	var mr *M_ROW = new(M_ROW)
+	mr.Row = nil
+	mr.Res = m_resultv(Mysql_store_result, conn, query, M_critical, M_warning, fmt, args...)
+	if mr.Res != nil {
+		mr.Row = Mysql_fetch_row(mr.Res)
+		if mr.Row == nil {
+			m_log(conn, M_critical, M_warning, fmt, args...)
+		}
+	}
+	return mr
+}
+
+func M_use_result(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
+	return m_resultv(mysql_use_result, conn, query, log_fun_1, nil, fmt, args...)
+}
+func Execute_set_names(conn *DBConnection, _set_names string) {
+	var _set_names_statement = set_names_statement_template(_set_names)
+	M_query_warning(conn, _set_names_statement, "Not able to execute SET NAMES statement")
+
+}
+func M_thread_new(title string, f func(any), data any, error_text string) *GThread {
+	var thread *GThread = G_thread_new(title, f, data, 0)
+	if thread == nil {
+		M_critical(error_text)
+	}
+	return thread
+}
+
+func Monitor_throttling_thread(c any) {
+	queue := c.(*GAsyncQueue)
+	_ = queue
 }

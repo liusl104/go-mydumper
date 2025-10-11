@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	. "go-mydumper/src"
-	log "go-mydumper/src/logrus"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"path"
 	"strconv"
@@ -39,12 +39,14 @@ func initialize_common() {
 }
 
 func free_common() {
-	ref_table_mutex = nil
+	ref_table_mutex.Lock()
 	ref_table = nil
+	ref_table_mutex.Unlock()
+	ref_table_mutex = nil
 }
 
 func determine_filename(table string) string {
-	if Check_filename_regex(table) && !strings.Contains(table, ".") && !strings.HasSuffix(table, "mydumper_") {
+	if !masquerade_filename && Check_filename_regex(table) && !strings.Contains(table, ".") && !strings.HasSuffix(table, "mydumper_") {
 		return table
 	} else {
 		r := fmt.Sprintf("mydumper_%d", table_number)
@@ -69,21 +71,21 @@ func escape_string(str string) string {
 	return mysql.Escape(str)
 }
 
-func build_schema_table_filename(dump_directory string, database string, table string, suffix string) string {
+func build_schema_table_filename(database string, table string, suffix string) string {
 	var filename string
 	filename = fmt.Sprintf("%s.%s-%s.sql", database, table, suffix)
 	r := path.Join(dump_directory, filename)
 	return r
 }
 
-func build_schema_filename(dump_directory, database, suffix string) string {
+func build_schema_filename(database, suffix string) string {
 	var filename string
 	filename = fmt.Sprintf("%s-%s.sql", database, suffix)
 	r := path.Join(dump_directory, filename)
 	return r
 }
 
-func build_tablespace_filename(dump_directory string) string {
+func build_tablespace_filename() string {
 	return path.Join(dump_directory, "all-schema-create-tablespace.sql")
 }
 
@@ -119,14 +121,14 @@ func clear_dump_directory(directory string) error {
 
 	if err != nil {
 		log.Criticalf("cannot open directory %s, %v", directory, err)
-		errors++
+		Errors++
 		return err
 	}
 	defer dir.Close()
 	filename, err := dir.Readdirnames(-1)
 	if err != nil {
 		log.Criticalf("error removing file %s (%v)", directory, err)
-		errors++
+		Errors++
 		return err
 	}
 	for _, file := range filename {
@@ -134,41 +136,18 @@ func clear_dump_directory(directory string) error {
 		err = os.Remove(file_path)
 		if err != nil {
 			log.Criticalf("error removing file %s (%v)", file_path, err)
-			errors++
+			Errors++
 			return err
 		}
 	}
 	return nil
 }
-func is_empty_dir(directory string) bool {
-	dir, err := os.Stat(directory)
-	if err != nil {
-		log.Criticalf("cannot open directory %s, %v", directory, err)
-		errors++
-		return false
-	}
-	if dir.IsDir() {
-		openDir, _ := os.Open(directory)
-		defer openDir.Close()
-		filename, _ := openDir.ReadDir(-1)
-		if len(filename) > 0 {
-			return false
-		}
-		return true
-	}
-	log.Errorf("%s is file", directory)
-	return false
-}
 
 func set_transaction_isolation_level_repeatable_read(conn *DBConnection) {
-	_ = conn.Execute("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-	if conn.Err != nil {
-		log.Criticalf("Failed to set isolation level: %v", conn.Err)
-		os.Exit(EXIT_FAILURE)
-	}
+	M_query_critical(conn, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ", "Failed to set isolation level")
 }
 
-func build_filename(dump_directory, database string, table string, part uint64, sub_part uint, extension string, second_extension string) string {
+func build_filename(database string, table string, part uint64, sub_part uint, extension string, second_extension string) string {
 	var filename string
 	var ext string
 	var sec string
@@ -186,11 +165,11 @@ func build_filename(dump_directory, database string, table string, part uint64, 
 }
 
 func build_sql_filename(database string, table string, part uint64, sub_part uint) string {
-	return build_filename(dump_directory, database, table, part, sub_part, SQL, "")
+	return build_filename(database, table, part, sub_part, SQL, "")
 }
 
 func build_rows_filename(database string, table string, part uint64, sub_part uint) string {
-	return build_filename(dump_directory, database, table, part, sub_part, rows_file_extension, "")
+	return build_filename(database, table, part, sub_part, rows_file_extension, "")
 }
 
 func m_real_escape_string(from string) string {
@@ -221,20 +200,23 @@ func m_real_escape_string(from string) string {
 	return to.String()
 }
 
-func m_escape_char_with_char(needle, repl []byte, data []byte) []byte {
-	var buffer bytes.Buffer // 使用 bytes.Buffer 来高效构建字符串
-	for _, b := range data {
-		if b == needle[0] {
-			buffer.WriteByte(repl[0]) // 替换字符
-		} else {
-			buffer.WriteByte(b) // 原样输出字符
+func m_escape_char_with_char(needle byte, repl byte, to []byte) []byte {
+	// 预分配缓冲区：最坏情况下（全是目标字符）长度会翻倍，这里按原长度的1.5倍预分配减少扩容
+	buf := bytes.NewBuffer(make([]byte, 0, len(to)*3/2))
+
+	for _, b := range to {
+		// 若当前字符是目标字符，先写入替换字符
+		if b == needle {
+			buf.WriteByte(repl)
 		}
+		// 写入当前字符（无论是否为目标字符）
+		buf.WriteByte(b)
 	}
 
-	return buffer.Bytes() // 返回结果
+	return buf.Bytes()
 }
 
-func m_replace_char_with_char(needle rune, repl rune, from []rune) string {
+func m_replace_char_with_char(needle byte, repl byte, from []byte) string {
 	for i := 0; i < len(from); i++ {
 		if from[i] == needle {
 			from[i] = repl
@@ -244,92 +226,88 @@ func m_replace_char_with_char(needle rune, repl rune, from []rune) string {
 	return string(from)
 }
 
-func determine_show_table_status_columns(result []*mysql.Field, ecol *int, ccol *int, collcol *int, rowscol *int) {
-	var fields = result
+func determine_show_table_status_columns(result *mysql.Result, ecol *int, ccol *int, collcol *int, rowscol *int) {
+	var fields = result.Fields
 	var i int
 	for i = 0; i < len(fields); i++ {
-		if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Engine") {
+		if strings.EqualFold(string(fields[i].Name), "Engine") {
 			*ecol = i
-		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Comment") {
+		} else if strings.EqualFold(string(fields[i].Name), "Comment") {
 			*ccol = i
-		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Collation") {
+		} else if strings.EqualFold(string(fields[i].Name), "Collation") {
 			*collcol = i
-		} else if strings.ToLower(string(fields[i].Name)) == strings.ToLower("Rows") {
+		} else if strings.EqualFold(string(fields[i].Name), "Rows") {
 			*rowscol = i
 		}
 	}
-	if *ecol == 0 || *ccol == 0 || *collcol == 0 {
-		log.Errorf("assert value error")
-	}
+	G_assert(*ecol > 0)
+	G_assert(*ccol > 0)
+	G_assert(*collcol > 0)
 }
 
-func determine_explain_columns(result *mysql.Result, rowscol *int) {
+func determine_explain_columns(result *mysql.Result, rowscol *uint) {
 	var fields []*mysql.Field = result.Fields
 	var i int
 	for i = 0; i < len(fields); i++ {
-		if string(fields[i].Name) == "rows" {
-			*rowscol = i
-		} else if string(fields[i].Name) == "estRows" {
-			// TiDB
-			*rowscol = i
+		if strings.EqualFold(string(fields[i].Name), "rows") {
+			*rowscol = uint(i)
+		} else if strings.EqualFold(string(fields[i].Name), "estRows") { // TiDB
+			*rowscol = uint(i)
 		}
 	}
 }
 
-func determine_charset_and_coll_columns_from_show(result *mysql.Result, charcol *uint, collcol *uint) {
+func determine_charset_and_coll_columns_from_show(result *MYSQL_RES, charcol *uint, collcol *uint) {
 	*charcol = 0
 	*collcol = 0
-	var fields []*mysql.Field = result.Fields
+	var fields []*mysql.Field = Mysql_fetch_fields(result)
 	var i uint
 	for i = 0; i < uint(len(fields)); i++ {
-		if string(fields[i].Name) == "character_set_client" {
+		if strings.EqualFold(string(fields[i].Name), "character_set_client") {
 			*charcol = i
-		} else if string(fields[i].Name) == "collation_connection" {
+		} else if strings.EqualFold(string(fields[i].Name), "collation_connection") {
 			*collcol = i
 		}
 	}
-	if *charcol == 0 || *collcol == 0 {
-		log.Errorf("assert value error")
-	}
+	G_assert(*charcol > 0)
+	G_assert(*collcol > 0)
 }
 
-func initialize_headers() {
-	headers = G_string_sized_new(100)
+func initialize_header_in_gstring(_headers *GString, charset string) {
 	if Is_mysql_like() {
-		if Set_names_statement != "" {
-			G_string_printf(headers, "%s;\n", Set_names_statement)
+		if charset != "" {
+			G_string_printf(_headers, "/*!40101 SET NAMES %s*/;\n", charset)
 		}
-		G_string_append(headers, "/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
+		G_string_append(_headers, "/*!40014 SET FOREIGN_KEY_CHECKS=0*/;\n")
 		if Sql_mode != "" && !Compact {
-			G_string_append_printf(headers, "/*!40101 SET SQL_MODE=%s*/;\n", Sql_mode)
+			G_string_append_printf(_headers, "/*!40101 SET SQL_MODE=%s*/;\n", Sql_mode)
 		}
 		if !SkipTz {
-			G_string_append(headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
+			G_string_append(_headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
-	} else if Detected_server == SERVER_TYPE_TIDB {
+	} else if Get_product() == SERVER_TYPE_TIDB {
 		if !SkipTz {
-			G_string_printf(headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
+			G_string_printf(_headers, "/*!40103 SET TIME_ZONE='+00:00' */;\n")
 		}
 	} else {
-		G_string_printf(headers, "SET FOREIGN_KEY_CHECKS=0;\n")
+		G_string_printf(_headers, "SET FOREIGN_KEY_CHECKS=0;\n")
 		if Sql_mode != "" && !Compact {
-			G_string_append_printf(headers, "SET SQL_MODE=%s;\n", Sql_mode)
+			G_string_append_printf(_headers, "SET SQL_MODE=%s;\n", Sql_mode)
 		}
 	}
-
 }
+
 func initialize_sql_statement(statement *GString) {
 	G_string_printf(statement, headers.Str.String())
 }
 
-func set_tidb_snapshot(conn *DBConnection) error {
+func initialize_headers() {
+	headers = G_string_sized_new(100)
+	initialize_header_in_gstring(headers, SetNamesInFileByDefault)
+}
+func set_tidb_snapshot(conn *DBConnection) {
 	var query string = fmt.Sprintf("SET SESSION tidb_snapshot = '%s'", TidbSnapshot)
-	_ = conn.Execute(query)
-	if conn.Err != nil {
-		log.Errorf("Failed to set tidb_snapshot: %v.\nThis might be related to https://github.com/pingcap/tidb/issues/8887", conn.Err)
-		return conn.Err
-	}
-	return nil
+	M_query_critical(conn, query, "Failed to set tidb_snapshot (It could be related to https://github.com/pingcap/tidb/issues/8887)")
 }
 
 func my_pow_two_plus_prev(prev uint64, max uint) uint64 {
@@ -341,18 +319,16 @@ func my_pow_two_plus_prev(prev uint64, max uint) uint64 {
 	return r + prev
 }
 
-func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *uint64) bool {
+func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *uint64, message string) bool {
+	if strings.HasPrefix(rows_p_chunk, "-") {
+		return false
+	}
 	var split = strings.Split(rows_p_chunk, ":")
 	var err error
-	if len(split) > 0 {
-		if split[0][0] == '-' {
-			return false
-		}
-	}
 	switch len(split) {
 	case 0:
-		log.Critical("This should not happend")
-		break
+		log.Critical(message)
+		return false
 	case 1:
 		*start, err = strconv.ParseUint(split[0], 10, 64)
 		*min = *start
@@ -371,4 +347,23 @@ func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *
 	}
 	_ = err
 	return true
+}
+func is_empty_dir(directory string) bool {
+	dir, err := os.Stat(directory)
+	if err != nil {
+		log.Criticalf("cannot open directory %s, %v", directory, err)
+		Errors++
+		return false
+	}
+	if dir.IsDir() {
+		openDir, _ := os.Open(directory)
+		defer openDir.Close()
+		filename, _ := openDir.ReadDir(-1)
+		if len(filename) > 0 {
+			return false
+		}
+		return true
+	}
+	log.Errorf("%s is file", directory)
+	return false
 }
