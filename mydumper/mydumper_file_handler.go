@@ -245,7 +245,8 @@ func final_step_close_file(thread_id uint, filename string, f *fifo, size float6
 	return nil
 }
 
-func close_file_thread() {
+func close_file_thread(c any) {
+	_ = c
 	defer cft.Thread.Done()
 	var f *fifo
 	var err error

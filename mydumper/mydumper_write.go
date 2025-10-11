@@ -59,7 +59,7 @@ func update_files_on_table_job(tj *table_job) bool {
 			log.Tracef("Thread %d: Filename assigned: %s", tj.td.thread_id, tj.sql.filename)
 			if err != nil {
 				log.Criticalf("open file %s fail: %v", tj.sql.filename, err)
-				errors++
+				Errors++
 				return false
 			}
 			return true
@@ -434,13 +434,13 @@ func real_write_data(file *file_write, filesize *float64, data *GString) bool {
 		r, err = file.write([]byte(data.Str.String()))
 		if err != nil {
 			log.Criticalf("Couldn't write data to a file: %v", err)
-			errors++
+			Errors++
 			return false
 		}
 		if r == 0 {
 			if second_write_zero {
 				log.Criticalf("Couldn't write data to a file: %v", err)
-				errors++
+				Errors++
 				return false
 			}
 			second_write_zero = true
@@ -951,10 +951,10 @@ func write_table_job_into_file(tj *table_job) {
 	}
 	if Mysql_errno(conn) != 0 {
 		log.Criticalf("Thread %d: Could not read data from %s.%s to write on %s at byte %.0f: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, tj.rows.filename, tj.filesize, Mysql_error(conn))
-		errors++
+		Errors++
 		if Mysql_ping(tj.td.thrconn) {
 			if !it_is_a_consistent_backup {
-				log.Warnf("Thread %d: Reconnecting due errors", tj.td.thread_id)
+				log.Warnf("Thread %d: Reconnecting due Errors", tj.td.thread_id)
 				M_connect(tj.td.thrconn)
 				Execute_gstring(tj.td.thrconn, Set_session)
 			}

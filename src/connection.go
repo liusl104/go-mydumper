@@ -53,7 +53,7 @@ var (
 type DBConnection struct {
 	Conn    *client.Conn
 	Err     error
-	Code    uint16
+	Code    int16
 	Warning uint16
 	Result  *mysql.Result
 	Stmt    *client.Stmt

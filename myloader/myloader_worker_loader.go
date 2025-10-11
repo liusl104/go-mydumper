@@ -70,7 +70,8 @@ func process_loader_thread(td *thread_data) {
 	maybe_shutdown_control_job()
 }
 
-func loader_thread(td *thread_data) {
+func loader_thread(c any) {
+	td := c.(*thread_data)
 	var cnf *configuration = td.conf
 	G_async_queue_push(cnf.ready, 1)
 	log.Tracef("Thread %d: Starting import", td.thread_id)

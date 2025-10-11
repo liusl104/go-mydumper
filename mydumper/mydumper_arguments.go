@@ -68,7 +68,7 @@ func entries() {
 func extra_entries() {
 	pflag.UintVarP(&ChunkFilesize, "chunk-filesize", "F", 0, "Split data files into pieces of this size in MB. Useful for myloader multi-threading.")
 	pflag.BoolVar(&ExitIfBrokenTableFound, "exit-if-broken-table-found", false, "Exits if a broken table has been found")
-	pflag.BoolVar(&SuccessOn1146, "success_on_1146", false, "This option is deprecated use --ignore_engines-errors instead")
+	pflag.BoolVar(&SuccessOn1146, "success_on_1146", false, "This option is deprecated use --ignore_engines-Errors instead")
 	pflag.BoolVarP(&BuildEmptyFiles, "build_empty_files", "e", false, "Build dump files even if no data available from table")
 	pflag.BoolVar(&IgnoreGeneratedFields, "no-check-generated-fields", false, "Queries related to generated fields are not going to be executed. It will lead to restoration issues if you have generated columns")
 	pflag.BoolVar(&OrderByPrimaryKey, "order-by-primary", false, "Sort the data by Primary Key or Unique key if no primary key exists")
@@ -281,7 +281,7 @@ func arguments_callback() bool {
 		}
 	}
 	if SuccessOn1146 {
-		M_critical("--success-on-1146 is deprecated use --ignore_engines-errors instead")
+		M_critical("--success-on-1146 is deprecated use --ignore_engines-Errors instead")
 	}
 	if DefaultCharacterSet != "" {
 		var value_split = strings.SplitN(DefaultCharacterSet, ",", 2)

@@ -171,7 +171,8 @@ func process_schema(td *thread_data) bool {
 	return ret
 }
 
-func worker_schema_thread(td *thread_data) {
+func worker_schema_thread(c any) {
+	td := c.(*thread_data)
 	var cnf *configuration = td.conf
 	G_async_queue_push(cnf.ready, 1)
 

@@ -48,9 +48,8 @@ func exec_this_command(bin string, c_arg []string, filename string) {
 
 }
 
-func process_exec_command(queue *GAsyncQueue, thread_id uint) {
-	_ = queue
-	defer exec_command_thread[thread_id].Thread.Done()
+func process_exec_command(a any) {
+	_ = a
 	var arguments = strings.Split(exec_command, " ")
 	var bin = arguments[0]
 	var c_arg []string

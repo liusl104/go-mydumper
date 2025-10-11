@@ -7,6 +7,8 @@ import (
 	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
+var Errors int
+
 type MYSQL_RES struct {
 	Result    *mysql.Result
 	Rows      chan []mysql.FieldValue
@@ -40,7 +42,7 @@ func Mysql_num_fields(res *MYSQL_RES) uint {
 func Mysql_error(conn *DBConnection) string {
 	return conn.Err.Error()
 }
-func Mysql_errno(conn *DBConnection) uint16 {
+func Mysql_errno(conn *DBConnection) int16 {
 	return conn.Code
 }
 func Mysql_ping(conn *DBConnection) bool {
@@ -82,9 +84,10 @@ func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 	var res *mysql.Result
 	var err error
 	var r *MYSQL_RES = init_result()
-	res, err = conn.Conn.Execute(conn.Query)
+	res, err = conn.Stmt.Execute()
 	if err != nil {
 		conn.Err = err
+		conn.Code = -1
 		return nil
 	}
 	r.Result = res
@@ -114,7 +117,7 @@ func mysql_use_result(conn *DBConnection) *MYSQL_RES {
 		defer func() {
 			close(res.Rows)
 		}()
-		err = conn.Conn.ExecuteSelectStreaming(conn.Query, &result, func(row []mysql.FieldValue) error {
+		err = conn.Stmt.ExecuteSelectStreaming(conn.Result, func(row []mysql.FieldValue) error {
 			select {
 			case <-res.IsClosed:
 				log.Debugf("mysql_use_result closed")
@@ -140,14 +143,15 @@ func newClientConnection() (*client.Conn, error) {
 	return cli, err
 }
 func Mysql_warning_count(conn *DBConnection) int {
-	return int(conn.Warning)
+	res, _ := conn.Conn.Execute("SHOW WARNINGS")
+	return len(res.Values)
 }
 func (d *DBConnection) Ping() error {
 	d.Err = d.Conn.Ping()
 	if d.Err != nil {
 		var myError *mysql.MyError
 		errors.As(d.Err, &myError)
-		d.Code = myError.Code
+		d.Code = int16(myError.Code)
 	} else {
 		d.Code = 0
 	}
@@ -173,7 +177,7 @@ func (d *DBConnection) UseDB(dbName string) bool {
 	if d.Err = d.Conn.UseDB(dbName); d.Err != nil {
 		var myError *mysql.MyError
 		errors.As(d.Err, &myError)
-		d.Code = myError.Code
+		d.Code = int16(myError.Code)
 		return false
 	}
 	d.Code = 0
@@ -193,7 +197,7 @@ func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Resul
 	if d.Err != nil {
 		var myError *mysql.MyError
 		errors.As(d.Err, &myError)
-		d.Code = myError.Code
+		d.Code = int16(myError.Code)
 	} else {
 		d.Code = 0
 	}
@@ -207,7 +211,6 @@ func Mysql_get_server_version() uint {
 }
 
 func M_store_result_row_free(mr *M_ROW) {
-	M_store_result_row_free(mr)
 	mr.Res = nil
 	mr.Row = nil
 }

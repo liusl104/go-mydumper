@@ -56,8 +56,8 @@ func stream_queue_push(dbt *db_table, filename string) {
 	metadata_partial_queue_push(dbt)
 }
 
-func process_stream(data any) {
-	defer stream_thread.Thread.Done()
+func process_stream(c any) {
+	_ = c
 	var f *os.File
 	var buf []byte = make([]byte, STREAM_BUFFER_SIZE)
 	var buflen int

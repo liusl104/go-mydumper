@@ -450,8 +450,8 @@ func table_job_enqueue(q *table_queuing) {
 	enqueue_shutdown(q)
 }
 
-func chunk_builder_thread(conf *Configuration) {
-	defer chunk_builder.Thread.Done()
+func chunk_builder_thread(c any) {
+	conf := c.(*Configuration)
 	table_job_enqueue(conf.non_transactional)
 	table_job_enqueue(conf.transactional)
 	return

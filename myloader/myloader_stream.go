@@ -46,5 +46,7 @@ func has_mydumper_suffix(line string) bool {
 		strings.HasPrefix(line, "metadata")
 }*/
 
-func process_stream(stream_conf *configuration) {
+func process_stream(c any) {
+	stream_conf := c.(*configuration)
+	_ = stream_conf
 }

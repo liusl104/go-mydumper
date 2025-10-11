@@ -47,8 +47,8 @@ func sync_threads(counter *int64, mutex *sync.Mutex) {
 	}
 }
 
-func worker_post_thread(td *thread_data, thread_id uint) {
-	defer post_threads[thread_id].Thread.Done()
+func worker_post_thread(c any) {
+	td := c.(*thread_data)
 	var cnf *configuration = td.conf
 
 	G_async_queue_push(conf.ready, 1)

@@ -121,14 +121,14 @@ func clear_dump_directory(directory string) error {
 
 	if err != nil {
 		log.Criticalf("cannot open directory %s, %v", directory, err)
-		errors++
+		Errors++
 		return err
 	}
 	defer dir.Close()
 	filename, err := dir.Readdirnames(-1)
 	if err != nil {
 		log.Criticalf("error removing file %s (%v)", directory, err)
-		errors++
+		Errors++
 		return err
 	}
 	for _, file := range filename {
@@ -136,7 +136,7 @@ func clear_dump_directory(directory string) error {
 		err = os.Remove(file_path)
 		if err != nil {
 			log.Criticalf("error removing file %s (%v)", file_path, err)
-			errors++
+			Errors++
 			return err
 		}
 	}
@@ -257,15 +257,15 @@ func determine_explain_columns(result *mysql.Result, rowscol *uint) {
 	}
 }
 
-func determine_charset_and_coll_columns_from_show(result *mysql.Result, charcol *uint, collcol *uint) {
+func determine_charset_and_coll_columns_from_show(result *MYSQL_RES, charcol *uint, collcol *uint) {
 	*charcol = 0
 	*collcol = 0
-	var fields []*mysql.Field = result.Fields
+	var fields []*mysql.Field = Mysql_fetch_fields(result)
 	var i uint
 	for i = 0; i < uint(len(fields)); i++ {
-		if string(fields[i].Name) == "character_set_client" {
+		if strings.EqualFold(string(fields[i].Name), "character_set_client") {
 			*charcol = i
-		} else if string(fields[i].Name) == "collation_connection" {
+		} else if strings.EqualFold(string(fields[i].Name), "collation_connection") {
 			*collcol = i
 		}
 	}
@@ -352,7 +352,7 @@ func is_empty_dir(directory string) bool {
 	dir, err := os.Stat(directory)
 	if err != nil {
 		log.Criticalf("cannot open directory %s, %v", directory, err)
-		errors++
+		Errors++
 		return false
 	}
 	if dir.IsDir() {

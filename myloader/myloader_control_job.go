@@ -180,7 +180,8 @@ func wake_threads_waiting(threads_waiting *uint) {
 		*threads_waiting = *threads_waiting - 1
 	}
 }
-func control_job_thread(conf *configuration) {
+func control_job_thread(c any) {
+	cnf := c.(*configuration)
 	var ft file_type
 	var rj *restore_job
 	var _num_threads uint = NumThreads
@@ -205,7 +206,7 @@ func control_job_thread(conf *configuration) {
 			wake_threads_waiting(&threads_waiting)
 			break
 		case REQUEST_DATA_JOB:
-			giveup = give_me_next_data_job_conf(conf, &rj)
+			giveup = give_me_next_data_job_conf(cnf, &rj)
 			if rj != nil {
 				log.Tracef("job available in give_me_next_data_job_conf")
 				if rj.dbt != nil {
@@ -235,7 +236,7 @@ func control_job_thread(conf *configuration) {
 			}
 			break
 		case INTERMEDIATE_ENDED:
-			enqueue_indexes_if_possible(conf)
+			enqueue_indexes_if_possible(cnf)
 			all_jobs_are_enqueued = true
 			wake_threads_waiting(&threads_waiting)
 			break

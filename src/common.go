@@ -2,6 +2,7 @@ package mydumper
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -22,7 +23,7 @@ var (
 	Log_output                *os.File
 	Json                      bool
 	Logger                    *os.File
-	IgnoreErrorsList          []uint16
+	IgnoreErrorsList          []int16
 	Help                      bool
 	show_warnings             bool
 	No_delete                 bool
@@ -966,43 +967,56 @@ func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 f
 	if msg != "" && log_fun_1 != nil {
 		var c = fmt.Sprintf(msg, args...)
 		if log_fun_2 != nil && slices.Contains(IgnoreErrorsList, conn.Code) {
-			log_fun_2("%s - ERROR %d: %v", c, conn.Code, conn.Err)
+			log_fun_2("%s - ERROR %d: %v", c, Mysql_errno(conn), Mysql_error(conn))
 		} else {
-			if conn.Err != nil {
-				log_fun_1("%s - ERROR %d: %v", c, conn.Code, conn.Err)
+			if Mysql_errno(conn) != 0 {
+				log_fun_1("%s - ERROR %d: %s", c, Mysql_errno(conn), Mysql_error(conn))
+				Errors++
 			} else {
 				log_fun_1("%s", c)
 			}
 		}
 	}
 }
-func M_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
-	conn.Execute(query)
-	if conn.Err != nil {
-		if !slices.Contains(IgnoreErrorsList, conn.Code) {
-			var c = fmt.Sprintf(msg, args...)
-			log_fun("%s - ERROR %d: %v", c, conn.Code, conn.Err)
-			return false
-		}
+
+func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
+	conn.Query = query
+	res, err := conn.Conn.Execute(query)
+	if err == nil {
+		conn.Result = res
+		conn.Code = 0
+		conn.Err = nil
+		return true
+	} else {
+		var myerr *mysql.MyError
+		errors.As(err, &myerr)
+		conn.Code = int16(myerr.Code)
+		conn.Err = err
+		m_log(conn, log_fun_1, log_fun_2, msg, args...)
+	}
+	return false
+}
+func m_query(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
+	conn.Query = query
+	stmt, err := conn.Conn.Prepare(query)
+	if err == nil {
+		conn.Stmt = stmt
+		conn.Code = 0
+		conn.Err = nil
+		return false
+	} else {
+		var myerr *mysql.MyError
+		errors.As(err, &myerr)
+		conn.Code = int16(myerr.Code)
+		conn.Err = err
+		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
 	return true
 }
 
-func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
-	stmt, err := conn.Conn.Prepare(query)
-	// TODO: check if stmt is nil
-	if err != nil {
-		conn.Stmt = stmt
-		m_log(conn, log_fun_1, log_fun_2, msg, args...)
-		return true
-	}
-	conn.Err = err
-	return false
-}
-
-func m_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
+/*func m_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
 	return m_queryv(conn, query, log_fun, nil, msg, args...)
-}
+}*/
 
 // Executes the query, if there is an error it send critical stopping the process unless the error is ignored
 func M_query_warning(conn *DBConnection, query string, fmt string, args ...any) bool {
@@ -1027,7 +1041,7 @@ func M_query_verbose(conn *DBConnection, q string, log_fun func(fmt string, a ..
 }
 
 func m_resultv(m_result func(conn *DBConnection) *MYSQL_RES, conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
-	if m_queryv(conn, query, log_fun_1, log_fun_2, fmt, args...) {
+	if m_query(conn, query, log_fun_1, log_fun_2, fmt, args...) {
 		return nil
 	}
 	res := m_result(conn)
@@ -1069,14 +1083,14 @@ func M_store_result_single_row(conn *DBConnection, query string, fmt string, arg
 }
 
 func M_use_result(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
-	return m_resultv(mysql_use_result, conn, query, log_fun_1, nil, fmt, args)
+	return m_resultv(mysql_use_result, conn, query, log_fun_1, nil, fmt, args...)
 }
 func Execute_set_names(conn *DBConnection, _set_names string) {
 	var _set_names_statement = set_names_statement_template(_set_names)
 	M_query_warning(conn, _set_names_statement, "Not able to execute SET NAMES statement")
 
 }
-func M_thread_new(title string, f any, data any, error_text string) *GThread {
+func M_thread_new(title string, f func(any), data any, error_text string) *GThread {
 	var thread *GThread = G_thread_new(title, f, data, 0)
 	if thread == nil {
 		M_critical(error_text)
@@ -1084,6 +1098,7 @@ func M_thread_new(title string, f any, data any, error_text string) *GThread {
 	return thread
 }
 
-func Monitor_throttling_thread(queue *GAsyncQueue) {
-
+func Monitor_throttling_thread(c any) {
+	queue := c.(*GAsyncQueue)
+	_ = queue
 }

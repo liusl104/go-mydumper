@@ -73,20 +73,20 @@ func Detect_product(_ascii_version_comment, _ascii_version string) error {
 	if _ascii_version != "" {
 		ascii_version = strings.ToLower(_ascii_version)
 	}
-	if ascii_version_comment != "" {
+	if _ascii_version_comment != "" {
 		ascii_version_comment = strings.ToLower(_ascii_version_comment)
 	}
 
-	if strings.EqualFold(ascii_version, "percona") || strings.EqualFold(ascii_version_comment, "percona") {
+	if strings.Contains(ascii_version, "percona") || strings.Contains(ascii_version_comment, "percona") {
 		product = SERVER_TYPE_PERCONA
-	} else if strings.EqualFold(ascii_version, "mariadb") || strings.EqualFold(ascii_version_comment, "mariadb") {
+	} else if strings.Contains(ascii_version, "mariadb") || strings.Contains(ascii_version_comment, "mariadb") {
 		product = SERVER_TYPE_MARIADB
-	} else if strings.EqualFold(ascii_version, "tidb") || strings.EqualFold(ascii_version_comment, "tidb") {
+	} else if strings.Contains(ascii_version, "tidb") || strings.Contains(ascii_version_comment, "tidb") {
 		product = SERVER_TYPE_TIDB
-	} else if strings.EqualFold(ascii_version, "dolt") || strings.EqualFold(ascii_version_comment, "dolt") {
+	} else if strings.Contains(ascii_version, "dolt") || strings.Contains(ascii_version_comment, "dolt") {
 		product = SERVER_TYPE_DOLT
-	} else if strings.EqualFold(ascii_version, "mysql") || strings.EqualFold(ascii_version_comment, "mysql") ||
-		strings.EqualFold(ascii_version, "source") || strings.EqualFold(ascii_version_comment, "source") {
+	} else if strings.Contains(ascii_version, "mysql") || strings.Contains(ascii_version_comment, "mysql") ||
+		strings.Contains(ascii_version, "source") || strings.Contains(ascii_version_comment, "source") {
 		product = SERVER_TYPE_MYSQL
 	}
 	return nil

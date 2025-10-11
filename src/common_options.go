@@ -165,7 +165,7 @@ func Common_arguments_callback() bool {
 		var tmp_ignore_errors_list = strings.Split(IgnoreErrors, ",")
 		for _, errCode := range tmp_ignore_errors_list {
 			code, _ := strconv.Atoi(strings.TrimSpace(errCode))
-			IgnoreErrorsList = append(IgnoreErrorsList, uint16(code))
+			IgnoreErrorsList = append(IgnoreErrorsList, int16(code))
 		}
 	}
 	if SourceDataStr != "" {

@@ -413,8 +413,8 @@ func is_disk_space_ok(val uint) bool {
 	return usage.Free/1024/1024 > uint64(val)
 }
 
-func monitor_disk_space_thread(queue *GAsyncQueue) {
-	defer disk_check_thread.Thread.Done()
+func monitor_disk_space_thread(c any) {
+	queue := c.(*GAsyncQueue)
 	var i uint
 	for i = 0; i < NumThreads; i++ {
 		pause_mutex_per_thread[i] = G_mutex_new()
@@ -467,7 +467,8 @@ func determine_columns_on_show_processlist(fields []*mysql.Field, num_fields uin
 	}
 }
 
-func monitor_ftwrl_thread(thread_id int64) {
+func monitor_ftwrl_thread(c any) {
+	thread_id := c.(int64)
 	var conn *DBConnection
 	var res *MYSQL_RES
 	conn = Mysql_init()
@@ -544,7 +545,8 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	return false
 }
 
-func signal_thread(conf *Configuration) {
+func signal_thread(c any) {
+	conf := c.(*Configuration)
 	defer sthread.Thread.Done()
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, os.Kill)
@@ -1128,7 +1130,7 @@ func StartDump(conf *Configuration) error {
 		Tables = Get_table_list(TablesList)
 	}
 	if TablesSkiplistFile != "" {
-		Read_tables_skiplist(TablesSkiplistFile, &errors)
+		Read_tables_skiplist(TablesSkiplistFile, &Errors)
 	}
 	InitializeRegex(PartitionRegex)
 

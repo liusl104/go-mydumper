@@ -22,7 +22,6 @@ var (
 	shutdown_triggered bool
 	dump_directory     string
 	output_directory   string
-	errors             int
 	DIRECTORY          string = "export"
 )
 
@@ -44,6 +43,15 @@ func parse_disk_limits() {
 
 func CommandDump() {
 	load_contex_entries()
+	if Help {
+		print_help()
+	}
+	if ProgramVersion {
+		Print_version(MYDUMPER)
+		if !Help {
+			os.Exit(EXIT_SUCCESS)
+		}
+	}
 	// Loading the defaults file:
 	Initialize_common_options(MYDUMPER)
 	if LoadData {
@@ -99,15 +107,6 @@ func CommandDump() {
 		Verbose = 4
 	}
 
-	if Help {
-		print_help()
-	}
-	if ProgramVersion {
-		Print_version(MYDUMPER)
-		if !Help {
-			os.Exit(EXIT_SUCCESS)
-		}
-	}
 	_ = Set_verbose()
 	log.Infof("MyDumper backup version: %s", VERSION)
 	Hide_password()
@@ -131,10 +130,10 @@ func CommandDump() {
 			_ = Log_output.Close()
 		}
 	}()
-	if errors == 0 {
+	if Errors == 0 {
 		log.Debugf("dump completed successfully")
 	} else {
-		log.Debugf("dump completed with %d errors", errors)
+		log.Debugf("dump completed with %d Errors", Errors)
 	}
 	return
 }

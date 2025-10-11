@@ -303,7 +303,8 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 	return int(r)
 }
 
-func restore_thread(conn *DBConnection) {
+func restore_thread(c any) {
+	conn := c.(*DBConnection)
 	var cd *connection_data = new_connection_data(conn)
 	var ir *statement
 	var query_counter uint

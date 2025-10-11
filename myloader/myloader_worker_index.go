@@ -46,7 +46,8 @@ func process_index(td *thread_data) bool {
 	return true
 }
 
-func worker_index_thread(td *thread_data) {
+func worker_index_thread(c any) {
+	td := c.(*thread_data)
 	var cnf = td.conf
 	init_connection_mutex.Lock()
 	init_connection_mutex.Unlock()

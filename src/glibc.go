@@ -139,14 +139,15 @@ func G_mutex_new() *sync.Mutex {
 
 type GThread struct {
 	Thread        *sync.WaitGroup
-	Func          any
+	Func          func(any)
 	Args          any
 	Name          string
 	Thread_id     int
 	thread_number int
 }
+type ThreadFunc func(data any)
 
-func G_thread_new(thread_name string, f any, data any, thread_id int) *GThread {
+func G_thread_new(thread_name string, f func(any), data any, thread_id int) *GThread {
 	var gtf = new(GThread)
 	gtf.Thread = new(sync.WaitGroup)
 	gtf.Name = thread_name
@@ -157,8 +158,11 @@ func G_thread_new(thread_name string, f any, data any, thread_id int) *GThread {
 		gtf.thread_number = 1
 		gtf.Thread.Add(1)
 	}
+	go func() {
+		defer gtf.Thread.Done()
+		gtf.Func(data)
+	}()
 	return gtf
-
 }
 func G_thread_join(t *GThread) {
 	t.Thread.Wait()

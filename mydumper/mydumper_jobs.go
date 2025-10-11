@@ -104,7 +104,7 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: Could not create output file %s (%v)", filename, err)
-		errors++
+		Errors++
 		return
 	}
 	query = get_tablespace_query()
@@ -124,7 +124,7 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 			row[1].AsString(), row[2].AsString())
 		if !write_data(outfile, statement) {
 			log.Criticalf("Could not write tablespace data for %s", row[0].AsString())
-			errors++
+			Errors++
 			return
 		}
 		G_string_set_size(statement, 0)
@@ -138,7 +138,7 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
-		errors++
+		Errors++
 		return
 	}
 	var statement = G_string_sized_new(StatementSize)
@@ -151,14 +151,14 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 	}
 	if mr.Row == nil || !strings.Contains(string(mr.Row[1].AsString()), Identifier_quote_character_str) {
 		log.Criticalf("Identifier quote [%s] not found when fetching %s", Identifier_quote_character_str, database.name)
-		errors++
+		Errors++
 	}
 	G_string_append(statement, string(mr.Row[1].AsString()))
 	G_string_append(statement, ";\n")
 
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write create database for %s", database.name)
-		errors++
+		Errors++
 	}
 	err = m_close(0, outfile, filename, 1, nil)
 	M_store_result_row_free(mr)
@@ -175,7 +175,7 @@ func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filenam
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
-		errors++
+		Errors++
 		return
 	}
 
@@ -191,7 +191,7 @@ func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filenam
 	}
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 		return
 	}
 	query = fmt.Sprintf("SHOW CREATE TABLE %s%s%s.%s%s%s", Identifier_quote_character, dbt.database.name, Identifier_quote_character, Identifier_quote_character, dbt.table, Identifier_quote_character)
@@ -221,7 +221,7 @@ func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filenam
 	if SkipIndexes || SkipConstraints {
 		if !write_data(outfile, create_table_statement) {
 			log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
-			errors++
+			Errors++
 		}
 		if !SkipIndexes {
 			write_data(outfile, alter_table_statement)
@@ -232,7 +232,7 @@ func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filenam
 	} else {
 		if !write_data(outfile, statement) {
 			log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
-			errors++
+			Errors++
 		}
 	}
 
@@ -255,14 +255,14 @@ func write_triggers_definition_into_file(conn *DBConnection, result *MYSQL_RES, 
 	initialize_sql_statement(statement)
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write triggers for %s", message)
-		errors++
+		Errors++
 		return
 	}
 	for row = Mysql_fetch_row(result); row != nil; row = Mysql_fetch_row(result) {
 		set_charset(statement, row[8].AsString(), row[9].AsString())
 		if !write_data(outfile, statement) {
 			log.Criticalf("Could not write triggers data for %s", message)
-			errors++
+			Errors++
 			return
 		}
 		G_string_set_size(statement, 0)
@@ -283,7 +283,7 @@ func write_triggers_definition_into_file(conn *DBConnection, result *MYSQL_RES, 
 			restore_charset(statement)
 			if !write_data(outfile, statement) {
 				log.Criticalf("Could not write triggers data for %s", message)
-				errors++
+				Errors++
 				return
 			}
 		}
@@ -301,7 +301,7 @@ func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *db_ta
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", dbt.database.name, filename, err)
-		errors++
+		Errors++
 		return
 	}
 	query = fmt.Sprintf("SHOW TRIGGERS FROM %s%s%s LIKE '%s'", Identifier_quote_character, dbt.database.name, Identifier_quote_character, dbt.table)
@@ -329,7 +329,7 @@ func write_triggers_definition_into_file_from_database(conn *DBConnection, datab
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
-		errors++
+		Errors++
 		return
 	}
 	query = fmt.Sprintf("SHOW TRIGGERS FROM %s%s%s", Identifier_quote_character, database.name, Identifier_quote_character)
@@ -355,19 +355,19 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	initialize_sql_statement(statement)
 	if !conn.UseDB(dbt.database.name) {
 		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, conn.Err)
-		errors++
+		Errors++
 		return
 	}
 	outfile, err = m_open(&tmp_table_filename, "w")
 	if outfile == nil {
 		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, nil)
-		errors++
+		Errors++
 		return
 	}
 
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 		return
 	}
 	query = fmt.Sprintf("SHOW FIELDS FROM %s%s%s.%s%s%s", Identifier_quote_character, dbt.database.name, Identifier_quote_character, Identifier_quote_character, dbt.table, Identifier_quote_character)
@@ -395,7 +395,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	}
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write view schema for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 	}
 	err = m_close(0, outfile, tmp_table_filename, 1, dbt)
 	G_string_set_size(statement, 0)
@@ -409,7 +409,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	outfile, err = m_open(&view_filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
-		errors++
+		Errors++
 		return
 	}
 	initialize_sql_statement(statement)
@@ -418,7 +418,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	G_string_append_printf(statement, "DROP VIEW IF EXISTS %s%s%s;\n", Identifier_quote_character, dbt.table, Identifier_quote_character)
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 		return
 	}
 	G_string_set_size(statement, 0)
@@ -432,7 +432,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	restore_charset(statement)
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 	}
 	err = m_close(0, outfile, view_filename, 1, dbt)
 	M_store_result_row_free(mr)
@@ -453,7 +453,7 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file (%v)", dbt.database.name, err)
-		errors++
+		Errors++
 		return
 	}
 
@@ -461,7 +461,7 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 	G_string_append_printf(statement, "DROP VIEW IF EXISTS %s%s%s;\n", Identifier_quote_character, dbt.table, Identifier_quote_character)
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema data for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 		return
 	}
 
@@ -480,7 +480,7 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 	G_string_append(statement, ";\n")
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
-		errors++
+		Errors++
 	}
 	M_store_result_row_free(mr)
 	query = fmt.Sprintf("SELECT next_not_cached_value FROM %s%s%s.%s%s%s", Identifier_quote_character, dbt.database.name, Identifier_quote_character, Identifier_quote_character, dbt.table, Identifier_quote_character)
@@ -490,7 +490,7 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 		G_string_printf(statement, "DO SETVAL(%s%s%s, %s, 0);\n", Identifier_quote_character, dbt.table, Identifier_quote_character, mr.Row[0].AsString())
 		if !write_data(outfile, statement) {
 			log.Criticalf("Could not write schema for %s.%s", dbt.database.name, dbt.table)
-			errors++
+			Errors++
 		}
 		err = m_close(0, outfile, filename, 1, dbt)
 		if checksum_filename {
@@ -504,55 +504,54 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 func write_routines_definition_into_file(conn *DBConnection, database *database, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
-	var result *mysql.Result
-	var result2 *mysql.Result
+	var result *MYSQL_RES
 	var splited_st []string
 	var err error
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: DB: %s Could not create output file %s (%v)", database.name, filename, err)
-		errors++
+		Errors++
 		return
 	}
 	var statement = G_string_sized_new(StatementSize)
-	var q = Identifier_quote_character
 	initialize_sql_statement(statement)
 	if !write_data(outfile, statement) {
 		log.Criticalf("Could not write %s", filename)
-		errors++
+		Errors++
+		return
+	}
+	if !write_data(outfile, statement) {
+		log.Criticalf("Could not write %s", filename)
+		Errors++
 		return
 	}
 	var charcol, collcol uint
 	if DumpRoutines {
+		var mr *M_ROW
 		G_assert(nroutines > 0)
 		var r uint
 		for r = 0; r < nroutines; r++ {
-			query = fmt.Sprintf("SHOW %s STATUS WHERE CAST(Db AS BINARY) = '%s'", routine_type[r], database.escaped)
-			result = conn.Execute(query)
-			if conn.Err != nil {
-				if SuccessOn1146 && conn.Code == 1146 {
-					log.Warnf("Error dumping functions from %s: %v", database.escaped, conn.Err)
-				} else {
-					log.Criticalf("Error dumping functions from %s: %v", database.escaped, conn.Err)
-					errors++
-				}
+			query = fmt.Sprintf("SHOW %s STATUS WHERE %s Db %s = '%s'", routine_type[r], case_sensitive_prefix, case_sensitive_suffix, database.escaped)
+			result = M_store_result_critical(conn, query, "Error dumping %s from %s", routine_type[r], database.name)
+			if result == nil {
 				return
 			}
 			determine_charset_and_coll_columns_from_show(result, &charcol, &collcol)
 
-			for _, row := range result.Values {
+			for row := Mysql_fetch_row(result); row != nil; row = Mysql_fetch_row(result) {
 				set_charset(statement, row[charcol].AsString(), row[collcol].AsString())
-				G_string_append_printf(statement, "DROP %s IF EXISTS %s%s%s;\n", routine_type[r], q, row[1].AsString(), q)
+				G_string_append_printf(statement, "DROP %s IF EXISTS %s%s%s;\n", routine_type[r], Identifier_quote_character, row[1].AsString(), Identifier_quote_character)
 				if !write_data(outfile, statement) {
 					log.Criticalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
-					errors++
+					Errors++
+					Mysql_free_result(result)
 					return
 				}
 				G_string_set_size(statement, 0)
-				query = fmt.Sprintf("SHOW CREATE %s %s%s%s.%s%s%s", routine_type[r], q, database.name, q, q, row[1].AsString(), q)
-				result2 = conn.Execute(query)
-				for _, row2 := range result2.Values {
-					G_string_printf(statement, string(row2[2].AsString()))
+				query = fmt.Sprintf("SHOW CREATE %s %s%s%s.%s%s%s", routine_type[r], Identifier_quote_character, database.name, Identifier_quote_character, Identifier_quote_character, row[1].AsString(), Identifier_quote_character)
+				mr = M_store_result_single_row(conn, query, "Failed to execute SHOW CREATE %s %s.%s %s", routine_type[r], database.name, row[1].AsString(), query)
+				if mr.Row != nil {
+					G_string_printf(statement, string(mr.Row[2].AsString()))
 					if SkipDefiner && strings.HasPrefix(statement.Str.String(), "CREATE") {
 						Remove_definer(statement)
 					}
@@ -562,10 +561,11 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 					restore_charset(statement)
 					if !write_data(outfile, statement) {
 						log.Criticalf("Could not write function data for %s.%s", database.name, row[1].AsString())
-						errors++
+						Errors++
 						return
 					}
 				}
+				M_store_result_row_free(mr)
 				G_string_set_size(statement, 0)
 			}
 		}
@@ -576,30 +576,25 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 	}
 
 	if DumpEvents {
-		query = fmt.Sprintf("SHOW EVENTS FROM %s%s%s", q, database.name, q)
-		result = conn.Execute(query)
-		if conn.Err != nil {
-			if SuccessOn1146 && conn.Code == 1146 {
-				log.Warnf("Error dumping events from %s: %v", database.name, conn.Err)
-			} else {
-				log.Criticalf("Error dumping events from %s: %v", database.name, conn.Err)
-				errors++
-			}
+		query = fmt.Sprintf("SHOW EVENTS FROM %s%s%s", Identifier_quote_character, database.name, Identifier_quote_character)
+		result = M_store_result_critical(conn, query, "Error dumping events from %s", database.name)
+		if result == nil {
 			return
 		}
 		determine_charset_and_coll_columns_from_show(result, &charcol, &collcol)
-		for _, row := range result.Values {
+		for row := Mysql_fetch_row(result); row != nil; row = Mysql_fetch_row(result) {
 			set_charset(statement, row[charcol].AsString(), row[collcol].AsString())
-			G_string_append_printf(statement, "DROP EVENT IF EXISTS %s%s%s;\n", q, row[1].AsString(), q)
+			G_string_append_printf(statement, "DROP EVENT IF EXISTS %s%s%s;\n", Identifier_quote_character, row[1].AsString(), Identifier_quote_character)
 			if !write_data(outfile, statement) {
 				log.Criticalf("Could not write stored procedure data for %s.%s", database.name, row[1].AsString())
-				errors++
+				Errors++
+				Mysql_free_result(result)
 				return
 			}
-			query = fmt.Sprintf("SHOW CREATE EVENT %s%s%s.%s%s%s", q, database.name, q, q, row[1].AsString(), q)
-			result2 = conn.Execute(query)
-			for _, row2 := range result2.Values {
-				G_string_printf(statement, "%s", row2[3].AsString())
+			query = fmt.Sprintf("SHOW CREATE EVENT %s%s%s.%s%s%s", Identifier_quote_character, database.name, Identifier_quote_character, Identifier_quote_character, row[1].AsString(), Identifier_quote_character)
+			var mr = M_store_result_row(conn, query, M_critical, M_warning, "Failed to execute SHOW CREATE EVENT %s.%s", database.name, row[1].AsString())
+			if mr.Row != nil {
+				G_string_printf(statement, "%s", mr.Row[3].AsString())
 				if SkipDefiner && strings.HasPrefix(statement.Str.String(), "CREATE") {
 					Remove_definer(statement)
 				}
@@ -609,14 +604,18 @@ func write_routines_definition_into_file(conn *DBConnection, database *database,
 				restore_charset(statement)
 				if !write_data(outfile, statement) {
 					log.Criticalf("Could not write event data for %s.%s", database.name, row[1].AsString())
-					errors++
-					return
+					Errors++
+					M_store_result_row_free(mr)
+					goto clean
 				}
 			}
+			M_store_result_row_free(mr)
 			G_string_set_size(statement, 0)
 		}
 	}
+clean:
 	err = m_close(0, outfile, filename, 1, nil)
+	G_string_free(statement, true)
 	return
 }
 

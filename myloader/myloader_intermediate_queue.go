@@ -153,7 +153,8 @@ func remove_fifo_file(fifo_name string) {
 
 }
 
-func intermediate_thread() {
+func intermediate_thread(c any) {
+	_ = c
 	var iflnm *intermediate_filename
 	start_intermediate_thread.Lock()
 	for {
