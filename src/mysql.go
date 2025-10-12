@@ -103,11 +103,11 @@ func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 	}
 	r.Result = res
 	go func() {
-		for _, val := range res.Values {
+		for _, row := range res.Values {
 			select {
 			default:
 				r.RecNumber++
-				r.Rows <- val
+				r.Rows <- row
 			}
 		}
 		r.IsDone = true
@@ -122,13 +122,31 @@ func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 	var err error
 	go func() {
 		err = conn.Stmt.ExecuteSelectStreaming(res.Result, func(row []mysql.FieldValue) error {
+			res.RecNumber++
+			rowCopy := make([]mysql.FieldValue, len(row))
+			// 这里是浅拷贝
+			copy(rowCopy, row)
+			// 清空数据，防止后续修改数据，主要原因是ExecuteSelectStreaming底层是通过指针传递的
+			for i := 0; i < len(row); i++ {
+				row[i] = mysql.FieldValue{}
+			}
+			res.Rows <- rowCopy
+			return nil
+		}, nil)
+		// res.Result, err = conn.Stmt.Execute()
+		if err != nil {
+			conn.Err = err
+			conn.Code = -1
+			return
+		}
+		/*for _, row := range res.Result.Values {
 			select {
 			default:
 				res.RecNumber++
 				res.Rows <- row
-				return err
 			}
-		}, nil)
+		}*/
+
 		close(res.Rows)
 		res.IsDone = true
 		return

@@ -7,14 +7,13 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"time"
 )
 
 func set_format(isJson bool) {
 	if isJson {
 		if log.IsLevelEnabled(log.DebugLevel) {
 			log.SetFormatter(&log.JSONFormatter{
-				TimestampFormat:   time.DateTime,
+				TimestampFormat:   "2006-01-02 15:04:05.000",
 				DisableTimestamp:  false,
 				DisableHTMLEscape: true,
 				CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
@@ -25,7 +24,7 @@ func set_format(isJson bool) {
 			})
 		} else {
 			log.SetFormatter(&log.JSONFormatter{
-				TimestampFormat:   time.DateTime,
+				TimestampFormat:   "2006-01-02 15:04:05.000",
 				DisableTimestamp:  false,
 				DisableHTMLEscape: true,
 			})
@@ -75,7 +74,7 @@ func Set_verbose() error {
 		log.SetFormatter(&log.TextFormatter{
 			DisableColors:   true,
 			FullTimestamp:   true,
-			TimestampFormat: time.DateTime,
+			TimestampFormat: "2006-01-02 15:04:05.000",
 			CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
 				fileName := path.Base(frame.File)
 				fileNameLine := fmt.Sprintf("%s:%d", fileName, frame.Line)
@@ -86,7 +85,7 @@ func Set_verbose() error {
 		log.SetFormatter(&log.TextFormatter{
 			DisableColors:   true,
 			FullTimestamp:   true,
-			TimestampFormat: time.DateTime,
+			TimestampFormat: "2006-01-02 15:04:05.000",
 		})
 	}
 	set_format(Json)

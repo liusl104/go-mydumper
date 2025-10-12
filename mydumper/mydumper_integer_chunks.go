@@ -68,7 +68,7 @@ func initialize_integer_step_item(csi *chunk_step_item, include_null bool, prefi
 	csi.chunk_functions.process = process_integer_chunk
 	csi.chunk_functions.free = free_integer_step_item
 	csi.chunk_functions.get_next = get_next_integer_chunk
-	csi.where = nil
+	csi.where = G_string_new("")
 	csi.include_null = include_null
 	csi.prefix = prefix
 	csi.field = field
@@ -220,7 +220,13 @@ func clone_chunk_step_item(csi *chunk_step_item) *chunk_step_item {
 func get_next_integer_chunk(dbt *db_table) *chunk_step_item {
 	var csi, new_csi, new_csi_next *chunk_step_item
 	if dbt.chunks != nil {
-		csi = G_async_queue_try_pop(dbt.chunks_queue).(*chunk_step_item)
+		task := G_async_queue_try_pop(dbt.chunks_queue)
+		if task == nil {
+			csi = nil
+		} else {
+			csi = task.(*chunk_step_item)
+		}
+
 	}
 	for csi != nil {
 		csi.mutex.Lock()
@@ -323,7 +329,12 @@ func get_next_integer_chunk(dbt *db_table) *chunk_step_item {
 		}
 	end:
 		csi.mutex.Unlock()
-		csi = G_async_queue_try_pop(dbt.chunks_queue).(*chunk_step_item)
+		task := G_async_queue_try_pop(dbt.chunks_queue)
+		if task == nil {
+			csi = nil
+		} else {
+			csi = task.(*chunk_step_item)
+		}
 	}
 
 	return nil
@@ -785,12 +796,12 @@ update_min:
 }
 
 func process_integer_chunk(tj *table_job, csi *chunk_step_item) {
-	var td = tj.td
+	var jtd = tj.td
 	var dbt = tj.dbt
 	var cs *chunk_step = csi.chunk_step
 	G_string_set_size(tj.where, 0)
 	if process_integer_chunk_step(tj, csi) != 0 {
-		log.Infof("Thread %d: Job has been cacelled", td.thread_id)
+		log.Infof("Thread %d: Job has been cacelled", jtd.thread_id)
 		return
 	}
 	atomic.AddInt64(&dbt.chunks_completed, 1)
@@ -801,7 +812,7 @@ func process_integer_chunk(tj *table_job, csi *chunk_step_item) {
 		csi.mutex.Unlock()
 		G_string_set_size(tj.where, 0)
 		if process_integer_chunk_step(tj, csi) != 0 {
-			log.Infof("Thread %d: Job has been cacelled", td.thread_id)
+			log.Infof("Thread %d: Job has been cacelled", jtd.thread_id)
 			return
 		}
 		atomic.AddInt64(&dbt.chunks_completed, 1)

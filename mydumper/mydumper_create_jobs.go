@@ -192,7 +192,7 @@ func new_table_job(dbt *db_table, partition string, part uint64, chunk_step_item
 	tj.st_in_file = 0
 	tj.filesize = 0
 	tj.child_process = 0
-	tj.where = nil
+	tj.where = G_string_new("")
 	tj.num_rows_of_last_run = 0
 	update_estimated_remaining_chunks_on_dbt(tj.dbt)
 	return tj

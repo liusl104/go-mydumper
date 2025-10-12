@@ -78,23 +78,35 @@ func new_none_chunk_step() *chunk_step_item {
 func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint, rows uint64, prefix *GString) *chunk_step_item {
 	var csi *chunk_step_item
 	var query, cache string
-	var field = dbt.primary_key[position]
+	var field string
+	if dbt.primary_key != nil || len(dbt.primary_key) > 0 {
+		field = dbt.primary_key[position]
+	} else {
+		field = "(NULL)"
+	}
 	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
 	var where_option, where_option_prefix string
+	var prefix_option, prefix_option_prefix string
 	if WhereOption != "" || prefix != nil {
 		where_option = "WHERE"
-		where_option_prefix = "AND"
+	}
+	if WhereOption != "" {
+		where_option_prefix = WhereOption
+	}
+	if prefix != nil && prefix.Len > 0 {
+		prefix_option = "AND"
+		prefix_option_prefix = prefix.Str.String()
 	}
 	query = fmt.Sprintf("SELECT %s MIN(%s%s%s),MAX(%s%s%s),LEFT(MIN(%s%s%s),1),LEFT(MAX(%s%s%s),1) FROM %s%s%s.%s%s%s %s %s %s %s",
 		cache,
 		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
-		where_option, WhereOption, where_option_prefix, prefix.Str.String())
-	var mr *M_ROW = M_store_result_row(conn, query, M_message, nil, "")
-	if mr.Res == nil || mr.Row != nil {
+		where_option, where_option_prefix, prefix_option, prefix_option_prefix)
+	var mr *M_ROW = M_store_result_row(conn, query, M_message, nil, "It is NONE with minmax == NULL")
+	if mr.Res == nil || mr.Row == nil {
 		M_store_result_row_free(mr)
 		return new_none_chunk_step()
 	}
@@ -247,7 +259,7 @@ func get_rows_from_count(conn *DBConnection, dbt *db_table, where *GString) uint
 		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
 		whereKey, whereOpt)
 	var mr *M_ROW = M_store_result_row(conn, query, M_critical, M_warning, "Failed to get count")
-	if mr.Res == nil || mr.Row != nil || mr.Row[0].Value() == nil {
+	if mr.Res == nil || mr.Row == nil || mr.Row[0].Value() == nil {
 		M_store_result_row_free(mr)
 		return 0
 	}
@@ -353,11 +365,10 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_i
 					iter = iter.Next()
 					continue
 				} else {
-					// TODO
 					// If there is no more chunks on this table, we remove it from the list, and continue with the next table
+					dbt_list.list.Remove(iter)
 					iter = iter.Next()
 					// Assign iter previous removing dbt from list is important as we might break the list
-					dbt_list.list.Remove(iter)
 					dbt.chunks_mutex.Unlock()
 					continue
 				}

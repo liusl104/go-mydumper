@@ -52,6 +52,7 @@ func G_string_append_b(s *GString, b []byte) {
 	s.Len = s.Str.Len()
 }
 func G_string_set_size(s *GString, size int) {
+
 	if size == 0 {
 		s.Str.Reset()
 		s.Len = 0

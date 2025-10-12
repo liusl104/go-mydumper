@@ -945,7 +945,7 @@ func print_dbt_on_metadata(mdfile *os.File, dbt *db_table) {
 	var data *GString = G_string_sized_new(100)
 	print_dbt_on_metadata_gstring(dbt, data)
 	fmt.Fprintf(mdfile, data.Str.String())
-	mdfile.Sync()
+	// mdfile.Sync()
 	if CheckRowCount && !dbt.object_to_export.No_data && (dbt.rows != dbt.rows_total) {
 		log.Criticalf("Row count mismatch found for %s.%s: got %d of %d expected", dbt.database.name, dbt.table, dbt.rows, dbt.rows_total)
 	}

@@ -623,7 +623,7 @@ func StringToByte(s string) byte {
 
 func write_load_data_column_into_string(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, buffers *thread_data_buffers) {
 	_ = conn
-	if column.Value() != nil {
+	if column.Value() == nil {
 		G_string_append(buffers.column, "\\N")
 	} else if is_hex_blob(field) {
 		G_string_set_size(buffers.escaped, int(length.ColumnLength*2+1))
@@ -656,7 +656,8 @@ func write_sql_column_into_string(conn *DBConnection, column mysql.FieldValue, f
 		G_string_append(buffers.column, buffers.escaped.Str.String())
 	} else {
 		G_string_set_size(buffers.escaped, int(length.ColumnLength*2+1))
-		G_string_append(buffers.escaped, mysql.Escape(string(column.AsString())))
+		columnStr := string(column.AsString())
+		G_string_append(buffers.escaped, mysql.Escape(columnStr))
 		if field.Type == mysql.MYSQL_TYPE_JSON {
 			G_string_append(buffers.column, "CONVERT(")
 		}
@@ -914,19 +915,19 @@ func write_table_job_into_file(tj *table_job) {
 	} else {
 		fields = "*"
 	}
-	if tj.where != nil || WhereOption != "" || tj.dbt.where != "" {
+	if tj.where.Len > 0 || WhereOption != "" || tj.dbt.where != "" {
 		where1 = "WHERE"
 	}
-	if tj.where != nil {
+	if tj.where.Len > 0 {
 		where_option1 = tj.where.Str.String()
 	}
-	if tj.where != nil && WhereOption != "" {
+	if tj.where.Len > 0 && WhereOption != "" {
 		where2 = "AND"
 	}
 	if WhereOption != "" {
 		where_option2 = WhereOption
 	}
-	if (tj.where != nil || WhereOption != "") && tj.dbt.where != "" {
+	if (tj.where.Len > 0 || WhereOption != "") && tj.dbt.where != "" {
 		where3 = "AND"
 	}
 	if tj.dbt.where != "" {

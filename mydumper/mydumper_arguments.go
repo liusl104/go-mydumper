@@ -56,7 +56,7 @@ func entries() {
 	pflag.BoolVar(&ClearDumpDir, "clear", false, "Clear output directory before dumping")
 	pflag.BoolVar(&DirtyDumpDir, "dirty", false, "Overwrite output directory without clearing (beware of leftower chunks)")
 	pflag.BoolVar(&MergeDumpDir, "merge", false, "Merge the metadata with previous backup and overwrite output directory without clearing (beware of leftower chunks)")
-	pflag.UintVarP(&BufferSize, "buffer-size", "b", 200000, "Queue buffer size")
+	pflag.UintVarP(&BufferSize, "buffer-size", "b", 1000, "Queue buffer size")
 	pflag.StringVarP(&LogFile, "logfile", "L", "", "Log file name to use, by default stdout is used")
 	pflag.StringVar(&DiskLimits, "disk-limits", "", "Set the limit to pause and resume if determines there is no enough disk space.\nAccepts values like: '<resume>:<pause>' in MB.\nFor instance: 100:500 will pause when there is only 100MB free and will\nresume if 500MB are available")
 	pflag.BoolVar(&masquerade_filename, "masquerade-filename", false, "Masquerades the filenames")
@@ -141,7 +141,7 @@ func checksum_entries() {
 func filter_entries() {
 	// filter
 	pflag.StringVarP(&DB, "database", "B", "", "Comma delimited list of databases to dump")
-	pflag.StringVarP(&IgnoreEnginesStr, "ignore_engines-engines", "i", "", "Comma delimited list of storage engines to ignore_engines")
+	pflag.StringVarP(&IgnoreEnginesStr, "ignore-engines-engines", "i", "", "Comma delimited list of storage engines to ignore_engines")
 	pflag.StringVar(&WhereOption, "where", "", "Dump only selected records.")
 	pflag.IntVarP(&UpdatedSince, "updated-since", "U", 0, "Use Update_time to dump only tables updated in the last U days")
 	pflag.StringVar(&PartitionRegex, "partition-regex", "", "Regex to filter by partition name.")
@@ -174,7 +174,7 @@ func statement_entries() {
 	pflag.StringVar(&LinesStartingByLd, "lines-starting-by", "", "Adds the string at the begining of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.")
 	pflag.StringVar(&LinesTerminatedByLd, "lines-terminated-by", "", "Adds the string at the end of each row. When --load-data is used it is added to the LOAD DATA statement. Its affects INSERT INTO statements also when it is used.")
 	pflag.StringVar(&StatementTerminatedByLd, "statement-terminated-by", "", "This might never be used, unless you know what are you doing")
-	pflag.BoolVar(&InsertIgnore, "insert-ignore_engines", false, "Dump rows with INSERT IGNORE")
+	pflag.BoolVar(&InsertIgnore, "insert-ignore", false, "Dump rows with INSERT IGNORE")
 	pflag.BoolVar(&Replace, "replace", false, "Dump rows with REPLACE")
 	pflag.BoolVar(&CompleteInsert, "complete-insert", false, "Use complete INSERT statements that include column names")
 	pflag.BoolVar(&HexBlob, "hex-blob", false, "Dump binary columns using hexadecimal notation")
@@ -233,8 +233,6 @@ func arguments_callback() bool {
 	}
 	if RowsPerChunk != "" {
 		split_integer_tables = parse_rows_per_chunk(RowsPerChunk, &min_chunk_step_size, &starting_chunk_step_size, &max_chunk_step_size, "Invalid option on --rows")
-		log.Criticalf("Invalid option on --rows")
-		return false
 	}
 	if OutputFormat != "" {
 		if strings.EqualFold(OutputFormat, INSERT_ARG) {

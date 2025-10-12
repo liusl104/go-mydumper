@@ -154,7 +154,7 @@ func arguments_callback() bool {
 
 func entries() {
 	pflag.BoolVarP(&Help, "help", "?", false, "Show help options")
-	pflag.UintVarP(&BufferSize, "buffer-size", "b", 200000, "Queue buffer size")
+	pflag.UintVarP(&BufferSize, "buffer-size", "b", 1000, "Queue buffer size")
 	pflag.StringVarP(&InputDirectory, "directory", "d", "", "Directory of the dump to import")
 	pflag.StringVar(&FifoDirectory, "fifodir", "", "Directory where the FIFO files will be created when needed. Default: Same as backup")
 	pflag.StringVarP(&LogFile, "logfile", "L", "", "Log file name to use, by default stdout is used")
