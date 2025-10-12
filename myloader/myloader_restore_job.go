@@ -67,7 +67,7 @@ type schema_restore_job struct {
 }
 
 func initialize_restore_job(pm_str string) {
-	file_list_to_do = G_async_queue_new(BufferSize)
+	file_list_to_do = G_async_queue_new()
 	single_threaded_create_table = G_mutex_new()
 	progress_mutex = G_mutex_new()
 	shutdown_triggered_mutex = G_mutex_new()
@@ -388,7 +388,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 			}
 		}
 		if cnf.pause_resume == nil {
-			cnf.pause_resume = G_async_queue_new(BufferSize)
+			cnf.pause_resume = G_async_queue_new()
 		}
 		queue = cnf.pause_resume
 		for i = 0; i < NumThreads; i++ {

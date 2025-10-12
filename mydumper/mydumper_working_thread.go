@@ -89,10 +89,10 @@ func initialize_working_thread() {
 	}
 	character_set_hash = make(map[string]string)
 	character_set_hash_mutex = G_mutex_new()
-	transactional_table = new(MList)
-	non_transactional_table = new(MList)
-	transactional_table.list = nil
-	non_transactional_table.list = nil
+	transactional_table = NewMList()
+	non_transactional_table = NewMList()
+	// transactional_table.list = nil
+	// non_transactional_table.list = nil
 	non_transactional_table.mutex = G_mutex_new()
 	transactional_table.mutex = G_mutex_new()
 
@@ -115,7 +115,8 @@ func initialize_working_thread() {
 	}
 }
 
-func start_working_thread(conf *Configuration) {
+func start_working_thread(c any) {
+	conf := c.(*Configuration)
 	var n uint
 	threads = make([]*GThread, NumThreads)
 	td = make([]*thread_data, NumThreads) // thread_data
@@ -239,11 +240,11 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *Configuration
 		if result == nil {
 			return
 		}
-		var ecol int = -1
-		var ccol int = -1
-		var collcol int = -1
-		var rowscol int = 0
-		determine_show_table_status_columns(result.Result, &ecol, &ccol, &collcol, &rowscol)
+		var ecol uint = 0
+		var ccol uint = 0
+		var collcol uint = 0
+		var rowscol uint = 0
+		determine_show_table_status_columns(result, &ecol, &ccol, &collcol, &rowscol)
 		var db *database
 		if get_database(conn, dt[0], &db) {
 			if !db.already_dumped {
@@ -262,9 +263,11 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *Configuration
 				break
 			}
 			var is_view, is_sequence bool
-			if (Get_product() == SERVER_TYPE_MYSQL || Get_product() == SERVER_TYPE_MARIADB || Get_product() == SERVER_TYPE_DOLT) &&
-				row[ecol].Value == nil &&
-				(row[ccol].Value() != nil || strings.EqualFold(string(row[ccol].AsString()), "VIEW")) {
+			if (Get_product() == SERVER_TYPE_MYSQL ||
+				Get_product() == SERVER_TYPE_MARIADB ||
+				Get_product() == SERVER_TYPE_DOLT) &&
+				(row[ecol].Value() == nil) &&
+				(row[ccol].Value() == nil || strings.EqualFold(string(row[ccol].AsString()), "VIEW")) {
 				is_view = true
 			}
 			if (Detected_server == SERVER_TYPE_MARIADB) && (row[ccol].Value() == nil || strings.EqualFold(string(row[ccol].AsString()), "SEQUENCE")) {
@@ -661,7 +664,7 @@ func process_job(td *thread_data, job *job) bool {
 		return false
 
 	default:
-		log.Error("Something very bad happened! %v", job.types)
+		log.Errorf("Something very bad happened! %v", job.types)
 	}
 	return true
 }
@@ -852,7 +855,7 @@ func new_table_to_dump(conn *DBConnection, conf *Configuration, is_view bool, is
 				create_job_to_dump_triggers(conn, dbt, conf)
 			}
 			if !NoData && !dbt.object_to_export.No_data {
-				if ecol != "" && strings.EqualFold(ecol, "MRG_MYISAM") {
+				if ecol != "" && !strings.EqualFold(ecol, "MRG_MYISAM") {
 					if DataChecksums && !(Get_major() == 5 && Get_secondary() == 7 && dbt.has_json_fields) {
 						create_job_to_dump_checksum(dbt, conf)
 					}
@@ -957,12 +960,12 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 		return
 	}
 
-	var ecol int = -1
-	var ccol int = -1
-	var collcol int = -1
-	var rowscol int = 0
+	var ecol uint = 0
+	var ccol uint = 0
+	var collcol uint = 0
+	var rowscol uint = 0
 	var i = 0
-	determine_show_table_status_columns(result.Result, &ecol, &ccol, &collcol, &rowscol)
+	determine_show_table_status_columns(result, &ecol, &ccol, &collcol, &rowscol)
 	var row []mysql.FieldValue
 	for {
 		row = Mysql_fetch_row(result)

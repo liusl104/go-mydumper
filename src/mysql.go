@@ -5,6 +5,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/liusl104/go-mydumper/src/logrus"
+	"time"
 )
 
 var Errors int
@@ -13,7 +14,7 @@ type MYSQL_RES struct {
 	Result    *mysql.Result
 	Rows      chan []mysql.FieldValue
 	RecNumber int
-	IsClosed  chan struct{}
+	IsDone    bool
 }
 
 type M_ROW struct {
@@ -34,9 +35,25 @@ func Mysql_fetch_row(m *MYSQL_RES) []mysql.FieldValue {
 }
 
 func Mysql_fetch_fields(res *MYSQL_RES) []*mysql.Field {
+	for {
+		if res.RecNumber == 0 && !res.IsDone {
+			time.Sleep(1 * time.Millisecond)
+			continue
+		}
+		break
+
+	}
 	return res.Result.Fields
 }
 func Mysql_num_fields(res *MYSQL_RES) uint {
+	for {
+		if res.RecNumber == 0 && !res.IsDone {
+			time.Sleep(1 * time.Millisecond)
+			continue
+		}
+		break
+
+	}
 	return uint(res.Result.ColumnNumber())
 }
 func Mysql_error(conn *DBConnection) string {
@@ -59,13 +76,6 @@ func Mysql_free_result(m *MYSQL_RES) {
 		m.Result.Close()
 		m.Result = nil
 	}
-	if m.IsClosed != nil {
-		close(m.IsClosed)
-	}
-	if m.Rows != nil {
-		close(m.Rows)
-		m.Rows = nil
-	}
 
 }
 
@@ -74,12 +84,13 @@ func Mysql_real_query(conn *DBConnection, data string) *mysql.Result {
 }
 func init_result() *MYSQL_RES {
 	return &MYSQL_RES{
-		IsClosed: make(chan struct{}),
-		Rows:     make(chan []mysql.FieldValue),
+		Rows:      make(chan []mysql.FieldValue),
+		RecNumber: 0,
+		Result:    new(mysql.Result),
 	}
 }
 
-// mysql_store_result 一次性加载全部结果到客户端内存，适合小结果集，后续操作无需与服务器交互，速度快，但内存占用可能较高
+// Mysql_store_result 一次性加载全部结果到客户端内存，适合小结果集，后续操作无需与服务器交互，速度快，但内存占用可能较高
 func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 	var res *mysql.Result
 	var err error
@@ -92,46 +103,36 @@ func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 	}
 	r.Result = res
 	go func() {
-		defer func() {
-			close(r.Rows)
-		}()
 		for _, val := range res.Values {
 			select {
-			case <-r.IsClosed:
-				log.Debugf("mysql_store_result closed")
-				return
 			default:
+				r.RecNumber++
 				r.Rows <- val
 			}
 		}
+		r.IsDone = true
+		close(r.Rows)
 	}()
 	return r
 }
 
-// mysql_use_result 流式获取结果（逐行从服务器读取），内存占用低，但需保持连接，且必须尽快处理（否则会阻塞服务器），适合大结果集
-func mysql_use_result(conn *DBConnection) *MYSQL_RES {
+// Mysql_use_result 流式获取结果（逐行从服务器读取），内存占用低，但需保持连接，且必须尽快处理（否则会阻塞服务器），适合大结果集
+func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 	var res = init_result()
-	var result mysql.Result
 	var err error
 	go func() {
-		defer func() {
-			close(res.Rows)
-		}()
-		err = conn.Stmt.ExecuteSelectStreaming(conn.Result, func(row []mysql.FieldValue) error {
+		err = conn.Stmt.ExecuteSelectStreaming(res.Result, func(row []mysql.FieldValue) error {
 			select {
-			case <-res.IsClosed:
-				log.Debugf("mysql_use_result closed")
-				res.IsClosed = nil
-				return nil
 			default:
 				res.RecNumber++
 				res.Rows <- row
 				return err
 			}
 		}, nil)
+		close(res.Rows)
+		res.IsDone = true
 		return
 	}()
-	res.Result = &result
 	return res
 }
 

@@ -73,9 +73,9 @@ func m_close_file(thread_id uint, file *file_write, filename string, size float6
 				log.Debugf("Thread %d: File removed: %s", thread_id, filename)
 			}
 		}
-	} else {
+	} /*else {
 		M_critical("Trying to close %s with thread: %d", filename, thread_id)
-	}
+	}*/
 
 	return err
 }
@@ -247,7 +247,6 @@ func final_step_close_file(thread_id uint, filename string, f *fifo, size float6
 
 func close_file_thread(c any) {
 	_ = c
-	defer cft.Thread.Done()
 	var f *fifo
 	var err error
 	for {
@@ -295,8 +294,8 @@ func initialize_file_handler() {
 		m_open = m_open_file
 		m_close = m_close_file
 	}
-	available_pids = G_async_queue_new(BufferSize)
-	close_file_queue = G_async_queue_new(BufferSize)
+	available_pids = G_async_queue_new()
+	close_file_queue = G_async_queue_new()
 	var i uint = 0
 	for i = 0; i < NumThreads*2; i++ {
 		release_pid()

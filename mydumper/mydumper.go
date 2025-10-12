@@ -107,7 +107,6 @@ func CommandDump() {
 		Verbose = 4
 	}
 
-	_ = Set_verbose()
 	log.Infof("MyDumper backup version: %s", VERSION)
 	Hide_password()
 	Ask_password()

@@ -13,7 +13,7 @@ var (
 )
 
 func initialize_directory() {
-	metadata_sync_queue = G_async_queue_new(BufferSize)
+	metadata_sync_queue = G_async_queue_new()
 }
 func wait_directory_to_process_metadata() {
 	G_async_queue_pop(metadata_sync_queue)

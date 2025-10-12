@@ -298,8 +298,8 @@ func new_database(db_name string, filename string) *database {
 	}
 	d.filename = filename
 	d.mutex = G_mutex_new()
-	d.sequence_queue = G_async_queue_new(BufferSize)
-	d.queue = G_async_queue_new(BufferSize)
+	d.sequence_queue = G_async_queue_new()
+	d.queue = G_async_queue_new()
 	d.schema_state = NOT_FOUND
 	d.schema_checksum = ""
 	d.post_checksum = ""

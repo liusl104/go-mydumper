@@ -49,7 +49,6 @@ var (
 	ShowWarnings                bool
 	Resume                      bool
 	KillAtOnce                  bool
-	BufferSize                  uint
 	MaxThreadsForIndexCreation  uint = 4
 	MaxThreadsForPostCreation   uint = 1
 	MaxThreadsForSchemaCreation uint = 4

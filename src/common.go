@@ -28,6 +28,7 @@ var (
 	show_warnings             bool
 	No_delete                 bool
 	stream                    bool
+	BufferSize                uint
 	CheckRowCount             bool
 	IgnoreErrors              string
 	Stream_queue              *GAsyncQueue
@@ -149,16 +150,19 @@ func Initialize_hash_of_session_variables() map[string]string {
 }
 
 func Initialize_set_names() {
-	if SetNamesStr != "" {
-		if len(SetNamesStr) != 0 {
-			Set_names_statement = fmt.Sprintf("/*!40101 SET NAMES %s*/", SetNamesStr)
-		} else {
-			SetNamesStr = ""
-		}
-	} else {
-		SetNamesStr = "binary"
-		Set_names_statement = "/*!40101 SET NAMES binary*/"
+	if Set_names_in_conn_by_default == "" {
+		Set_names_in_conn_by_default = BINARY_CHARSET
 	}
+	if SetNamesInConnForSct == "" {
+		SetNamesInConnForSct = AUTO_CHARSET
+	}
+	if SetNamesInFileByDefault == "" {
+		SetNamesInFileByDefault = BINARY_CHARSET
+	}
+	if SetNamesInFileForSct == "" {
+		SetNamesInFileForSct = SetNamesInFileByDefault
+	}
+
 }
 func set_names_statement_template(_set_names string) string {
 	return fmt.Sprintf("/*!40101 SET NAMES %s*/", _set_names)
@@ -198,7 +202,17 @@ func generic_checksum(conn *DBConnection, database, table, query_template string
 	var r string
 	/* There should never be more than one Row */
 	if mr.Row != nil {
-		r = fmt.Sprintf("%s", mr.Row[column_number].Value())
+		switch mr.Row[column_number].Value().(type) {
+		case []byte:
+			r = fmt.Sprintf("%s", mr.Row[column_number].AsString())
+		case int64:
+			r = fmt.Sprintf("%d", mr.Row[column_number].AsInt64())
+		case uint64:
+			r = fmt.Sprintf("%d", mr.Row[column_number].AsUint64())
+		default:
+			r = fmt.Sprintf("%v", mr.Row[column_number].Value())
+		}
+
 	}
 	M_store_result_row_free(mr)
 	return r
@@ -460,10 +474,14 @@ func escape_tab_with(to []byte) {
 
 // Create_dir create directory
 func Create_dir(directory string) bool {
-	err := os.Mkdir(directory, 0750)
-	if err != nil {
-		M_critical("Unable to create `%s': %v", directory, err)
-		return false
+	if !Help {
+		err := os.Mkdir(directory, 0750)
+		isExist := os.IsExist(err)
+		if !isExist {
+			M_critical("Unable to create `%s': %v", directory, err)
+			return false
+		}
+		return true
 	}
 	return true
 }
@@ -583,18 +601,21 @@ func m_key_file_merge(b *ini.File, a *ini.File) {
 }
 
 func Initialize_common_options(group string) {
+	if len(OptimizeKeyEngines) == 0 {
+		OptimizeKeyEngines = []string{"InnoDB", "ROCKSDB"}
+	}
 	if DefaultsFile == "" {
 		if G_file_test(DEFAULTS_FILE) {
 			DefaultsFile = DEFAULTS_FILE
 		}
 	} else {
 		if !G_file_test(DefaultsFile) {
-			log.Fatalf("Default file %s not found", DefaultsFile)
+			log.Criticalf("Default file %s not found", DefaultsFile)
 		}
 	}
 	if DefaultsExtraFile != "" {
 		if !G_file_test(DefaultsExtraFile) {
-			log.Fatalf("Default extra file %s not found", DefaultsExtraFile)
+			log.Criticalf("Default extra file %s not found", DefaultsExtraFile)
 		}
 	} else {
 		if DefaultsFile == "" {
@@ -741,7 +762,7 @@ func Check_num_threads() {
 	// 如果线程数量小于最小线程数量，则记录警告并将其设置为最小线程数量
 	if NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", NumThreads, MIN_THREAD_COUNT)
-		NumThreads = MIN_THREAD_COUNT
+		// NumThreads = MIN_THREAD_COUNT
 	}
 }
 func M_message(msg string, args ...any) {
@@ -868,17 +889,17 @@ func Global_process_create_table_statement(statement *GString, create_table_stat
 	var fulltext_counter int
 	var i int
 	for i = 0; i < len(split_file); i++ {
-		if split_indexes && (strings.HasPrefix(split_file[i], "  KEY") ||
-			strings.HasPrefix(split_file[i], "  UNIQUE") ||
-			strings.HasPrefix(split_file[i], "  SPATIAL") ||
-			strings.HasPrefix(split_file[i], "  FULLTEXT") ||
-			strings.HasPrefix(split_file[i], "  INDEX")) {
-			if autoinc_column != "" && split_file[i] == autoinc_column {
+		if split_indexes && (strings.Contains(split_file[i], "  KEY") ||
+			strings.Contains(split_file[i], "  UNIQUE") ||
+			strings.Contains(split_file[i], "  SPATIAL") ||
+			strings.Contains(split_file[i], "  FULLTEXT") ||
+			strings.Contains(split_file[i], "  INDEX")) {
+			if autoinc_column != "" && strings.Contains(split_file[i], autoinc_column) {
 				G_string_append(create_table_statement, split_file[i])
 				G_string_append(create_table_statement, "\n")
 			} else {
 				flag |= IS_ALTER_TABLE_PRESENT
-				if strings.HasPrefix(split_file[i], "  FULLTEXT") {
+				if strings.Contains(split_file[i], "  FULLTEXT") {
 					fulltext_counter++
 				}
 				if fulltext_counter > 1 {
@@ -890,22 +911,25 @@ func Global_process_create_table_statement(statement *GString, create_table_stat
 				G_string_append(alter_table_statement, split_file[i])
 			}
 		} else {
-			if strings.HasPrefix(split_file[i], "  CONSTRAINT") {
+			if strings.Contains(split_file[i], "  CONSTRAINT") {
 				flag |= INCLUDE_CONSTRAINT
 				G_string_append(alter_table_constraint_statement, "\n ADD")
 				G_string_append(alter_table_constraint_statement, split_file[i])
 			} else {
-				if strings.HasPrefix(split_file[i], "AUTO_INCREMENT") {
+				if strings.Contains(split_file[i], "AUTO_INCREMENT") {
 					var autoinc_split = strings.SplitN(split_file[i], "`", 3)
+					if len(autoinc_split) < 2 {
+						autoinc_split = append(autoinc_split, "null")
+					}
 					autoinc_column = fmt.Sprintf("(`%s`", autoinc_split[1])
 				}
 				G_string_append(create_table_statement, split_file[i])
 				G_string_append(create_table_statement, "\n")
 			}
 		}
-		if strings.HasPrefix(split_file[i], "ENGINE=") {
+		if strings.Contains(split_file[i], "ENGINE=") {
 			for j := 0; j < len(OptimizeKeyEngines); j++ {
-				if strings.HasPrefix(split_file[i], OptimizeKeyEngines[j]) {
+				if strings.Contains(split_file[i], OptimizeKeyEngines[j]) {
 					flag |= IS_TRX_TABLE
 				}
 			}
@@ -990,7 +1014,9 @@ func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...
 	} else {
 		var myerr *mysql.MyError
 		errors.As(err, &myerr)
-		conn.Code = int16(myerr.Code)
+		if myerr != nil {
+			conn.Code = int16(myerr.Code)
+		}
 		conn.Err = err
 		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
@@ -1007,7 +1033,9 @@ func m_query(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...a
 	} else {
 		var myerr *mysql.MyError
 		errors.As(err, &myerr)
-		conn.Code = int16(myerr.Code)
+		if myerr != nil {
+			conn.Code = int16(myerr.Code)
+		}
 		conn.Err = err
 		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
@@ -1034,7 +1062,7 @@ func m_query_ext(conn *DBConnection, query string, log_fun_1 func(fmt string, a 
 
 func M_query_verbose(conn *DBConnection, q string, log_fun func(fmt string, a ...any), fmt string, args ...any) bool {
 	var res bool = m_queryv(conn, q, log_fun, nil, fmt, args...)
-	if !res {
+	if res {
 		log.Infof("%s: OK", q)
 	}
 	return res
@@ -1056,7 +1084,7 @@ func M_store_result_critical(conn *DBConnection, query string, fmt string, args 
 }
 
 func M_store_result(conn *DBConnection, query string, log_fun func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
-	return m_resultv(mysql_use_result, conn, query, log_fun, nil, fmt, args...)
+	return m_resultv(Mysql_use_result, conn, query, log_fun, nil, fmt, args...)
 }
 
 func M_store_result_row(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) *M_ROW {
@@ -1083,7 +1111,7 @@ func M_store_result_single_row(conn *DBConnection, query string, fmt string, arg
 }
 
 func M_use_result(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
-	return m_resultv(mysql_use_result, conn, query, log_fun_1, nil, fmt, args...)
+	return m_resultv(Mysql_use_result, conn, query, log_fun_1, nil, fmt, args...)
 }
 func Execute_set_names(conn *DBConnection, _set_names string) {
 	var _set_names_statement = set_names_statement_template(_set_names)
@@ -1099,6 +1127,9 @@ func M_thread_new(title string, f func(any), data any, error_text string) *GThre
 }
 
 func Monitor_throttling_thread(c any) {
+	if c == nil {
+		return
+	}
 	queue := c.(*GAsyncQueue)
 	_ = queue
 }

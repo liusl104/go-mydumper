@@ -66,7 +66,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 	}
 	cd.current_database = nil
 	cd.thread_id = Mysql_thread_id(cd.thrconn)
-	cd.ready = G_async_queue_new(BufferSize)
+	cd.ready = G_async_queue_new()
 	cd.queue = nil
 	cd.in_use = G_mutex_new()
 	log.Infof("Executing set session")
@@ -77,8 +77,8 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 
 func new_io_restore_result() *io_restore_result {
 	var iors *io_restore_result = new(io_restore_result)
-	iors.result = G_async_queue_new(BufferSize)
-	iors.restore = G_async_queue_new(BufferSize)
+	iors.result = G_async_queue_new()
+	iors.restore = G_async_queue_new()
 	return iors
 }
 func initialize_connection_pool(thrconn *DBConnection) {
@@ -88,9 +88,9 @@ func initialize_connection_pool(thrconn *DBConnection) {
 		restore_data_from_file = restore_data_from_mydumper_file
 	}
 	var n uint
-	connection_pool = G_async_queue_new(BufferSize)
-	restore_queues = G_async_queue_new(BufferSize)
-	free_results_queue = G_async_queue_new(BufferSize)
+	connection_pool = G_async_queue_new()
+	restore_queues = G_async_queue_new()
+	free_results_queue = G_async_queue_new()
 	var iors *io_restore_result
 	restore_threads = make([]*GThread, NumThreads)
 	for n = 0; n < NumThreads; n++ {

@@ -19,7 +19,7 @@ func initialize_worker_index(conf *configuration) {
 	init_connection_mutex = G_mutex_new()
 	index_threads = make([]*GThread, MaxThreadsForIndexCreation)
 	index_td = make([]*thread_data, MaxThreadsForIndexCreation)
-	innodb_optimize_keys_all_tables_queue = G_async_queue_new(BufferSize)
+	innodb_optimize_keys_all_tables_queue = G_async_queue_new()
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		index_td[n] = new(thread_data)
 		initialize_thread_data(index_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation, nil)

@@ -1,6 +1,7 @@
 package mydumper
 
 import (
+	"container/list"
 	"fmt"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	. "github.com/liusl104/go-mydumper/src"
@@ -241,12 +242,12 @@ func new_db_table(d **db_table, conn *DBConnection, conf *Configuration, databas
 		dbt.estimated_remaining_steps = 1
 		dbt.min = ""
 		dbt.max = ""
-		dbt.chunks = nil
+		dbt.chunks = new(list.List)
 		dbt.load_data_header = nil
 		dbt.load_data_suffix = nil
 		dbt.insert_statement = nil
 		dbt.chunks_mutex = G_mutex_new()
-		dbt.chunks_queue = G_async_queue_new(BufferSize)
+		dbt.chunks_queue = G_async_queue_new()
 		dbt.chunks_completed = 0
 		get_primary_key(conn, dbt, conf)
 		dbt.primary_key_separated_by_comma = ""

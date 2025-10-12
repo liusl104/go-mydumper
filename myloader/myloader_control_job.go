@@ -42,14 +42,15 @@ func cjt_resume() {
 	cjt_mutex.Lock()
 	cjt_paused = false
 	cjt_cond.Add(1)
+	defer cjt_cond.Done()
 	cjt_mutex.Unlock()
 }
 
 func initialize_control_job(conf *configuration) {
-	control_job_queue = G_async_queue_new(BufferSize)
-	data_job_queue = G_async_queue_new(BufferSize)
+	control_job_queue = G_async_queue_new()
+	data_job_queue = G_async_queue_new()
 	last_wait = int64(NumThreads)
-	data_queue = G_async_queue_new(BufferSize)
+	data_queue = G_async_queue_new()
 	cjt_mutex = G_mutex_new()
 	cjt_cond = new(sync.WaitGroup)
 	control_job_t = M_thread_new("myloader_ctr", control_job_thread, conf, "Control job thread could not be created")

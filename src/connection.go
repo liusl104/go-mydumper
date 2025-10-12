@@ -208,12 +208,12 @@ func Mysql_init() *DBConnection {
 func M_connect(conn *DBConnection) {
 	configure_connection(conn)
 	if !mysql_real_connect(conn, Hostname, Username, Password, "", Port, SocketPath) {
-		log.Fatalf("Error connection to database: %v", conn.Err)
+		log.Criticalf("Error connection to database: %v", conn.Err)
 	}
 
 	conn.Err = conn.Ping()
 	if conn.Err != nil {
-		log.Fatalf("Error connection to database: %v", conn.Err)
+		log.Criticalf("Error connection to database: %v", conn.Err)
 	}
 	print_connection_details_once()
 

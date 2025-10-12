@@ -192,6 +192,7 @@ func (logger *Logger) Fatalf(format string, args ...interface{}) {
 }
 func (logger *Logger) Criticalf(format string, args ...interface{}) {
 	logger.Logf(CriticalLevel, format, args...)
+	logger.Exit(1)
 }
 
 func (logger *Logger) Panicf(format string, args ...interface{}) {

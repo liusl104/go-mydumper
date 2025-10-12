@@ -6,6 +6,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
+	"math"
 	"path"
 	"strconv"
 	"strings"
@@ -119,24 +120,28 @@ func message_dumping_data_long(tj *table_job) {
 		partition_opt = " "
 		partition_val = tj.partition
 	}
-	if tj.where.Len > 0 || WhereOption != "" || tj.dbt.where != "" {
-		where_opt = " WHERE "
+	if tj.where != nil {
+		if tj.where.Len > 0 || WhereOption != "" || tj.dbt.where != "" {
+			where_opt = " WHERE "
+		}
+		if tj.where.Len > 0 {
+			where_val = tj.where.Str.String()
+		}
+		if tj.where.Len > 0 && WhereOption != "" {
+			where_and_opt = " AND "
+		}
+		if (tj.where.Len > 0 || WhereOption != "") && tj.dbt.where != "" {
+			where_and_opt_1 = " AND "
+		}
+		if tj.dbt.where != "" {
+			where_and_val_1 = tj.dbt.where
+		}
 	}
-	if tj.where.Len > 0 {
-		where_val = tj.where.Str.String()
-	}
-	if tj.where.Len > 0 && WhereOption != "" {
-		where_and_opt = " AND "
-	}
+
 	if WhereOption != "" {
 		where_and_val = WhereOption
 	}
-	if (tj.where.Len > 0 || WhereOption != "") && tj.dbt.where != "" {
-		where_and_opt_1 = " AND "
-	}
-	if tj.dbt.where != "" {
-		where_and_val_1 = tj.dbt.where
-	}
+
 	if OrderByPrimaryKey && tj.dbt.primary_key_separated_by_comma != "" {
 		order_by = " ORDER BY "
 		order_by_val = tj.dbt.primary_key_separated_by_comma
@@ -676,7 +681,7 @@ func write_column_into_string_with_terminated_by(conn *DBConnection, row mysql.F
 		if f.Is_pre {
 			write_column_into_string(conn, column, fields, rlength, buffers)
 			column = f.Fun_ptr(buffers.column.Str.String())
-			G_string_printf(buffers.column, "%s", column)
+			G_string_printf(buffers.column, "%s", column.AsString())
 		} else {
 			column = f.Fun_ptr(string(column.AsString()))
 			write_column_into_string(conn, column, fields, rlength, buffers)
@@ -684,6 +689,8 @@ func write_column_into_string_with_terminated_by(conn *DBConnection, row mysql.F
 	} else {
 		write_column_into_string(conn, column, fields, rlength, buffers)
 	}
+	G_string_append(buffers.row, buffers.column.Str.String())
+	G_string_append(buffers.row, terminated_by)
 }
 
 func write_row_into_string(conn *DBConnection, dbt *db_table, row []mysql.FieldValue, fields []*mysql.Field, lengths []*mysql.Field, num_fields uint, buffers *thread_data_buffers, write_column_into_string func(conn *DBConnection, column mysql.FieldValue, field *mysql.Field, length *mysql.Field, buffers *thread_data_buffers)) {
@@ -749,6 +756,7 @@ func reopen_files(tj *table_job) {
 	}
 }
 
+// write_result_into_file writes the result of a query into the appropriate file based on the table job settings and output format.
 func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job) {
 	var dbt *db_table = tj.dbt
 	var num_fields uint = Mysql_num_fields(result)
@@ -824,11 +832,7 @@ func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job
 	var from = time.Now()
 	var to time.Time
 	var diff float64
-	for {
-		row = Mysql_fetch_row(result)
-		if row == nil {
-			break
-		}
+	for row = Mysql_fetch_row(result); row != nil; row = Mysql_fetch_row(result) {
 		lengths = Mysql_fetch_fields(result)
 		num_rows++
 		write_row_into_string(conn, dbt, row, fields, lengths, num_fields, tj.td.thread_data_buffers, write_column_into_string)
@@ -861,6 +865,16 @@ func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job
 				return
 			}
 		}
+		if dbt.chunk_filesize != 0 && math.Ceil(tj.filesize/1024/1024) > float64(dbt.chunk_filesize) {
+			tj.sub_part++
+			reopen_files(tj)
+			if output_format == SQL_INSERT {
+				initialize_sql_statement(tj.td.thread_data_buffers.statement)
+				G_string_append(tj.td.thread_data_buffers.statement, dbt.insert_statement.Str.String())
+			}
+			tj.st_in_file = 0
+			tj.filesize = 0
+		}
 		if num_rows_st != 0 && (output_format == SQL_INSERT || output_format == CLICKHOUSE) {
 			G_string_append(tj.td.thread_data_buffers.statement, row_delimiter)
 		}
@@ -869,19 +883,20 @@ func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job
 			num_rows_st++
 		}
 		G_string_set_size(tj.td.thread_data_buffers.row, 0)
-		update_dbt_rows(dbt, &num_rows)
-		tj.num_rows_of_last_run += num_rows
-		if num_rows_st > 0 && tj.td.thread_data_buffers.statement.Len > 0 {
-			if output_format == SQL_INSERT || output_format == CLICKHOUSE {
-				G_string_append(tj.td.thread_data_buffers.statement, statement_terminated_by)
-			}
-			if !write_statement(tj.rows.file, &(tj.filesize), tj.td.thread_data_buffers.statement, dbt) {
-				log.Criticalf("Fail to write on %s", tj.rows.filename)
-				return
-			}
-			tj.st_in_file++
-		}
 	}
+	update_dbt_rows(dbt, &num_rows)
+	tj.num_rows_of_last_run += num_rows
+	if num_rows_st > 0 && tj.td.thread_data_buffers.statement.Len > 0 {
+		if output_format == SQL_INSERT || output_format == CLICKHOUSE {
+			G_string_append(tj.td.thread_data_buffers.statement, statement_terminated_by)
+		}
+		if !write_statement(tj.rows.file, &(tj.filesize), tj.td.thread_data_buffers.statement, dbt) {
+			log.Criticalf("Fail to write on %s", tj.rows.filename)
+			return
+		}
+		tj.st_in_file++
+	}
+
 	return
 }
 
@@ -949,6 +964,8 @@ func write_table_job_into_file(tj *table_job) {
 			goto cleanup
 		}
 	}
+	/* Poor man's data dump code */
+	write_result_into_file(conn, result, tj)
 	if Mysql_errno(conn) != 0 {
 		log.Criticalf("Thread %d: Could not read data from %s.%s to write on %s at byte %.0f: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table, tj.rows.filename, tj.filesize, Mysql_error(conn))
 		Errors++

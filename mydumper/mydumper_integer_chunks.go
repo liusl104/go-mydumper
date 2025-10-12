@@ -555,7 +555,7 @@ func process_integer_chunk_step(tj *table_job, csi *chunk_step_item) uint {
 			} else {
 				cs.integer_step.types.sign.cursor = cs.integer_step.types.sign.min + int64(integer_step_step) - 1
 			}
-			log.Tracef("Thread %d: I-Chunk 2: cs.integer_step.types.sign.cursor: %lld", td.thread_id, cs.integer_step.types.sign.cursor)
+			log.Tracef("Thread %d: I-Chunk 2: cs.integer_step.types.sign.cursor: %d", td.thread_id, cs.integer_step.types.sign.cursor)
 		}
 		update_where_on_integer_step(csi)
 		var rows uint64

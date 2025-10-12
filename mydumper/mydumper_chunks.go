@@ -38,8 +38,8 @@ var (
 )
 
 func initialize_chunk() {
-	give_me_another_transactional_chunk_step_queue = G_async_queue_new(BufferSize)
-	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new(BufferSize)
+	give_me_another_transactional_chunk_step_queue = G_async_queue_new()
+	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new()
 }
 func start_chunk_builder(conf *Configuration) {
 	if !NoData {
@@ -92,7 +92,7 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint
 		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 		Identifier_quote_character_str, field, Identifier_quote_character_str, Identifier_quote_character_str, field, Identifier_quote_character_str,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str, Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
-		where_option, WhereOption, where_option_prefix, prefix)
+		where_option, WhereOption, where_option_prefix, prefix.Str.String())
 	var mr *M_ROW = M_store_result_row(conn, query, M_message, nil, "")
 	if mr.Res == nil || mr.Row != nil {
 		M_store_result_row_free(mr)
@@ -197,12 +197,11 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint
 
 func get_rows_from_explain(conn *DBConnection, dbt *db_table, where *GString, field string) uint64 {
 	var query string
-	var res *mysql.Result
 	var cache string
 	if Is_mysql_like() {
 		cache = "/*!40001 SQL_NO_CACHE */"
 	}
-	var q, field_column, where_column string
+	var q, field_column, where_column, where_column_opt string
 	if field != "" {
 		q = Identifier_quote_character_str
 		field_column = field
@@ -211,18 +210,19 @@ func get_rows_from_explain(conn *DBConnection, dbt *db_table, where *GString, fi
 	}
 	if where != nil {
 		where_column = " WHERE "
+		where_column_opt = where.Str.String()
 	}
 	query = fmt.Sprintf("EXPLAIN SELECT %s %s%s%s FROM %s%s%s.%s%s%s%s%s", cache, q, field_column, q,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
-		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str, where_column, where.Str.String())
+		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str, where_column, where_column_opt)
 	log.Tracef("EXPLAIN: %s", query)
 	var mr *M_ROW = M_store_result_row(conn, query, M_critical, M_warning, "Failed to execute EXPLAIN: %s", query)
-	if mr.Res == nil || mr.Row != nil {
+	if mr.Res == nil || mr.Row == nil {
 		M_store_result_row_free(mr)
 		return 0
 	}
 	var row_col uint
-	determine_explain_columns(res, &row_col)
+	determine_explain_columns(mr.Res, &row_col)
 	if mr.Row[row_col].Value() == nil {
 		M_store_result_row_free(mr)
 		return 0
@@ -292,7 +292,6 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 }
 
 func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
-	dbt_list.mutex.Lock()
 	var iter *list.Element
 	var dbt *db_table
 	var are_there_jobs_defining bool

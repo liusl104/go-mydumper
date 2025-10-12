@@ -15,7 +15,7 @@ import (
 
 var (
 	Compact         bool
-	Compress        string
+	Compress        bool
 	headers         *GString
 	ref_table_mutex *sync.Mutex
 	ref_table       map[string]string
@@ -226,10 +226,10 @@ func m_replace_char_with_char(needle byte, repl byte, from []byte) string {
 	return string(from)
 }
 
-func determine_show_table_status_columns(result *mysql.Result, ecol *int, ccol *int, collcol *int, rowscol *int) {
-	var fields = result.Fields
-	var i int
-	for i = 0; i < len(fields); i++ {
+func determine_show_table_status_columns(result *MYSQL_RES, ecol *uint, ccol *uint, collcol *uint, rowscol *uint) {
+	var fields = Mysql_fetch_fields(result)
+	var i uint
+	for i = 0; i < Mysql_num_fields(result); i++ {
 		if strings.EqualFold(string(fields[i].Name), "Engine") {
 			*ecol = i
 		} else if strings.EqualFold(string(fields[i].Name), "Comment") {
@@ -245,8 +245,8 @@ func determine_show_table_status_columns(result *mysql.Result, ecol *int, ccol *
 	G_assert(*collcol > 0)
 }
 
-func determine_explain_columns(result *mysql.Result, rowscol *uint) {
-	var fields []*mysql.Field = result.Fields
+func determine_explain_columns(result *MYSQL_RES, rowscol *uint) {
+	var fields []*mysql.Field = Mysql_fetch_fields(result)
 	var i int
 	for i = 0; i < len(fields); i++ {
 		if strings.EqualFold(string(fields[i].Name), "rows") {

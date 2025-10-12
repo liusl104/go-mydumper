@@ -44,6 +44,7 @@ func init_regex(r **regexp.Regexp, str string) {
 }
 
 func InitializeRegex(partition_regex string) {
+	init_regex(&filename_re, filename_regex)
 	for _, l := range Regex_list {
 		var _re *regexp.Regexp
 		init_regex(&_re, l)

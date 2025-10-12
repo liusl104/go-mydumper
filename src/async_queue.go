@@ -61,9 +61,9 @@ func (a *GAsyncQueue) unref() {
 	}
 
 }
-func G_async_queue_new(buffer uint) *GAsyncQueue {
+func G_async_queue_new() *GAsyncQueue {
 	return &GAsyncQueue{
-		queue:  make(chan any, buffer),
+		queue:  make(chan any, BufferSize),
 		length: 0,
 		state:  0,
 	}
@@ -80,15 +80,11 @@ func G_async_queue_try_pop(a *GAsyncQueue) any {
 
 func G_async_queue_pop(a *GAsyncQueue) any {
 	// return a.pop()
-	var timeout = 5
 	for {
 		select {
 		case task := <-a.queue:
 			atomic.AddInt64(&a.length, -1)
 			return task
-		case <-time.After(time.Duration(timeout) * time.Second):
-			panic("G_async_queue_pop timeout")
-			return nil
 		}
 	}
 

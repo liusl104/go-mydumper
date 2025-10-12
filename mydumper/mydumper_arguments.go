@@ -33,7 +33,6 @@ const (
 
 var (
 	SyncThreadLockMode           string = "AUTO"
-	BufferSize                   uint
 	compress_method              string
 	split_integer_tables         bool   = true
 	output_format                int    = SQL_INSERT
@@ -72,7 +71,7 @@ func extra_entries() {
 	pflag.BoolVarP(&BuildEmptyFiles, "build_empty_files", "e", false, "Build dump files even if no data available from table")
 	pflag.BoolVar(&IgnoreGeneratedFields, "no-check-generated-fields", false, "Queries related to generated fields are not going to be executed. It will lead to restoration issues if you have generated columns")
 	pflag.BoolVar(&OrderByPrimaryKey, "order-by-primary", false, "Sort the data by Primary Key or Unique key if no primary key exists")
-	pflag.StringVarP(&Compress, "compress", "c", "", "Compress output files")
+	pflag.BoolVarP(&Compress, "compress", "c", false, "Compress output files")
 	pflag.BoolVar(&Compact, "compact", false, "Give less verbose output. Disables header/footer constructs.")
 	pflag.BoolVar(&UseDefer, "use-defer", false, "Use defer integer sharding until all non-integer PK tables processed (saves RSS for huge quantities of tables).")
 	pflag.BoolVar(&CheckRowCount, "check-row-count", false, "Run SELECT COUNT(*) and fail mydumper if dumped row count is different")
@@ -208,17 +207,23 @@ func load_contex_entries() {
 	Connection_arguments_callback()
 	Stream_arguments_callback()
 	arguments_callback()
+	_ = Set_verbose()
 }
 
 func arguments_callback() bool {
-	if Compress != "" {
-		if strings.EqualFold(Compress, GZIP) {
+	if Compress {
+		if Exec_command == "" {
 			compress_method = GZIP
-		} else if strings.EqualFold(Compress, ZSTD) {
-			compress_method = ZSTD
 		} else {
-			log.Fatalf("Unknown compression method %s", Compress)
+			if strings.EqualFold(Exec_command, GZIP) {
+				compress_method = GZIP
+			} else if strings.EqualFold(Exec_command, ZSTD) {
+				compress_method = ZSTD
+			} else {
+				log.Fatalf("Unknown compression method %s", Exec_command)
+			}
 		}
+
 	}
 	if RowsHard != "" {
 		parse_rows_per_chunk(RowsHard, &min_integer_chunk_step_size, &max_integer_chunk_step_size, &max_integer_chunk_step_size, "Invalid option on --rows-hard")

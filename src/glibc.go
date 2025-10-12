@@ -154,13 +154,10 @@ func G_thread_new(thread_name string, f func(any), data any, thread_id int) *GTh
 	gtf.Func = f
 	gtf.Args = data
 	gtf.Thread_id = thread_id
-	if thread_id >= 0 {
-		gtf.thread_number = 1
-		gtf.Thread.Add(1)
-	}
+	gtf.Thread.Add(1)
 	go func() {
-		defer gtf.Thread.Done()
 		gtf.Func(data)
+		gtf.Thread.Done()
 	}()
 	return gtf
 }

@@ -134,6 +134,10 @@ type MList struct {
 	mutex *sync.Mutex
 }
 
+func NewMList() *MList {
+	return &MList{list: list.New(), mutex: new(sync.Mutex)}
+}
+
 type job struct {
 	types    job_type
 	job_data any
@@ -468,14 +472,14 @@ func determine_columns_on_show_processlist(fields []*mysql.Field, num_fields uin
 }
 
 func monitor_ftwrl_thread(c any) {
-	thread_id := c.(int64)
+	thread_id := c.(uint32)
 	var conn *DBConnection
 	var res *MYSQL_RES
 	conn = Mysql_init()
 	M_connect(conn)
 	var query string
 	for !ftwrl_completed {
-		time.Sleep(time.Duration(ftwrl_max_wait_time) * time.Millisecond)
+		time.Sleep(time.Duration(ftwrl_max_wait_time) * time.Second)
 		res = M_store_result(conn, "SHOW PROCESSLIST", M_warning, "Could not check PROCESSLIST")
 		if res == nil {
 			break
@@ -485,7 +489,7 @@ func monitor_ftwrl_thread(c any) {
 			var info_col int = -1
 			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &id_col, nil, nil, nil, &info_col)
 			for row = Mysql_fetch_row(res); row != nil; row = Mysql_fetch_row(res) {
-				if row[id_col].AsInt64() == thread_id {
+				if row[id_col].AsInt64() == int64(thread_id) {
 					if strings.EqualFold(string(row[info_col].AsString()), FLUSH_TABLES_WITH_READ_LOCK) || strings.EqualFold(string(row[info_col].AsString()), FLUSH_NO_WRITE_TO_BINLOG_TABLES) {
 						query = fmt.Sprintf("KILL QUERY %d", row[id_col].AsInt64())
 						M_query_warning(conn, query, "Could not KILL slow query")
@@ -510,7 +514,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 			}
 		}
 		if user_data.(*Configuration).pause_resume == nil {
-			user_data.(*Configuration).pause_resume = G_async_queue_new(BufferSize)
+			user_data.(*Configuration).pause_resume = G_async_queue_new()
 		}
 		var queue = user_data.(*Configuration).pause_resume
 		if !DaemonMode {
@@ -547,7 +551,6 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 
 func signal_thread(c any) {
 	conf := c.(*Configuration)
-	defer sthread.Thread.Done()
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, os.Kill)
 	sig := <-signalChan
@@ -606,7 +609,7 @@ func detect_quote_character(conn *DBConnection) {
 func detect_sql_mode(conn *DBConnection) {
 	var query = "SELECT @@SQL_MODE"
 	var mr *M_ROW = M_store_result_single_row(conn, query, "Error getting SQL_MODE")
-	if mr.Res != nil || mr.Row == nil {
+	if mr.Res == nil || mr.Row == nil {
 		M_store_result_row_free(mr)
 		return
 	}
@@ -737,11 +740,7 @@ func long_query_wait(conn *DBConnection) {
 			var icol = -1
 			var ucol = -1
 			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &icol, &ucol, &ccol, &tcol, nil)
-			for {
-				row = Mysql_fetch_row(res)
-				if row == nil {
-					break
-				}
+			for row = Mysql_fetch_row(res); row != nil; row = Mysql_fetch_row(res) {
 				if row[ccol].Value() != nil && string(row[ccol].AsString()) != "Query" {
 					continue
 				}
@@ -813,16 +812,16 @@ func send_backup_stage_end(conn *DBConnection) {
 
 func send_flush_table_with_read_lock(conn *DBConnection) {
 	var id = conn.Conn.GetConnectionID()
-	M_thread_new("mon_ftwrl", monitor_ftwrl_thread, &id, "FTWRL monitor thread could not be created")
+	M_thread_new("mon_ftwrl", monitor_ftwrl_thread, id, "FTWRL monitor thread could not be created")
 	var i = 0
 try_FLUSH_NO_WRITE_TO_BINLOG_TABLES:
 	i++
-	if M_query_verbose(conn, FLUSH_NO_WRITE_TO_BINLOG_TABLES, M_warning, "Flush tables failed, we are continuing anyways") &&
+	if !M_query_verbose(conn, FLUSH_NO_WRITE_TO_BINLOG_TABLES, M_warning, "Flush tables failed, we are continuing anyways") &&
 		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
 		goto try_FLUSH_NO_WRITE_TO_BINLOG_TABLES
 	}
 try_FLUSH_TABLES_WITH_READ_LOCK:
-	if M_query_verbose(conn, FLUSH_TABLES_WITH_READ_LOCK, M_critical, "Couldn't acquire global lock, snapshots will not be consistent") &&
+	if !M_query_verbose(conn, FLUSH_TABLES_WITH_READ_LOCK, M_critical, "Couldn't acquire global lock, snapshots will not be consistent") &&
 		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
 		goto try_FLUSH_TABLES_WITH_READ_LOCK
 	}
@@ -1140,7 +1139,7 @@ func StartDump(conf *Configuration) error {
 	conf.use_any_index = "1"
 
 	if DiskLimits != "" {
-		conf.pause_resume = G_async_queue_new(BufferSize)
+		conf.pause_resume = G_async_queue_new()
 		disk_check_thread = M_thread_new("mon_disk", monitor_disk_space_thread, conf.pause_resume, "Monitor thread could not be created")
 	}
 	if Throttle_variable != "" {
@@ -1160,7 +1159,7 @@ func StartDump(conf *Configuration) error {
 			log.Criticalf("We were not able to rename metadata (%s) file to %s", metadata_filename, metadata_partial_filename)
 		}
 	}
-	mdfile, err = os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_APPEND, 0660)
+	mdfile, err = os.OpenFile(metadata_partial_filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0660)
 	if err != nil {
 		log.Criticalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
 	}
@@ -1295,33 +1294,33 @@ func StartDump(conf *Configuration) error {
 	}
 	log.Tracef("Initilizing the Configuration")
 
-	conf.initial_queue = G_async_queue_new(BufferSize)
-	conf.initial_completed_queue = G_async_queue_new(BufferSize)
-	conf.schema_queue = G_async_queue_new(BufferSize)
-	conf.post_data_queue = G_async_queue_new(BufferSize)
+	conf.initial_queue = G_async_queue_new()
+	conf.initial_completed_queue = G_async_queue_new()
+	conf.schema_queue = G_async_queue_new()
+	conf.post_data_queue = G_async_queue_new()
 	if conf.transactional == nil {
 		conf.transactional = new(table_queuing)
 		conf.non_transactional = new(table_queuing)
 	}
-	conf.transactional.queue = G_async_queue_new(BufferSize)
-	conf.transactional.deferQueue = G_async_queue_new(BufferSize)
+	conf.transactional.queue = G_async_queue_new()
+	conf.transactional.deferQueue = G_async_queue_new()
 	// These are initialized in the guts of initialize_start_dump() above
 	G_assert(give_me_another_transactional_chunk_step_queue != nil && give_me_another_non_transactional_chunk_step_queue != nil && transactional_table != nil && non_transactional_table != nil)
 	conf.transactional.request_chunk = give_me_another_transactional_chunk_step_queue
 	conf.transactional.table_list = transactional_table
 	conf.transactional.descr = "transactional"
-	conf.ready = G_async_queue_new(BufferSize)
-	conf.non_transactional.queue = G_async_queue_new(BufferSize)
-	conf.non_transactional.deferQueue = G_async_queue_new(BufferSize)
+	conf.ready = G_async_queue_new()
+	conf.non_transactional.queue = G_async_queue_new()
+	conf.non_transactional.deferQueue = G_async_queue_new()
 	conf.non_transactional.request_chunk = give_me_another_non_transactional_chunk_step_queue
 	conf.non_transactional.table_list = non_transactional_table
 	conf.non_transactional.descr = "non-transactional"
-	conf.ready_non_transactional_queue = G_async_queue_new(BufferSize)
-	conf.unlock_tables = G_async_queue_new(BufferSize)
-	conf.gtid_pos_checked = G_async_queue_new(BufferSize)
-	conf.are_all_threads_in_same_pos = G_async_queue_new(BufferSize)
-	conf.db_ready = G_async_queue_new(BufferSize)
-	conf.source_and_replica_status_queue = G_async_queue_new(BufferSize)
+	conf.ready_non_transactional_queue = G_async_queue_new()
+	conf.unlock_tables = G_async_queue_new()
+	conf.gtid_pos_checked = G_async_queue_new()
+	conf.are_all_threads_in_same_pos = G_async_queue_new()
+	conf.db_ready = G_async_queue_new()
+	conf.source_and_replica_status_queue = G_async_queue_new()
 	//  ready_database_dump_mutex = g_rec_mutex_new();
 	//  g_rec_mutex_lock(ready_database_dump_mutex);
 	ready_table_dump_mutex = G_rec_mutex_new()
@@ -1359,7 +1358,7 @@ func StartDump(conf *Configuration) error {
 	}
 	log.Infof("End job creation")
 	start_chunk_builder(conf)
-
+	start_working_thread(conf)
 	G_async_queue_pop(conf.source_and_replica_status_queue)
 	G_async_queue_unref(conf.source_and_replica_status_queue)
 	var source_log, source_pos, source_gtid string
@@ -1404,9 +1403,66 @@ func StartDump(conf *Configuration) error {
 	// When the counter reaches to 0, it releases conf.db_ready
 	log.Infof("Waiting database finish")
 	G_async_queue_pop(conf.db_ready)
+	// At this point all schema jobs are completed
 	no_updated_tables = nil
 	// We let working threads know that initial_queue has been completed
 	// sending them a JOB_SHUTDOWN job.
+	for n = 0; n < NumThreads; n++ {
+		var j *job = new(job)
+		j.types = JOB_SHUTDOWN
+		G_async_queue_push(conf.initial_queue, j)
+	}
+	for n = 0; n < NumThreads; n++ {
+		G_async_queue_pop(conf.initial_completed_queue)
+	}
+	// at this point initial jobs has been completed
+	// which means that all schema jobs has been created
+	// we are able to send the JOB_SHUTDOWN to schema_queue
+	log.Infof("Shutdown schema jobs")
+	for n = 0; n < NumThreads; n++ {
+		var j *job = new(job)
+		j.types = JOB_SHUTDOWN
+		G_async_queue_push(conf.schema_queue, j)
+	}
+	// In case that we are NOT exporting transactional table, we need to
+	// build the lock table statement, at this stage, before
+	// let workers to start dumping data
+	if TrxTables == 0 {
+		build_lock_tables_statement(conf)
+	}
+	// Allowing workers to start dumping Non-Transactional tables
+	for n = 0; n < NumThreads; n++ {
+		G_async_queue_push(conf.ready_non_transactional_queue, 1)
+	}
+	// Releasing locks if possible
+	if SyncThreadLockMode != NO_LOCK && SyncThreadLockMode != SAFE_NO_LOCK && TrxTables == 0 {
+		for n = 0; n < NumThreads; n++ {
+			G_async_queue_pop(conf.unlock_tables)
+		}
+		if release_binlog_function != nil {
+			log.Infof("Releasing binlog lock")
+			release_binlog_function(second_conn)
+		}
+		log.Infof("Non-InnoDB dump complete, releasing global locks")
+		if release_global_lock_function != nil {
+			release_global_lock_function(conn)
+		}
+
+		log.Infof("Global locks released")
+	}
+
+	// At this point, we can start the replica if it was stopped
+	if Is_mysql_like() && replica_stopped {
+		log.Infof("Starting replica")
+		M_query_warning(conn, Start_replica_sql_thread, "Not able to start replica")
+
+		if Source_control_command == AWS {
+			Discard_mysql_output(conn)
+		}
+	}
+
+	// All the jobs related to post data has been created and enquequed
+	// so, we can send the JOB_SHUTDOWN
 	for n = 0; n < NumThreads; n++ {
 		var j *job = new(job)
 		j.types = JOB_SHUTDOWN

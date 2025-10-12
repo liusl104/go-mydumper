@@ -69,7 +69,7 @@ func process_exec_command(a any) {
 }
 func initialize_exec_command() {
 	log.Warnf("initialize_exec_command: Started")
-	Stream_queue = G_async_queue_new(BufferSize)
+	Stream_queue = G_async_queue_new()
 	exec_command_thread = make([]*GThread, Num_exec_threads)
 	var i uint
 	pid_file_table = make(map[*command]string)
