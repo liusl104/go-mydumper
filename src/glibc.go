@@ -76,10 +76,10 @@ func G_string_printf(s *GString, msg string, args ...any) {
 
 }
 
-func G_string_new(str string, args ...any) *GString {
+func G_string_new(str string) *GString {
 	var s = new(GString)
 	s.Str = new(strings.Builder)
-	s.Str.WriteString(fmt.Sprintf(str, args...))
+	s.Str.WriteString(str)
 	s.Len = s.Str.Len()
 	return s
 }

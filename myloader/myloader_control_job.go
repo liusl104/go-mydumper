@@ -28,21 +28,29 @@ type control_job struct {
 
 var (
 	cjt_mutex             *sync.Mutex
-	cjt_cond              *sync.WaitGroup
+	cjt_cond              *sync.Cond
 	control_job_queue     *GAsyncQueue
 	data_job_queue        *GAsyncQueue
 	data_queue            *GAsyncQueue
 	control_job_t         *GThread
-	cjt_paused            bool
+	cjt_paused            bool = true
 	all_jobs_are_enqueued bool
 	last_wait             int64
 )
 
+func jtype2str(jtype control_job_type) string {
+	switch jtype {
+	case JOB_RESTORE:
+		return "JOB_RESTORE"
+	case JOB_SHUTDOWN:
+		return "JOB_SHUTDOWN"
+	}
+	return ""
+}
 func cjt_resume() {
 	cjt_mutex.Lock()
 	cjt_paused = false
-	cjt_cond.Add(1)
-	defer cjt_cond.Done()
+	cjt_cond.Signal()
 	cjt_mutex.Unlock()
 }
 
@@ -52,22 +60,23 @@ func initialize_control_job(conf *configuration) {
 	last_wait = int64(NumThreads)
 	data_queue = G_async_queue_new()
 	cjt_mutex = G_mutex_new()
-	cjt_cond = new(sync.WaitGroup)
+	cjt_cond = sync.NewCond(cjt_mutex)
 	control_job_t = M_thread_new("myloader_ctr", control_job_thread, conf, "Control job thread could not be created")
 
 }
 func wait_control_job() {
-	log.Tracef("Waiting control job to finish")
+	log.Debugf("Waiting control job to finish")
 	G_thread_join(control_job_t)
 	cjt_mutex = nil
 	cjt_cond = nil
-	log.Tracef("Control job to finished")
+	log.Debugf("Control job to finished")
 }
 
 func new_control_job(job_type control_job_type, job_data any, use_database *database) *control_job {
 	var j = new(control_job)
 	j.job_type = job_type
 	j.use_database = use_database
+	j.data = new(control_job_data)
 	switch job_type {
 	case JOB_SHUTDOWN:
 		break
@@ -78,20 +87,33 @@ func new_control_job(job_type control_job_type, job_data any, use_database *data
 }
 
 func control_job_queue_push(current_ft file_type) {
-	log.Tracef("control_job_queue <- %d", current_ft)
+	log.Debugf("control_job_queue <- %s", ft2str(current_ft))
 	G_async_queue_push(control_job_queue, current_ft)
 }
 
 func request_restore_data_job() file_type {
 	control_job_queue_push(REQUEST_DATA_JOB)
 	var ft file_type = G_async_queue_pop(data_job_queue).(file_type)
-	log.Tracef("data_job_queue . %d", ft)
+	log.Debugf("data_job_queue -> %s", ft2str(ft))
 	return ft
 }
+func rjtype2str(rjtype restore_job_type) string {
+	switch rjtype {
+	case JOB_RESTORE_SCHEMA_FILENAME:
+		return "JOB_RESTORE_SCHEMA_FILENAME"
+	case JOB_RESTORE_FILENAME:
+		return "JOB_RESTORE_FILENAME"
+	case JOB_TO_CREATE_TABLE:
+		return "JOB_TO_CREATE_TABLE"
+	case JOB_RESTORE_STRING:
+		return "JOB_RESTORE_STRING"
+	}
 
+	return "0"
+}
 func request_next_data_job() *restore_job {
 	var rj *restore_job = G_async_queue_pop(data_queue).(*restore_job)
-	log.Tracef("data_queue . %d: %s.%s, threads %d", rj.job_type, rj.dbt.database.real_database, rj.dbt.real_table, rj.dbt.current_threads)
+	log.Debugf("data_queue -> %s: %s.%s, threads %d", rjtype2str(rj.job_type), rj.dbt.database.real_database, rj.dbt.real_table, rj.dbt.current_threads)
 	return rj
 }
 
@@ -102,22 +124,22 @@ func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 	var job *restore_job
 	for _, dbt = range conf.table_list {
 		if dbt.database.schema_state == NOT_FOUND {
-			log.Tracef("%s.%s: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
+			log.Debugf("%s.%s: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			continue
 		}
 		if dbt.schema_state >= DATA_DONE || (dbt.schema_state == CREATED && (dbt.is_view || dbt.is_sequence)) {
-			log.Tracef("%s.%s done: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
+			log.Debugf("%s.%s done: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			continue
 		}
 		dbt.mutex.Lock()
 		if !Resume && dbt.schema_state < CREATED {
 			giveup = false
-			log.Tracef("%s.%s not yet created: %s, waiting", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
+			log.Debugf("%s.%s not yet created: %s, waiting", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			dbt.mutex.Unlock()
 			continue
 		}
 		if dbt.schema_state >= DATA_DONE || (dbt.schema_state == CREATED && (dbt.is_view || dbt.is_sequence)) {
-			log.Tracef("%s.%s done just now: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
+			log.Debugf("%s.%s done just now: %s, voting for finish", dbt.database.real_database, dbt.real_table, status2str(dbt.schema_state))
 			dbt.mutex.Unlock()
 			continue
 		}
@@ -130,19 +152,21 @@ func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 			job = dbt.restore_job_list.Front().Value.(*restore_job)
 			var current = dbt.restore_job_list.Front()
 			dbt.restore_job_list.Remove(current)
-			dbt.restore_job_list.Front().Next()
+			if dbt.restore_job_list.Len() > 0 {
+				dbt.restore_job_list.Front().Next()
+			}
 			dbt.current_threads++
 			dbt.mutex.Unlock()
 			giveup = false
-			log.Tracef("%s.%s sending %v: %s, threads: %d, prohibiting finish", dbt.database.real_database, dbt.real_table,
-				job.job_type, job.filename, dbt.current_threads)
+			log.Debugf("%s.%s sending %v: %s, threads: %d, prohibiting finish", dbt.database.real_database, dbt.real_table,
+				rjtype2str(job.job_type), job.filename, dbt.current_threads)
 			break
 		} else {
-			log.Tracef("No remaining jobs on %s.%s", dbt.database.real_database, dbt.real_table)
+			log.Debugf("No remaining jobs on %s.%s", dbt.database.real_database, dbt.real_table)
 			if all_jobs_are_enqueued && dbt.current_threads == 0 && atomic.LoadInt64(&dbt.remaining_jobs) == 0 {
 				dbt.schema_state = DATA_DONE
 				enqueue_index_for_dbt_if_possible(conf, dbt)
-				log.Tracef("%s.%s queuing indexes, voting for finish", dbt.database.real_database, dbt.real_table)
+				log.Debugf("%s.%s queuing indexes, voting for finish", dbt.database.real_database, dbt.real_table)
 			}
 		}
 		dbt.mutex.Unlock()
@@ -171,7 +195,7 @@ func enroute_into_the_right_queue_based_on_file_type(current_ft file_type) {
 
 func maybe_shutdown_control_job() {
 	if G_atomic_int_dec_and_test(&last_wait) {
-		log.Tracef("SHUTDOWN maybe_shutdown_control_job")
+		log.Debugf("SHUTDOWN maybe_shutdown_control_job")
 		enroute_into_the_right_queue_based_on_file_type(SHUTDOWN)
 	}
 }
@@ -190,18 +214,18 @@ func control_job_thread(c any) {
 	var giveup bool
 	var cont = true
 	if OverwriteTables && !OverwriteUnsafe && cjt_paused {
-		log.Tracef("Thread control_job_thread paused")
+		log.Debugf("Thread control_job_thread paused")
 		cjt_mutex.Lock()
 		for cjt_paused {
 			cjt_cond.Wait()
 		}
 		cjt_mutex.Unlock()
 	}
-	log.Tracef("Thread control_job_thread started")
+	log.Debugf("Thread control_job_thread started")
 	for cont {
 		task := G_async_queue_pop(control_job_queue)
 		ft = task.(file_type)
-		log.Tracef("control_job_queue . %d (%d loaders waiting)", ft, threads_waiting)
+		log.Debugf("control_job_queue -> %s (%d loaders waiting)", ft2str(ft), threads_waiting)
 		switch ft {
 		case DATA:
 			wake_threads_waiting(&threads_waiting)
@@ -209,27 +233,27 @@ func control_job_thread(c any) {
 		case REQUEST_DATA_JOB:
 			giveup = give_me_next_data_job_conf(cnf, &rj)
 			if rj != nil {
-				log.Tracef("job available in give_me_next_data_job_conf")
+				log.Debugf("job available in give_me_next_data_job_conf")
 				if rj.dbt != nil {
-					log.Tracef("data_queue <- %d: %s", rj.job_type, rj.dbt.table)
+					log.Debugf("data_queue <- %s: %s", rjtype2str(rj.job_type), rj.dbt.table)
 				} else {
-					log.Tracef("data_queue <- %d: %s", rj.job_type, rj.filename)
+					log.Debugf("data_queue <- %s: %s", rjtype2str(rj.job_type), rj.filename)
 				}
 				G_async_queue_push(data_queue, rj)
-				log.Tracef("data_job_queue <- %d", DATA)
-				G_async_queue_push(here_is_your_job, DATA)
+				log.Debugf("data_job_queue <- %s", ft2str(DATA))
+				G_async_queue_push(data_job_queue, DATA)
 			} else {
-				log.Tracef("No job available")
+				log.Debugf("No job available")
 				if all_jobs_are_enqueued && giveup {
-					log.Tracef("Giving up...")
+					log.Debugf("Giving up...")
 					control_job_ended = true
 					var i uint
 					for i = 0; i < _num_threads; i++ {
-						log.Tracef("here_is_your_job <- %v", SHUTDOWN)
-						G_async_queue_push(here_is_your_job, SHUTDOWN)
+						log.Debugf("data_job_queue <- %s", ft2str(SHUTDOWN))
+						G_async_queue_push(data_job_queue, SHUTDOWN)
 					}
 				} else {
-					log.Tracef("Thread will be waiting | all_jobs_are_enqueued: %v | giveup: %v", all_jobs_are_enqueued, giveup)
+					log.Debugf("Thread will be waiting | all_jobs_are_enqueued: %v | giveup: %v", all_jobs_are_enqueued, giveup)
 					for threads_waiting < _num_threads {
 						threads_waiting++
 					}
@@ -245,31 +269,29 @@ func control_job_thread(c any) {
 			cont = false
 			break
 		default:
-			log.Tracef("Thread control_job_thread: received Default: %v", ft)
+			log.Debugf("Thread control_job_thread: received Default: %v", ft)
 			break
 		}
 	}
 	start_optimize_keys_all_tables()
-	log.Tracef("Thread control_job_thread finished")
+	log.Debugf("Thread control_job_thread finished")
 	return
 }
 
 func process_job(td *thread_data, job *control_job, retry *bool) bool {
 	switch job.job_type {
 	case JOB_RESTORE:
+		log.Debugf("Thread %d: Restoring Job", td.thread_id)
 		var res bool = process_restore_job(td, job.data.restore_job)
-		if *retry {
+		if retry != nil {
 			*retry = res
 		}
 		return true
-	case JOB_WAIT:
-		G_async_queue_push(td.conf.ready, 1)
-		G_async_queue_pop(job.data.queue)
-		break
 	case JOB_SHUTDOWN:
+		log.Debugf("Thread %d: Shutting down", td.thread_id)
 		return false
 	default:
-		log.Error("Something very bad happened!(1)")
+		log.Criticalf("Something very bad happened!(1)")
 	}
 	return true
 }
@@ -352,16 +374,16 @@ func refresh_db_and_jobs(current_ft file_type) {
 		schema_queue_push(current_ft, "")
 		break
 	case DATA:
-		log.Tracef("refresh_db_queue <- %v", current_ft)
+		log.Debugf("refresh_db_queue <- %v", current_ft)
 		G_async_queue_push(refresh_db_queue, current_ft)
 		break
 	case INTERMEDIATE_ENDED:
 		schema_queue_push(current_ft, "")
-		log.Tracef("refresh_db_queue <- %v", current_ft)
+		log.Debugf("refresh_db_queue <- %v", current_ft)
 		G_async_queue_push(refresh_db_queue, current_ft)
 		break
 	case SHUTDOWN:
-		log.Tracef("refresh_db_queue <- %v", current_ft)
+		log.Debugf("refresh_db_queue <- %v", current_ft)
 		G_async_queue_push(refresh_db_queue, current_ft)
 	default:
 		break

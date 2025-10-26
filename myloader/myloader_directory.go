@@ -19,12 +19,13 @@ func wait_directory_to_process_metadata() {
 	G_async_queue_pop(metadata_sync_queue)
 	G_async_queue_unref(metadata_sync_queue)
 }
-func process_directory(conf *configuration) {
+func process_directory(c any) {
+	cnf := c.(*configuration)
 	var err error
 	var filename string
 	var fileMode os.FileInfo
 	fileMode, err = os.Stat("metadata")
-	if err == nil && fileMode.Mode() == os.ModeIrregular {
+	if err == nil && fileMode.Mode().IsRegular() {
 		process_metadata_global("metadata")
 		G_async_queue_push(metadata_sync_queue, 1)
 		log.Infof("metadata pushed")
@@ -58,16 +59,10 @@ func process_directory(conf *configuration) {
 		}
 		err = file.Close()
 	} else {
-		var fileInfo os.FileInfo
-		if fileInfo, err = os.Stat("metadata"); err == nil {
-			if fileInfo.Mode().IsRegular() {
-				process_metadata_global("metadata")
-			}
-		}
 		var dir []os.DirEntry
 		dir, err = os.ReadDir(directory)
 		if err != nil {
-			log.Fatalf("fail read directory : %v", err)
+			log.Criticalf("fail read directory : %v", err)
 		}
 		for _, f := range dir {
 			filename = f.Name()
@@ -79,8 +74,8 @@ func process_directory(conf *configuration) {
 	intermediate_queue_end()
 	var n uint = 0
 	for n = 0; n < NumThreads; n++ {
-		G_async_queue_push(conf.data_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
-		G_async_queue_push(conf.post_table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
-		G_async_queue_push(conf.view_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		G_async_queue_push(cnf.data_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		G_async_queue_push(cnf.post_table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+		G_async_queue_push(cnf.view_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 	}
 }

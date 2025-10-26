@@ -8,6 +8,7 @@ import (
 	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,13 +34,13 @@ var (
 	detailed_errors          *restore_errors = &restore_errors{}
 	sequences_processed      uint
 	sequences                uint
-	sequences_mutex          *sync.Mutex
+	sequences_mutex          *sync.Mutex = G_mutex_new()
 	errors                   uint
 	max_errors               uint
 	retry_count              uint = 10
 	load_data_list           map[string]*sync.Mutex
 	load_data_list_mutex     *sync.Mutex
-	conf_per_table           *Configuration_per_table
+	conf_per_table           *Configuration_per_table = new(Configuration_per_table)
 	set_session_hash         map[string]string
 	set_global_hash          map[string]string
 	pmm                      bool
@@ -163,6 +164,48 @@ type function_pointer struct {
 	function func(string)
 }
 
+func ft2str(ft file_type) string {
+	switch ft {
+	case INIT:
+		return "INIT"
+	case SCHEMA_TABLESPACE:
+		return "SCHEMA_TABLESPACE"
+	case SCHEMA_CREATE:
+		return "SCHEMA_CREATE"
+	case CJT_RESUME:
+		return "CJT_RESUME"
+	case SCHEMA_TABLE:
+		return "SCHEMA_TABLE"
+	case DATA:
+		return "DATA"
+	case SCHEMA_VIEW:
+		return "SCHEMA_VIEW"
+	case SCHEMA_SEQUENCE:
+		return "SCHEMA_SEQUENCE"
+	case SCHEMA_TRIGGER:
+		return "SCHEMA_TRIGGER"
+	case SCHEMA_POST:
+		return "SCHEMA_POST"
+	case METADATA_GLOBAL:
+		return "METADATA_GLOBAL"
+	case RESUME:
+		return "RESUME"
+	case IGNORED:
+		return "IGNORED"
+	case LOAD_DATA:
+		return "LOAD_DATA"
+	case SHUTDOWN:
+		return "SHUTDOWN"
+	case DO_NOT_ENQUEUE:
+		return "DO_NOT_ENQUEUE"
+	case REQUEST_DATA_JOB:
+		return "REQUEST_DATA_JOB"
+	case INTERMEDIATE_ENDED:
+		return "INTERMEDIATE_ENDED"
+	}
+	return ""
+}
+
 type db_table struct {
 	database                *database
 	table                   string
@@ -253,14 +296,23 @@ func initialize_directories() {
 				log.Criticalf("Backup directory (-d) must not exist when --stream / --stream=TRADITIONAL")
 			}
 		} else {
-			if G_file_test(InputDirectory) {
-				log.Criticalf("the specified directory doesn't exists\n")
+			if !G_file_test(InputDirectory) {
+				log.Criticalf("the specified directory doesn't exists")
 			}
 			var p = fmt.Sprintf("%s/metadata", directory)
 			if !G_file_test(p) {
 				log.Criticalf("the specified directory %s is not a mydumper backup as metadata file was not found in it", directory)
 			}
 		}
+	}
+	if FifoDirectory != "" {
+		if !filepath.IsAbs(FifoDirectory) {
+			var tmp_fifo_directory = FifoDirectory
+			FifoDirectory = fmt.Sprintf("%s/%s", current_dir, tmp_fifo_directory)
+		}
+	} else {
+		// Set fifo temporary director
+		FifoDirectory = Build_tmp_dir_name()
 	}
 }
 
@@ -297,24 +349,27 @@ func print_errors() {
 	log.Infof("- Trigger:    %d", detailed_errors.trigger_errors)
 	log.Infof("- Constraint: %d", detailed_errors.constraints_errors)
 	log.Infof("- Post:       %d", detailed_errors.post_errors)
+	log.Infof("Warnings found:")
+	log.Infof("- Data:\t%d", detailed_errors.data_warnings)
 	log.Infof("Retries: %d", detailed_errors.retries)
 }
 
 func StartLoad() {
 	var err error
 	load_contex_entries()
-	var conf = new(configuration)
-	Initialize_share_common()
+	if ProgramVersion {
+		Print_version(MYLOADER)
+		os.Exit(EXIT_SUCCESS)
+	}
+	if Help {
+		print_help()
+	}
+	conf = new(configuration)
+	Initialize_common_options(MYLOADER)
 	if DB == "" && SourceDb != "" {
 		DB = SourceDb
 	}
 
-	if Debug {
-		Set_debug()
-		err = Set_verbose()
-	} else {
-		err = Set_verbose()
-	}
 	if OverwriteUnsafe {
 		OverwriteTables = true
 	}
@@ -324,116 +379,55 @@ func StartLoad() {
 	} else {
 		log.Infof("Using %d loader threads", NumThreads)
 	}
-
-	Initialize_common_options(MYLOADER)
-	if ProgramVersion {
-		Print_version(MYLOADER)
-		os.Exit(EXIT_SUCCESS)
-	}
+	Initialize_set_names()
+	log.Infof("MyDumper restore version: %s", VERSION)
 	Hide_password()
 	Ask_password()
-	Initialize_set_names()
-	load_data_list_mutex = G_mutex_new()
-	load_data_list = make(map[string]*sync.Mutex)
-	if PmmPath != "" {
-		pmm = true
-		if PmmResolution == "" {
-			PmmResolution = "high"
-		}
-	} else if PmmPath != "" {
-		pmm = true
-		PmmPath = fmt.Sprintf("/usr/local/percona/pmm2/collectors/textfile-collector/%s-resolution", PmmResolution)
-	}
-	if pmm {
-		// TODO
-	}
-	initialize_restore_job(PurgeModeStr)
-	var current_dir = G_get_current_dir()
-	if InputDirectory == "" {
-		if Stream != "" {
-			var datetime = time.Now()
-			var datetimestr string
-			datetimestr = datetime.Format("20060102-150405")
-			directory = fmt.Sprintf("%s/%s-%s", current_dir, DIRECTORY, datetimestr)
-			Create_backup_dir(directory, "")
-		} else {
-			if !Help {
-				log.Fatalf("a directory needs to be specified, see --help")
-			}
-		}
-	} else {
-		if strings.HasPrefix(InputDirectory, "/") {
-			directory = InputDirectory
-		} else {
-			directory = fmt.Sprintf("%s/%s", current_dir, InputDirectory)
-		}
-		if Stream != "" {
-			if !G_file_test(InputDirectory) {
-				Create_backup_dir(directory, "")
 
-			} else {
-				if !No_stream {
-					log.Fatalf("Backup directory (-d) must not exist when --stream / --stream=TRADITIONAL")
-				}
-			}
-		} else {
-			if !G_file_test(InputDirectory) {
-				log.Fatalf("the specified directory doesn't exists")
-			}
-			var p = fmt.Sprintf("%s/metadata", directory)
-			if !G_file_test(p) {
-				log.Fatalf("the specified directory %s is not a mydumper backup", directory)
-			}
-		}
+	Initialize_pmm()
+
+	initialize_restore_job()
+	initialize_directories()
+
+	initialize_restore()
+	if Stream != "" && !No_stream {
+		Create_dir(directory)
 	}
-	/*if FifoDirectory != "" {
-		if !strings.HasPrefix(FifoDirectory, "/") {
-			var tmp_fifo_directory = FifoDirectory
-			FifoDirectory = fmt.Sprintf("%s/%s", current_dir, tmp_fifo_directory)
-		}
-		create_fifo_dir(FifoDirectory)
-	}*/
-	if Help {
-		print_help()
-	}
+	Create_dir(FifoDirectory)
+	log.Infof("Using %s as FIFO directory, please remove it if restoration fails", FifoDirectory)
+	Start_pmm_thread(conf)
 	err = os.Chdir(directory)
+	if err != nil {
+		log.Criticalf("Unable to change directory to %s: %v", directory, err)
+	}
+	/* Process list of tables to omit if specified */
 	if TablesSkiplistFile != "" {
-		// err = Read_tables_skiplist(TablesSkiplistFile)
+		Read_tables_skiplist(TablesSkiplistFile, &Errors)
 	}
 	initialize_process(conf)
 	initialize_common()
 	Initialize_connection(MYLOADER)
 	InitializeRegex("")
-
-	go signal_thread(conf)
+	if !KillAtOnce {
+		M_thread_new("myloader_signal", signal_thread, conf, "Signal thread could not be created")
+	}
 	var conn *DBConnection
 	conn = Mysql_init()
 	M_connect(conn)
 	Set_session = G_string_new("")
 	Set_global = G_string_new("")
 	Set_global_back = G_string_new("")
-	// err = Detect_server_version(conn)
-	Detected_server = Get_product()
+	Server_detect(conn)
 	set_session_hash = myloader_initialize_hash_of_session_variables()
 	set_global_hash = make(map[string]string)
 	if Key_file != nil {
 		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_global_hash, "myloader_global_variables")
 		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_global_hash, "myloader_session_variables")
 	}
-	Refresh_set_session_from_hash(Set_session, set_session_hash)
-	Refresh_set_global_from_hash(Set_global, Set_global_back, set_global_hash)
-	Execute_gstring(conn, Set_session)
-	Execute_gstring(conn, Set_global)
 	Initialize_conf_per_table(conf_per_table)
 	Load_per_table_info_from_key_file(Key_file, conf_per_table, nil)
-	// identifier_quote_character_str = IdentifierQuoteCharacter
-	if DisableRedoLog {
-		if Get_major() == 8 && Get_secondary() == 0 && Get_revision() > 21 {
-			log.Infof("Disabling redologs")
-			m_query(conn, "ALTER INSTANCE DISABLE INNODB REDO_LOG", M_critical, "DISABLE INNODB REDO LOG failed")
-		} else {
-			log.Errorf("Disabling redologs is not supported for version %d.%d.%d", Get_major(), Get_secondary(), Get_revision())
-		}
+	if MaxTransactionSize == DEFAULT_MAX_TRANSACTION_SIZE {
+		detect_group_replication_transaction_size_limit(conn)
 	}
 	conf.database_queue = G_async_queue_new()
 	conf.table_queue = G_async_queue_new()
@@ -446,27 +440,22 @@ func StartLoad() {
 	conf.ready = G_async_queue_new()
 	conf.pause_resume = G_async_queue_new()
 	conf.table_list_mutex = G_mutex_new()
-	conf.stream_queue = G_async_queue_new()
+	// conf.stream_queue = G_async_queue_new()
 	conf.table_hash = make(map[string]*db_table)
 	conf.table_hash_mutex = G_mutex_new()
 	if G_file_test("resume") {
 		if !Resume {
-			log.Fatalf("Resume file found but --resume has not been provided")
+			log.Criticalf("Resume file found but --resume has not been provided")
 		}
 	} else {
 		if Resume {
-			log.Fatalf("Resume file not found")
+			log.Criticalf("Resume file not found")
 		}
 	}
-	initialize_connection_pool(conn)
+	initialize_connection_pool()
 	var t *thread_data = new(thread_data)
 	initialize_thread_data(t, conf, WAITING, 0, nil)
-	if database_db != nil {
-		if !NoSchemas {
-			create_database(t, database_db.real_database)
-		}
-		database_db.schema_state = CREATED
-	}
+
 	if TablesList != "" {
 		Tables = Get_table_list(TablesList)
 	}
@@ -478,23 +467,58 @@ func StartLoad() {
 	initialize_intermediate_queue(conf)
 	if Stream != "" {
 		if Resume {
-			log.Fatalf("We don't expect to find resume files in a stream scenario")
+			log.Criticalf("We don't expect to find resume files in a stream scenario")
 		}
 		initialize_stream(conf)
+	} else {
+		initialize_directory()
+		M_thread_new("myloader_directory", process_directory, conf, "Directory thread could not be created")
 	}
+	if Stream != "" {
+		wait_directory_to_process_metadata()
+	} else {
+		wait_stream_to_process_metadata_header()
+	}
+	remove_ignore_set_session_from_hash()
+	Refresh_set_session_from_hash(Set_session, set_session_hash)
+	Refresh_set_global_from_hash(Set_global, Set_global_back, set_global_hash)
+	Execute_gstring(conn, Set_session)
+	Execute_gstring(conn, Set_global)
+	if replicationStatements.start_replica_until != nil {
+		log.Infof("Sending start replica until")
+		execute_replication_commands(conn, replicationStatements.start_replica_until.Str.String())
+	}
+	start_connection_pool()
+
+	if DisableRedoLog {
+		if Get_major() == 8 && Get_secondary() == 0 && Get_revision() > 21 {
+			log.Infof("Disabling redologs")
+			M_query_critical(conn, "ALTER INSTANCE DISABLE INNODB REDO_LOG", "DISABLE INNODB REDO LOG failed")
+		} else {
+			log.Errorf("Disabling redologs is not supported for version %d.%d.%d", Get_major(), Get_secondary(), Get_revision())
+		}
+	}
+	if database_db != nil {
+		if !NoSchemas {
+			create_database(t, database_db.real_database)
+		}
+		database_db.schema_state = CREATED
+	}
+	start_worker_schema()
 	initialize_loader_threads(conf)
+
+	if Throttle_variable != "" {
+		M_thread_new("mon_thro", Monitor_throttling_thread, nil, "Monitor throttling thread could not be created")
+	}
 	if Stream != "" {
 		wait_stream_to_finish()
-	} else {
-		process_directory(conf)
 	}
-	var dbt *db_table
-	for _, dbt = range conf.table_list {
+	var tl = conf.table_list
+	for _, dbt := range tl {
 		if dbt.max_connections_per_job == 1 {
 			dbt.max_connections_per_job = 0
 		}
 	}
-
 	wait_schema_worker_to_finish()
 	wait_loader_threads_to_finish()
 	wait_control_job()
@@ -503,38 +527,32 @@ func StartLoad() {
 	initialize_post_loding_threads(conf)
 	create_post_shutdown_job(conf)
 	wait_post_worker_to_finish()
+	//  wait_control_job();
 	G_async_queue_unref(conf.ready)
 	conf.ready = nil
 	G_async_queue_unref(conf.data_queue)
 	conf.data_queue = nil
-	var cd *connection_data = close_restore_thread(true)
-	cd.in_use.Lock()
 	if DisableRedoLog {
-		m_query(conn, "ALTER INSTANCE ENABLE INNODB REDO_LOG", M_critical, "ENABLE INNODB REDO LOG failed")
+		M_query_critical(conn, "ALTER INSTANCE ENABLE INNODB REDO_LOG", "ENABLE INNODB REDO LOG failed")
 	}
 	var checksum_ok bool = true
-	// G_async_queue_unref(conf.data_queue)
-	for _, dbt = range conf.table_list {
+	tl = conf.table_list
+	for _, dbt := range tl {
 		checksum_ok = checksum_dbt(dbt, conn)
 	}
-
 	if checksum_mode != CHECKSUM_SKIP {
 		var d *database
 		for _, d = range db_hash {
 			if d.schema_checksum != "" && !NoSchemas {
-				checksum_ok = checksum_database_template(d.real_database, d.schema_checksum, cd.thrconn, "Schema create checksum", Checksum_database_defaults)
+				checksum_ok = checksum_database_template(d.real_database, d.schema_checksum, conn, "Schema create checksum", Checksum_database_defaults)
 			}
 			if d.post_checksum != "" && !SkipPost {
-				checksum_ok = checksum_database_template(d.real_database, d.post_checksum, cd.thrconn, "Post checksum", Checksum_process_structure)
+				checksum_ok = checksum_database_template(d.real_database, d.post_checksum, conn, "Post checksum", Checksum_process_structure)
 			}
 			if d.triggers_checksum != "" && !SkipTriggers {
-				checksum_ok = checksum_database_template(d.real_database, d.triggers_checksum, cd.thrconn, "Triggers checksum", Checksum_trigger_structure_from_database)
+				checksum_ok = checksum_database_template(d.real_database, d.triggers_checksum, conn, "Triggers checksum", Checksum_trigger_structure_from_database)
 			}
 		}
-	}
-	var i uint
-	for i = 1; i < NumThreads; i++ {
-		close_restore_thread(false)
 	}
 	wait_restore_threads_to_close()
 	if !checksum_ok {
@@ -548,36 +566,40 @@ func StartLoad() {
 	if Stream != "" && No_delete == false {
 		err = os.RemoveAll(directory)
 		if err != nil {
-			log.Fatalf("Restore directory not removed: %s", directory)
+			log.Warnf("Restore directory not removed: %s (%v)", directory, err)
 		}
 	}
-	if change_master_statement != nil {
-		var i int
-		var line = strings.Split(change_master_statement.Str.String(), ";\n")
-		for i = 0; i < len(line); i++ {
-			if len(line[i]) > 2 {
-				var str = G_string_new(line[i])
-				G_string_append(str, ";")
-				m_query(cd.thrconn, str.Str.String(), M_warning, fmt.Sprintf("Sending CHANGE MASTER: %s", str.Str.String()))
-				G_string_free(str, true)
-			}
-		}
+	if replicationStatements.reset_replica != nil {
+		log.Infof("Sending reset replica")
+		execute_replication_commands(conn, replicationStatements.reset_replica.Str.String())
 	}
+	if replicationStatements.change_replication_source != nil {
+		log.Infof("Sending change source")
+		execute_replication_commands(conn, replicationStatements.change_replication_source.Str.String())
+	}
+	if replicationStatements.start_replica != nil {
+		log.Infof("Sending start replica")
+		execute_replication_commands(conn, replicationStatements.start_replica.Str.String())
+	}
+
 	G_async_queue_unref(conf.database_queue)
 	G_async_queue_unref(conf.table_queue)
 	G_async_queue_unref(conf.retry_queue)
 	G_async_queue_unref(conf.pause_resume)
 	G_async_queue_unref(conf.post_table_queue)
 	G_async_queue_unref(conf.post_queue)
+	set_session_hash = nil
 	Execute_gstring(conn, Set_global_back)
-	err = cd.thrconn.Close()
+	conn.Close()
 	free_loader_threads()
-	if pmm {
-		kill_pmm_thread()
-	}
+	conf.table_hash = nil
+	conf.checksum_list = nil
+	Free_set_names()
 	print_errors()
 	stop_signal_thread()
 
+	os.RemoveAll(FifoDirectory)
+	log.Infof("Restore completed")
 	if Logger != nil {
 		Logger.Close()
 	}

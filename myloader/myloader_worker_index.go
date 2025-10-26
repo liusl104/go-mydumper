@@ -30,12 +30,12 @@ func initialize_worker_index(conf *configuration) {
 func process_index(td *thread_data) bool {
 	var job = G_async_queue_pop(td.conf.index_queue).(*control_job)
 	if job.job_type == JOB_SHUTDOWN {
-		log.Tracef("index_queue -> %v", job.job_type)
+		log.Debugf("index_queue -> %s", jtype2str(job.job_type))
 		return false
 	}
 	G_assert(job.job_type == JOB_RESTORE)
 	var dbt = job.data.restore_job.dbt
-	log.Tracef("index_queue -> %v: %s.%s", job.data.restore_job.job_type, dbt.database.real_database, dbt.table)
+	log.Debugf("index_queue -> %s: %s.%s", rjtype2str(job.data.restore_job.job_type), dbt.database.real_database, dbt.table)
 	dbt.start_index_time = time.Now()
 	log.Infof("restoring index: %s.%s", dbt.database.name, dbt.table)
 	process_job(td, job, nil)
@@ -55,19 +55,19 @@ func worker_index_thread(c any) {
 	if optimize_keys_all_tables {
 		G_async_queue_pop(innodb_optimize_keys_all_tables_queue)
 	}
-	log.Tracef("I-Thread %d: Starting import", td.thread_id)
+	log.Debugf("I-Thread %d: Starting import", td.thread_id)
 	var cont = true
 	for cont {
 		cont = process_index(td)
 		enroute_into_the_right_queue_based_on_file_type(REQUEST_DATA_JOB)
 	}
-	log.Tracef("I-Thread %d: ending", td.thread_id)
+	log.Debugf("I-Thread %d: ending", td.thread_id)
 
 }
 
 func create_index_shutdown_job(conf *configuration) {
 	var n uint
-	log.Tracef("Sending SHUTDOWN to index threads")
+	log.Debugf("Sending SHUTDOWN to index threads")
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		G_async_queue_push(conf.index_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 	}
@@ -82,7 +82,7 @@ func wait_index_worker_to_finish() {
 
 func start_optimize_keys_all_tables() {
 	var n uint
-	log.Tracef("optimize_keys_all_tables_queue <- 1 (%d times)", MaxThreadsForIndexCreation)
+	log.Debugf("optimize_keys_all_tables_queue <- 1 (%d times)", MaxThreadsForIndexCreation)
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		G_async_queue_push(innodb_optimize_keys_all_tables_queue, 1)
 	}
@@ -91,7 +91,7 @@ func start_optimize_keys_all_tables() {
 func create_index_job(conf *configuration, dbt *db_table, tdid uint) bool {
 	log.Infof("Thread %d: Enqueuing index for table: %s.%s", tdid, dbt.database.real_database, dbt.table)
 	var rj *restore_job = new_schema_restore_job("index", JOB_RESTORE_STRING, dbt, dbt.database, dbt.indexes, INDEXES)
-	log.Tracef("index_queue <- %v: %s.%s", rj.job_type, dbt.database.real_database, dbt.table)
+	log.Debugf("index_queue <- %s: %s.%s", rjtype2str(rj.job_type), dbt.database.real_database, dbt.table)
 	G_async_queue_push(conf.index_queue, new_control_job(JOB_RESTORE, rj, dbt.database))
 	dbt.schema_state = INDEX_ENQUEUED
 	return true

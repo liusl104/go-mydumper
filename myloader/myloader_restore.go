@@ -81,7 +81,7 @@ func new_io_restore_result() *io_restore_result {
 	iors.restore = G_async_queue_new()
 	return iors
 }
-func initialize_connection_pool(thrconn *DBConnection) {
+func initialize_connection_pool() {
 	if MySQLDump {
 		restore_data_from_file = restore_data_from_mysqldump_file
 	} else {
@@ -131,9 +131,9 @@ func reconnect_connection_data(cd *connection_data) {
 
 func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is_schema bool, query_counter *uint) uint {
 	en := Mysql_real_query(cd.thrconn, data.Str.String())
-	if en != nil {
+	if en == nil {
 		if is_schema {
-			log.Warnf("Thread %d using connection %d - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
+			log.Warnf("Thread %d using connection %d - ERROR %d: %s %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 		} else {
 			log.Warnf("Thread %d using connection %d - ERROR %d: %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn))
 		}
@@ -147,7 +147,7 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 				}
 			}
 			atomic.AddUint64(&detailed_errors.retries, 1)
-			if Mysql_real_query(cd.thrconn, data.Str.String()) != nil {
+			if Mysql_real_query(cd.thrconn, data.Str.String()) == nil {
 				if is_schema {
 					log.Criticalf("Thread %d using connection %d - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 				} else {
@@ -173,7 +173,7 @@ func close_restore_thread(return_connection bool) *connection_data {
 }
 
 func setup_connection(cd *connection_data, td *thread_data, io_restore_result *io_restore_result, start_transaction bool, use_database *database, header *GString) {
-	log.Tracef("Thread %d: Connection %d granted", td.thread_id, cd.thread_id)
+	log.Debugf("Thread %d: Connection %d granted", td.thread_id, cd.thread_id)
 	if err := cd.thrconn.Ping(); err != nil {
 		log.Warnf("Thread %d: Connection %d failed", td.thread_id, cd.thread_id)
 		reconnect_connection_data(cd)
@@ -232,13 +232,14 @@ func m_commit_and_start_transaction(cd *connection_data, query_counter *uint) ui
 
 func restore_insert(cd *connection_data, td *thread_data, data *GString, query_counter *uint, offset_line uint, dbt *db_table) int {
 	var next_line int
-	nextLineIndex := strings.Index(data.Str.String(), "VALUES") + 6
+	nextLineIndex := strings.Index(data.Str.String(), "VALUES ") + 6
 	var insert_statement_prefix string = data.Str.String()[:nextLineIndex]
 	var r uint
 	var tr uint
 	var current_offset_line uint = offset_line - 1
 	var current_line = nextLineIndex
 	next_line = strings.Index(data.Str.String()[current_line:], "\n")
+	next_line += current_line
 	var new_insert = G_string_sized_new(len(insert_statement_prefix))
 	var current_rows uint64
 	var transaction_size uint64
@@ -259,11 +260,15 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 			}
 			var line = data.Str.String()[current_line:next_line]
 			line_len = len(line)
+			G_string_append(new_insert, line)
 			current_rows++
 			current_line = next_line + 1
 			next_line = strings.Index(data.Str.String()[current_line:], "\n")
+			if next_line != -1 {
+				next_line += current_line
+			}
 			current_offset_line++
-			if Rows == 0 || current_rows < uint64(Rows) {
+			if Rows > 0 && current_rows >= uint64(Rows) {
 				break
 			}
 		}
@@ -304,7 +309,10 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 }
 
 func restore_thread(c any) {
-	conn := c.(*DBConnection)
+	var conn *DBConnection
+	if c != nil {
+		conn = c.(*DBConnection)
+	}
 	var cd *connection_data = new_connection_data(conn)
 	var ir *statement
 	var query_counter uint
@@ -316,7 +324,7 @@ func restore_thread(c any) {
 		for {
 			ir = G_async_queue_pop(cd.queue.restore).(*statement)
 			if ir.kind_of_statement == CLOSE {
-				log.Tracef("Releasing connection: %d", cd.thread_id)
+				log.Debugf("Releasing connection: %d", cd.thread_id)
 				if cd.transaction && query_counter > 0 {
 					m_commit(cd)
 				}
@@ -354,7 +362,7 @@ func restore_thread(c any) {
 				G_async_queue_push(cd.queue.result, ir)
 			}
 		}
-		log.Tracef("Returning connection to pool: %d", cd.connection_id)
+		log.Debugf("Returning connection to pool: %d", cd.connection_id)
 		G_async_queue_push(connection_pool, cd)
 	}
 	return
@@ -626,7 +634,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 		}
 	}
 	for ; td.granted_connections > 0; td.granted_connections-- {
-		G_async_queue_push(queue.restore, &release_connection_statement)
+		G_async_queue_push(queue.restore, release_connection_statement)
 		process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
 		G_assert(ir.kind_of_statement == CLOSE)
 	}
@@ -776,7 +784,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 		}
 	}
 	for ; td.granted_connections > 0; td.granted_connections-- {
-		G_async_queue_push(queue.restore, &release_connection_statement)
+		G_async_queue_push(queue.restore, release_connection_statement)
 		process_result_statement(queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
 		G_assert(ir.kind_of_statement == CLOSE)
 	}
@@ -806,7 +814,7 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 		}
 	}
 	G_async_queue_push(free_results_queue, ir)
-	G_async_queue_push(queue.restore, &release_connection_statement)
+	G_async_queue_push(queue.restore, release_connection_statement)
 	td.granted_connections--
 	r += process_result_vstatement(queue.result, &ir, log_fun, msg, args...)
 	G_assert(G_async_queue_length(queue.restore) <= 0)

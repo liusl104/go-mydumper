@@ -13,7 +13,7 @@ const (
 )
 
 var (
-	here_is_your_job *GAsyncQueue
+	// here_is_your_job *GAsyncQueue
 	refresh_db_queue *GAsyncQueue
 	threads          []*GThread
 	loader_td        []*thread_data
@@ -52,7 +52,7 @@ func process_loader_thread(td *thread_data) {
 			cont = process_job(td, job, nil)
 			dbt.mutex.Lock()
 			dbt.current_threads--
-			log.Tracef("%s.%s: done job, threads %d", dbt.database.real_database, dbt.real_table, dbt.current_threads)
+			log.Debugf("%s.%s: done job, threads %d", dbt.database.real_database, dbt.real_table, dbt.current_threads)
 			dbt.mutex.Unlock()
 			break
 		case SHUTDOWN:
@@ -74,9 +74,9 @@ func loader_thread(c any) {
 	td := c.(*thread_data)
 	var cnf *configuration = td.conf
 	G_async_queue_push(cnf.ready, 1)
-	log.Tracef("Thread %d: Starting import", td.thread_id)
+	log.Debugf("Thread %d: Starting import", td.thread_id)
 	process_loader_thread(td)
-	log.Tracef("Thread %d: ending", td.thread_id)
+	log.Debugf("Thread %d: ending", td.thread_id)
 }
 
 func wait_loader_threads_to_finish() {

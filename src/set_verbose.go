@@ -1,12 +1,9 @@
 package mydumper
 
 import (
-	"fmt"
 	log "github.com/liusl104/go-mydumper/src/logrus"
 
 	"os"
-	"path"
-	"runtime"
 )
 
 func set_format(isJson bool) {
@@ -16,11 +13,11 @@ func set_format(isJson bool) {
 				TimestampFormat:   "2006-01-02 15:04:05.000",
 				DisableTimestamp:  false,
 				DisableHTMLEscape: true,
-				CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
+				/*CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
 					fileName := path.Base(frame.File)
 					fileNameLine := fmt.Sprintf("%s:%d", fileName, frame.Line)
 					return frame.Function, fileNameLine
-				},
+				},*/
 			})
 		} else {
 			log.SetFormatter(&log.JSONFormatter{
@@ -75,11 +72,11 @@ func Set_verbose() error {
 			DisableColors:   true,
 			FullTimestamp:   true,
 			TimestampFormat: "2006-01-02 15:04:05.000",
-			CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
+			/*CallerPrettyfier: func(frame *runtime.Frame) (function string, file string) {
 				fileName := path.Base(frame.File)
 				fileNameLine := fmt.Sprintf("%s:%d", fileName, frame.Line)
 				return frame.Function, fileNameLine
-			},
+			},*/
 		})
 	} else {
 		log.SetFormatter(&log.TextFormatter{
@@ -95,5 +92,5 @@ func Set_verbose() error {
 func Set_debug() {
 	Verbose = 4
 	log.SetLevel(log.DebugLevel)
-	log.SetReportCaller(true)
+	// log.SetReportCaller(true)
 }

@@ -57,6 +57,9 @@ func Mysql_num_fields(res *MYSQL_RES) uint {
 	return uint(res.Result.ColumnNumber())
 }
 func Mysql_error(conn *DBConnection) string {
+	if conn.Err == nil {
+		return ""
+	}
 	return conn.Err.Error()
 }
 func Mysql_errno(conn *DBConnection) int16 {
@@ -80,7 +83,8 @@ func Mysql_free_result(m *MYSQL_RES) {
 }
 
 func Mysql_real_query(conn *DBConnection, data string) *mysql.Result {
-	return conn.Execute(data)
+	conn.Result, conn.Err = conn.Conn.Execute(data)
+	return conn.Result
 }
 func init_result() *MYSQL_RES {
 	return &MYSQL_RES{
@@ -211,7 +215,7 @@ func (d *DBConnection) Close() error {
 }
 
 func (d *DBConnection) Execute(command string, args ...any) (result *mysql.Result) {
-	log.Debugf("Executing: %s", command)
+	// log.Debugf("Executing: %s", command)
 	d.Result, d.Err = d.Conn.Execute(command, args...)
 	if d.Err != nil {
 		var myError *mysql.MyError

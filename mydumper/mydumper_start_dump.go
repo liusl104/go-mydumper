@@ -1190,7 +1190,7 @@ func StartDump(conf *Configuration) error {
 	} else {
 		qc = "DOUBLE_QUOTE"
 	}
-	fmt.Fprintf(mdfile, "[config]\nquote_character = %s\n", qc)
+	fmt.Fprintf(mdfile, "[config]\nquote-character = %s\n", qc)
 	if LoadData || Csv {
 		fmt.Fprintf(mdfile, "local-infile = 1\n")
 	}

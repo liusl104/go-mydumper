@@ -295,6 +295,10 @@ func load_hash_from_key_file(kf *ini.File, set_session_hash map[string]string, g
 }
 
 func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_table, init_function_pointer func(str string) *Function_pointer) {
+	if kf == nil {
+		log.Errorf("assertion 'key_file != NULL' failed")
+		return
+	}
 	var groups = kf.SectionStrings()
 	var i int
 	var keys []*ini.Key
@@ -349,7 +353,7 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 
 func Load_hash_of_all_variables_perproduct_from_key_file(kf *ini.File, set_session_hash map[string]string, str string) {
 	if set_session_hash == nil {
-		log.Fatalf("set_session_hash is nil")
+		log.Criticalf("set_session_hash is nil")
 	}
 	var s *GString = G_string_new(str)
 	load_hash_from_key_file(kf, set_session_hash, s.Str.String())
@@ -478,7 +482,7 @@ func Create_dir(directory string) bool {
 		err := os.Mkdir(directory, 0750)
 		isExist := os.IsExist(err)
 		if !isExist {
-			M_critical("Unable to create `%s': %v", directory, err)
+			log.Criticalf("Unable to create `%s': %v", directory, err)
 			return false
 		}
 		return true
@@ -503,7 +507,9 @@ func create_fifo_dir(new_fifo_directory string) {
 		log.Fatalf("Unable to create `%s': %v", new_fifo_directory, err)
 	}
 }
-
+func Build_tmp_dir_name() string {
+	return os.TempDir()
+}
 func Create_backup_dir(new_directory, new_fifo_directory string) {
 	if Help {
 		return
@@ -774,6 +780,7 @@ func M_error(msg string, args ...any) {
 }
 
 func M_critical(msg string, args ...any) {
+	panic(msg)
 	Execute_gstring(main_connection, Set_global_back)
 	log.Criticalf(msg, args...)
 	os.Exit(EXIT_FAILURE)
@@ -784,7 +791,7 @@ func M_warning(msg string, args ...any) {
 }
 
 func Filter_sequence_schemas(create_table string) string {
-	re, err := regexp.Compile("`\\w+`\\.(`\\w+`)")
+	re, err := regexp.Compile(fmt.Sprintf("%s\\w+%s\\.(%s\\w+%s)", Identifier_quote_character, Identifier_quote_character, Identifier_quote_character, Identifier_quote_character))
 	if err != nil {
 		log.Criticalf("filter table schema fail:%v", err)
 	}
@@ -794,16 +801,17 @@ func Filter_sequence_schemas(create_table string) string {
 
 func Read_data(infile *bufio.Scanner, data *GString, eof *bool, line *int) bool {
 	if !infile.Scan() {
-		*eof = false
+		*eof = true
 		return true
 	}
-	G_string_append(data, infile.Text())
+	G_string_append_b(data, infile.Bytes())
+	G_string_append_c(data, '\n')
 	*line++
 	if infile.Err() != nil {
 		*eof = true
 		return true
 	}
-	return false
+	return true
 }
 func M_date_time_new_now_local() string {
 	return time.Now().Format("2006-01-02 15:04:05.000000")

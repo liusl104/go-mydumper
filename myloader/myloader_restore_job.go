@@ -66,7 +66,7 @@ type schema_restore_job struct {
 	object    string
 }
 
-func initialize_restore_job(pm_str string) {
+func initialize_restore_job() {
 	file_list_to_do = G_async_queue_new()
 	single_threaded_create_table = G_mutex_new()
 	progress_mutex = G_mutex_new()
@@ -92,9 +92,9 @@ func new_schema_restore_job_internal(database *database, statement *GString, obj
 
 func new_restore_job(filename string, dbt *db_table, job_type restore_job_type) *restore_job {
 	var rj = new(restore_job)
-	/*	rj.data = new(restore_job_data)
-		rj.data.srj = new(schema_restore_job)
-		rj.data.drj = new(data_restore_job)*/
+	rj.data = new(restore_job_data)
+	rj.data.srj = new(schema_restore_job)
+	rj.data.drj = new(data_restore_job)
 	rj.filename = filename
 	rj.dbt = dbt
 	rj.job_type = job_type
@@ -224,7 +224,7 @@ func get_total_created(conf *configuration, total *uint) {
 func execute_drop_database(td *thread_data, database string) {
 	var data *GString = G_string_new("DROP DATABASE IF EXISTS ")
 	G_string_append_printf(data, "`%s`", database)
-	log.Tracef("Droping database %s", database)
+	log.Debugf("Droping database %s", database)
 	if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to drop database: %s", database) {
 		atomic.AddUint64(&detailed_errors.schema_errors, 1)
 	}
@@ -246,7 +246,8 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	}
 	if shutdown_triggered {
 		G_async_queue_push(file_list_to_do, rj.filename)
-		goto cleanup
+		td.status = COMPLETED
+		return false
 	}
 
 	td.status = STARTED
@@ -265,7 +266,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 		break
 	case JOB_TO_CREATE_TABLE:
 		dbt.schema_state = CREATING
-		if (SourceDb == "" || strings.Compare(dbt.database.name, SourceDb) == 0) && NoSchemas && !dbt.object_to_export.No_schema {
+		if (SourceDb == "" || strings.Compare(dbt.database.name, SourceDb) == 0) && !NoSchemas && !dbt.object_to_export.No_schema {
 			if SerialTblCreation {
 				single_threaded_create_table.Lock()
 			}
@@ -358,7 +359,6 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	default:
 		log.Critical("Something very bad happened!")
 	}
-cleanup:
 	td.status = COMPLETED
 	return false
 }

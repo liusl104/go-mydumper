@@ -2,6 +2,7 @@ package myloader
 
 import (
 	"bufio"
+	"container/list"
 	"fmt"
 	"github.com/go-ini/ini"
 	. "github.com/liusl104/go-mydumper/src"
@@ -70,7 +71,8 @@ func append_new_db_table(real_db_name *database, table string, number_rows uint6
 			dbt.real_table = dbt.table
 			dbt.rows = number_rows
 			dbt.rows_inserted = 0
-			dbt.restore_job_list = nil
+			dbt.restore_job_list = new(list.List)
+			dbt.object_to_export = new(Object_to_export)
 			Parse_object_to_export(dbt.object_to_export, conf_per_table.All_object_to_export[lkey])
 			dbt.current_threads = 0
 			if MaxThreadsPerTable > NumThreads {
@@ -87,6 +89,7 @@ func append_new_db_table(real_db_name *database, table string, number_rows uint6
 			dbt.remaining_jobs = 0
 			dbt.constraints = nil
 			dbt.count = 0
+			dbt.restore_job_list = list.New()
 			conf.table_hash[lkey] = dbt
 			refresh_table_list_without_table_hash_lock(conf, false)
 			dbt.schema_checksum = ""
@@ -197,7 +200,7 @@ func load_schema(dbt *db_table, filename string) *control_job {
 			if data.Len >= 5 {
 				length = data.Len - 5
 			}
-			if strings.Contains(data.Str.String()[length:], ";\n") {
+			if strings.HasSuffix(data.Str.String()[length:], ";\n") {
 				if strings.EqualFold(data.Str.String()[:13], "CREATE TABLE ") {
 					if !strings.Contains(data.Str.String()[:30], Identifier_quote_character_str) {
 						log.Errorf("Identifier quote character (%s) not found on %s. Review file and configure --identifier-quote-character properly", Identifier_quote_character_str, filename)
@@ -205,12 +208,13 @@ func load_schema(dbt *db_table, filename string) *control_job {
 					}
 					var expr = fmt.Sprintf("CREATE\\s+TABLE\\s+[^%s]*%s(.+?)%s\\s*\\(", Identifier_quote_character, Identifier_quote_character, Identifier_quote_character)
 					var matchInfo *regexp.Regexp
-					matchInfo, err = regexp.Compile(expr)
-					if err != nil {
-						log.Errorf("Cannot parse real table name from CREATE TABLE statement: %v", err)
+					matchInfo = regexp.MustCompile(expr)
+					matchList := matchInfo.FindStringSubmatch(data.Str.String())
+					if len(matchList) < 2 {
+						log.Errorf("Cannot parse CREATE TABLE statement: %s", data.Str.String())
 						return nil
 					}
-					dbt.real_table = matchInfo.FindString(data.Str.String())
+					dbt.real_table = matchList[1]
 					if dbt.real_table == "" {
 						log.Errorf("Cannot parse real table name from CREATE TABLE statement: %s", data.Str.String())
 						return nil
@@ -385,7 +389,7 @@ func process_database_filename(filename string) {
 		log.Criticalf("It was not possible to process db file: %s", filename)
 	}
 
-	log.Tracef("Adding database: %s -> %s", db_kname, db_vname)
+	log.Debugf("Adding database: %s -> %s", db_kname, db_vname)
 	var real_db_name *database = get_db_hash(db_kname, db_vname)
 	if DB == "" {
 		real_db_name.schema_state = NOT_CREATED
@@ -421,7 +425,7 @@ func process_table_filename(filename string) bool {
 		return false
 	} else {
 		if cj != nil {
-			log.Tracef("table_queue <- %v: %s", cj.data.restore_job.job_type, filename)
+			log.Debugf("table_queue <- %s: %s", rjtype2str(cj.data.restore_job.job_type), filename)
 			G_async_queue_push(conf.table_queue, cj)
 		}
 	}
@@ -461,8 +465,9 @@ func process_metadata_global(file string) {
 	for j = 0; j < length; j++ {
 		var group = Newline_protect(groups[j])
 		if strings.HasPrefix(group, "config") {
-			var keys []*ini.Section
-			keys, err = kf.SectionsByName(group)
+			var keys []*ini.Key
+			section := kf.Section(group)
+			keys = section.Keys()
 			if err != nil {
 				log.Errorf("Loading configuration on section %s: %v", group, err)
 			} else {
@@ -477,7 +482,6 @@ func process_metadata_global(file string) {
 				}
 				G_option_context_parse(list)
 				log.Infof("Config file loaded")
-				value = get_value(kf, "config", "quote_character")
 			}
 			if Identifier_quote_character == BACKTICK {
 				wrong_quote = "\""
@@ -490,11 +494,11 @@ func process_metadata_global(file string) {
 			} else {
 				log.Criticalf("Wrong quote_character in metadata")
 			}
-			log.Tracef("metadata: quote character is %s", Identifier_quote_character)
+			log.Debugf("metadata: quote character is %s", Identifier_quote_character)
 		} else if strings.HasPrefix(group, wrong_quote) {
 			log.Errorf("metadata is broken: group %s has wrong quoting: %s; must be: %s", group, wrong_quote, Identifier_quote_character)
 		} else if strings.HasPrefix(group, Identifier_quote_character_str) {
-			database_table = strings.SplitN(group, delimiter, 2)
+			database_table = strings.SplitN(group[1:], delimiter, 2)
 			if database_table[1] != "" {
 				// database_table[1][strlen(database_table[1])-1]='\0'
 				database_table[1] = database_table[1][:len(database_table[1])-1]
@@ -551,10 +555,11 @@ func process_metadata_global(file string) {
 		} else if strings.HasPrefix(group, "master") || strings.HasPrefix(group, "source") {
 			change_master(kf, group, replicationStatements, SourceData)
 		} else if strings.HasPrefix(group, "myloader_session_variables") {
+			log.Infof("myloader_session_variables found on metadata")
 			Load_hash_of_all_variables_perproduct_from_key_file(kf, set_session_hash, "myloader_session_variables")
 			Refresh_set_session_from_hash(Set_session, set_session_hash)
 		} else {
-			log.Tracef("metadata: skipping group %s", group)
+			log.Debugf("metadata: skipping group %s", group)
 		}
 	}
 	if Stream != "" {
@@ -606,14 +611,14 @@ func process_schema_sequence_filename(filename string) bool {
 	var cj *control_job = new_control_job(JOB_RESTORE, rj, real_db_name)
 	real_db_name.mutex.Lock()
 	if real_db_name.schema_state != CREATED {
-		log.Tracef("%s.sequence_queue <- %v: %s", db_name, cj.data.restore_job.job_type, filename)
-		log.Tracef("real_db_name: %v; sequence_queue: %v", real_db_name, real_db_name.sequence_queue)
+		log.Debugf("%s.sequence_queue <- %s: %s", db_name, rjtype2str(cj.data.restore_job.job_type), filename)
+		log.Debugf("real_db_name: %v; sequence_queue: %v", real_db_name, real_db_name.sequence_queue)
 		G_async_queue_push(real_db_name.sequence_queue, cj)
 		real_db_name.mutex.Unlock()
 		return false
 	} else {
 		if cj != nil {
-			log.Tracef("table_queue <- %v: %s", cj.data.restore_job.job_type, filename)
+			log.Debugf("table_queue <- %s: %s", rjtype2str(cj.data.restore_job.job_type), filename)
 			G_async_queue_push(conf.table_queue, cj)
 		}
 	}

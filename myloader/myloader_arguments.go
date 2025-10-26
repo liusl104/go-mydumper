@@ -33,7 +33,6 @@ var (
 	DisableRedoLog              bool
 	CheckSum                    string
 	OverwriteTables             bool
-	overwrite_tables            bool
 	OverwriteUnsafe             bool
 	RetryCount                  uint = 10
 	SerialTblCreation           bool
@@ -129,7 +128,7 @@ func arguments_callback() bool {
 		log.Criticalf("Option --purge-mode has been deprecated. User -o/--drop-table instead")
 	}
 	if DropTableStr != "" {
-		overwrite_tables = true
+		OverwriteTables = true
 		if strings.EqualFold(DropTableStr, "TRUNCATE") {
 			purge_mode = TRUNCATE
 		} else if strings.EqualFold(DropTableStr, "DROP") || strings.EqualFold(DropTableStr, "1") || strings.EqualFold(DropTableStr, "") {
@@ -174,7 +173,7 @@ func load_from_metadata_entries() {
 }
 
 func threads_entries() {
-	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 0, "Maximum number of threads per table to use, defaults to --threads")
+	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 4, "Maximum number of threads per table to use, defaults to --threads")
 	pflag.UintVar(&MaxThreadsForIndexCreation, "max-threads-for-index-creation", 4, "Maximum number of threads for index creation, default 4")
 	pflag.UintVar(&MaxThreadsForPostCreation, "max-threads-for-post-actions", 1, "Maximum number of threads for post action like: constraints, procedure, views and triggers, default 1")
 	pflag.UintVar(&MaxThreadsForSchemaCreation, "max-threads-for-schema-creation", 4, "Maximum number of threads for schema creation. When this is set to 1, is the same than --serialized-table-creation, default 4")
@@ -242,4 +241,10 @@ func load_contex_entries() {
 	Connection_arguments_callback()
 	arguments_callback()
 	Stream_arguments_callback()
+	if Debug {
+		Set_debug()
+		_ = Set_verbose()
+	} else {
+		_ = Set_verbose()
+	}
 }

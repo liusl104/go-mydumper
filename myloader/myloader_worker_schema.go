@@ -14,7 +14,7 @@ var (
 )
 
 func schema_queue_push(current_ft file_type, message string) {
-	log.Tracef("refresh_db_queue2 <- %v%s", current_ft, message)
+	log.Debugf("refresh_db_queue2 <- %s%s", ft2str(current_ft), message)
 	G_async_queue_push(refresh_db_queue2, current_ft)
 }
 
@@ -31,11 +31,12 @@ func set_db_schema_created(real_db_name *database, conf *configuration) {
 		ft = SCHEMA_TABLE
 		queue = real_db_name.queue
 	}
-	cj = G_async_queue_try_pop(queue).(*control_job)
-	for cj != nil {
+	task := G_async_queue_try_pop(queue)
+	for task != nil {
+		cj = task.(*control_job)
 		G_async_queue_push(object_queue, cj)
 		schema_queue_push(ft, " (requeuing from db queue)")
-		cj = G_async_queue_try_pop(queue).(*control_job)
+		task = G_async_queue_try_pop(queue)
 	}
 
 }
@@ -60,12 +61,12 @@ func process_schema(td *thread_data) bool {
 	var ret = true
 	var postpone_load bool = OverwriteTables && !OverwriteUnsafe
 	ft = G_async_queue_pop(refresh_db_queue2).(file_type)
-	log.Tracef("refresh_db_queue2 -> %v", ft)
+	log.Debugf("refresh_db_queue2 -> %s", ft2str(ft))
 	switch ft {
 	case SCHEMA_CREATE:
 		job = G_async_queue_pop(td.conf.database_queue).(*control_job)
 		real_db_name = job.data.restore_job.data.srj.database
-		log.Tracef("database_queue -> %v: %s", ft, real_db_name.name)
+		log.Debugf("database_queue -> %s: %s", ft2str(ft), real_db_name.name)
 		real_db_name.mutex.Lock()
 		ret = process_job(td, job, nil)
 		set_db_schema_created(real_db_name, td.conf)
@@ -79,8 +80,9 @@ func process_schema(td *thread_data) bool {
 		job = G_async_queue_pop(td.conf.table_queue).(*control_job)
 		qname = "table_queue"
 		if job.job_type == JOB_SHUTDOWN {
-			var rjob *control_job = G_async_queue_try_pop(td.conf.retry_queue).(*control_job)
-			if rjob != nil {
+			var task = G_async_queue_try_pop(td.conf.retry_queue)
+			if task != nil {
+				rjob := task.(*control_job)
 				G_async_queue_push(td.conf.table_queue, job)
 				job = rjob
 				qname = "retry_queue"
@@ -91,14 +93,14 @@ func process_schema(td *thread_data) bool {
 		var filename string
 		if restore {
 			filename = job.data.restore_job.filename
-			log.Tracef("%s -> %v: %s", qname, ft, filename)
+			log.Debugf("%s -> %s: %s", qname, ft2str(ft), filename)
 		} else {
-			log.Tracef("%s -> %v", qname, job.job_type)
+			log.Debugf("%s -> %s", qname, jtype2str(job.job_type))
 		}
 		ret = process_job(td, job, &retry)
 		if retry {
 			G_assert(restore)
-			log.Tracef("retry_queue <- %v: %s", ft, filename)
+			log.Debugf("retry_queue <- %s: %s", ft2str(ft), filename)
 			G_async_queue_push(td.conf.retry_queue, job)
 			enroute_into_the_right_queue_based_on_file_type(ft)
 			break
@@ -109,7 +111,7 @@ func process_schema(td *thread_data) bool {
 			G_assert(ft == SCHEMA_SEQUENCE && sequences_processed < sequences)
 			sequences_mutex.Lock()
 			sequences_processed++
-			log.Tracef("Processed sequence: %s (%d of %d)", filename, sequences_processed, sequences)
+			log.Debugf("Processed sequence: %s (%d of %d)", filename, sequences_processed, sequences)
 			sequences_mutex.Unlock()
 		}
 		break
@@ -117,12 +119,12 @@ func process_schema(td *thread_data) bool {
 		if !second_round {
 			sequences_mutex.Lock()
 			if sequences_processed < sequences {
-				log.Tracef("INTERMEDIATE_ENDED waits %d sequences", sequences-sequences_processed)
+				log.Debugf("INTERMEDIATE_ENDED waits %d sequences", sequences-sequences_processed)
 				enroute_into_the_right_queue_based_on_file_type(INTERMEDIATE_ENDED)
 				sequences_mutex.Unlock()
 				return true
 			}
-			sequences_mutex.Lock()
+			sequences_mutex.Unlock()
 			/* Wait while all DB created and go "second round" */
 			for _, real_db_name = range db_hash {
 				real_db_name.mutex.Lock()
@@ -149,12 +151,12 @@ func process_schema(td *thread_data) bool {
 			log.Infof("Table creation enqueing completed")
 			var n uint
 			/* we also sending to ourselves and upper loop of worker_schema_thread() will send us to SCHEMA_TABLE/JOB_SHUTDOWN */
+
 			for n = 0; n < MaxThreadsForSchemaCreation; n++ {
-				td = schema_td[n]
-				log.Tracef("table_queue <- JOB_SHUTDOWN")
-				G_async_queue_push(td.conf.table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
-				log.Tracef("refresh_db_queue2 <- %v (second round)", SCHEMA_TABLE)
-				if !postpone_load || n < MaxThreadsForIndexCreation-1 {
+				// td = schema_td[n]
+				log.Debugf("table_queue <- JOB_SHUTDOWN")
+				G_async_queue_push(schema_td[n].conf.table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+				if !postpone_load || n < MaxThreadsForSchemaCreation-1 {
 					schema_queue_push(SCHEMA_TABLE, " (second round)")
 				}
 			}
@@ -205,11 +207,13 @@ func start_worker_schema() {
 }
 func wait_schema_worker_to_finish() {
 	var n uint
-	log.Tracef("Waiting schema worker to finish")
+	log.Debugf("Waiting schema worker to finish")
 	for n = 0; n < MaxThreadsForSchemaCreation; n++ {
+		log.Debugf("wait schema thread id : %d", schema_threads[n].Thread_id)
 		G_thread_join(schema_threads[n])
+		log.Debugf("schema thread id : %d do", schema_threads[n].Thread_id)
 	}
-	log.Tracef("Schema worker finished")
+	log.Debugf("Schema worker finished")
 }
 
 func free_schema_worker_threads() {

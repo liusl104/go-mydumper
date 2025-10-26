@@ -74,7 +74,7 @@ func worker_post_thread(c any) {
 		cont = process_job(td, job, nil)
 	}
 
-	log.Tracef("Thread %d: ending", td.thread_id)
+	log.Debugf("Thread %d: ending", td.thread_id)
 }
 
 func create_post_shutdown_job(conf *configuration) {

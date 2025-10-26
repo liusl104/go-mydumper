@@ -86,6 +86,7 @@ func remove_ignore_set_session_from_hash() {
 		delete(set_session_hash, data)
 	}
 }
+
 func get_value(kf *ini.File, group string, key string) string {
 	section := kf.Section(group)
 	if !section.HasKey(key) {
@@ -105,6 +106,7 @@ func execute_replication_commands(conn *DBConnection, statement string) {
 	}
 	M_query_warning(conn, "START TRANSACTION", "START TRANSACTION failed")
 }
+
 func change_master(kf *ini.File, group string, rs *replication_statements, rep_set *Replication_settings) {
 	var val string
 	var i uint
@@ -367,7 +369,7 @@ func execute_use_if_needs_to(cd *connection_data, database *database, msg string
 	if database != nil && (DB == "" || cd.current_database == nil) {
 		if cd.current_database == nil || strings.Compare(database.real_database, cd.current_database.real_database) != 0 {
 			cd.current_database = database
-			if execute_use(cd) {
+			if !execute_use(cd) {
 				log.Criticalf("Thread %d with connection %d: Error switching to database `%s` %s: %s", cd.thread_id, cd.connection_id, cd.current_database.real_database, msg, Mysql_error(cd.thrconn))
 			}
 		}
@@ -443,74 +445,6 @@ func get_database_table_from_file(filename string, sufix string, database *strin
 	*database = split[0]
 	return
 }
-
-/*
-func append_alter_table(alter_table_statement *string, database string, table string) {
-	*alter_table_statement += fmt.Sprintf("ALTER TABLE `%s`.`%s` ", database, table)
-}
-
-func finish_alter_table(alter_table_statement string) string {
-	c := len(alter_table_statement) - 5
-	l := alter_table_statement[c:]
-	if strings.Contains(l, ";") {
-		alter_table_statement += "\n"
-	} else {
-		alter_table_statement += ";\n"
-	}
-	return alter_table_statement
-}
-*/
-/*
-func process_create_table_statement(statement string, create_table_statement *string, alter_table_statement *string, alter_table_constraint_statement *string, dbt *db_table, split_indexes bool) int {
-	var flag int
-	var split_file = strings.Split(statement, "\n")
-	var autoinc_column string
-	append_alter_table(alter_table_statement, dbt.database.real_database, dbt.real_table)
-	append_alter_table(alter_table_constraint_statement, dbt.database.real_database, dbt.real_table)
-	var i, fulltext_counter int
-	for i = 0; i < len(split_file); i++ {
-		if split_indexes && strings.HasPrefix(split_file[i], "  KEY") ||
-			strings.HasPrefix(split_file[i], "  UNIQUE") ||
-			strings.HasPrefix(split_file[i], "  SPATIAL") ||
-			strings.HasPrefix(split_file[i], "  FULLTEXT") ||
-			strings.HasPrefix(split_file[i], "  INDEX") {
-			if autoinc_column != "" && strings.HasPrefix(split_file[i], autoinc_column) {
-				*create_table_statement += split_file[i]
-				*create_table_statement += "\n"
-			} else {
-				flag |= IS_ALTER_TABLE_PRESENT
-				if strings.HasPrefix(split_file[i], "  FULLTEXT") {
-					fulltext_counter++
-				}
-				if fulltext_counter > 1 {
-					fulltext_counter = 1
-					*alter_table_statement = finish_alter_table(*alter_table_statement)
-					append_alter_table(alter_table_statement, dbt.database.real_database, dbt.real_table)
-				}
-				*alter_table_statement += "\n ADD"
-				*alter_table_statement += split_file[i]
-			}
-		} else {
-			if strings.HasPrefix(split_file[i], "  CONSTRAINT") {
-				flag |= INCLUDE_CONSTRAINT
-				*alter_table_constraint_statement += "\n ADD"
-				*alter_table_constraint_statement += split_file[i]
-			} else {
-				if split_file[i] == "AUTO_INCREMENT" {
-					var autoinc_split = strings.SplitN(split_file[i], "`", 3)
-					autoinc_column = fmt.Sprintf("(`%s`", autoinc_split[1])
-				}
-				*create_table_statement += split_file[i]
-				*create_table_statement += "\n"
-			}
-		}
-		if split_file[i] == "ENGINE=InnoDB" {
-			flag |= IS_INNODB_TABLE
-		}
-	}
-	return flag
-}
-*/
 
 func process_create_table_statement(statement *GString, create_table_statement *GString, alter_table_statement *GString, alter_table_constraint_statement *GString, dbt *db_table, split_indexes bool) int {
 	return Global_process_create_table_statement(statement, create_table_statement, alter_table_statement, alter_table_constraint_statement, dbt.real_table, split_indexes)
@@ -709,16 +643,6 @@ func show_warnings_if_possible(conn *DBConnection) string {
 		G_string_append(_error, "\n")
 	}
 	return _error.Str.String()
-}
-func m_query(conn *DBConnection, query string, log_fun func(string, ...any), args string) bool {
-	_ = conn.Execute(query)
-
-	if conn.Err != nil {
-		log_fun(args)
-		return false
-	}
-
-	return true
 }
 
 func status2str(status schema_status) string {
