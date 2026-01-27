@@ -36,7 +36,7 @@ var (
 	OverwriteUnsafe             bool
 	RetryCount                  uint = 10
 	SerialTblCreation           bool
-	RefreshTableListInterval    uint = 100
+	RefreshTableListInterval    int64 = 100
 	SetGtidPurge                bool
 	Rows                        int
 	CommitCount                 uint = 1000
@@ -75,17 +75,17 @@ func arguments_callback() bool {
 	}
 	if OptimizeKeys != "" {
 		optimize_keys_str = OptimizeKeys
-		if OptimizeKeys == "" || OptimizeKeys == "1" {
+		if optimize_keys_str == "" || optimize_keys_str == "1" {
 			optimize_keys_per_table = true
 			optimize_keys_all_tables = false
-		} else if strings.EqualFold(OptimizeKeys, SKIP) {
+		} else if strings.EqualFold(optimize_keys_str, SKIP) {
 			optimize_keys = false
 			optimize_keys_per_table = false
 			optimize_keys_all_tables = false
-		} else if strings.EqualFold(OptimizeKeys, AFTER_IMPORT_PER_TABLE) {
+		} else if strings.EqualFold(optimize_keys_str, AFTER_IMPORT_PER_TABLE) {
 			optimize_keys_per_table = true
 			optimize_keys_all_tables = false
-		} else if strings.EqualFold(OptimizeKeys, AFTER_IMPORT_ALL_TABLES) {
+		} else if strings.EqualFold(optimize_keys_str, AFTER_IMPORT_ALL_TABLES) {
 			optimize_keys_all_tables = true
 			optimize_keys_per_table = false
 		} else {
@@ -198,7 +198,7 @@ func execution_entries() {
 	pflag.UintVar(&RetryCount, "retry-count", 10, "Lock wait timeout exceeded retry count, default 10 (currently only for DROP TABLE)")
 	pflag.BoolVar(&SerialTblCreation, "serialized-table-creation", false, "Table recreation will be executed in series, one thread at a time. This means --max-threads-for-schema-creation=1. This option will be removed in future releases")
 	pflag.StringVar(&Stream, "stream", "", "It will receive the stream from STDIN and creates the file in the disk before start processing.Since v0.12.7-1, accepts NO_DELETE, NO_STREAM_AND_NO_DELETE and TRADITIONAL which is the default value and used if no parameter is given")
-	pflag.UintVar(&RefreshTableListInterval, "metadata-refresh-interval", 100, "Every this amount of tables the internal metadata will be refreshed. If the amount of tables you have in your metadata file is high, then you should increase this value. Default: 100")
+	pflag.Int64Var(&RefreshTableListInterval, "metadata-refresh-interval", 100, "Every this amount of tables the internal metadata will be refreshed. If the amount of tables you have in your metadata file is high, then you should increase this value. Default: 100")
 	pflag.BoolVar(&SkipTableSorting, "skip-table-sorting", false, "Starting with largest table is better, but this can be ignored due performance impact when you have high amount of tables")
 	pflag.BoolVar(&SetGtidPurge, "set-gtid-purged", false, "After import, it will execute the SET GLOBAL gtid_purged with the value found on source section of the metadata file")
 }
@@ -238,6 +238,7 @@ func load_contex_entries() {
 	statement_entries()
 	load_from_metadata_entries()
 	pflag.Parse()
+	Initialize_set_names()
 	Connection_arguments_callback()
 	arguments_callback()
 	Stream_arguments_callback()

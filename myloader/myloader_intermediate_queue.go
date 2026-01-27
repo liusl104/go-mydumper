@@ -173,7 +173,8 @@ func intermediate_thread(c any) {
 			iflnm = nil
 			break
 		}
-		enroute_into_the_right_queue_based_on_file_type(process_filename(iflnm.filename))
+		i := process_filename(iflnm.filename)
+		enroute_into_the_right_queue_based_on_file_type(i)
 	}
 
 	log.Infof("Intermediate thread ended")

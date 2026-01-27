@@ -2,6 +2,7 @@ package mydumper
 
 import (
 	"fmt"
+	"github.com/go-ini/ini"
 	"github.com/spf13/pflag"
 	"os"
 	"runtime"
@@ -9,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/go-ini/ini"
 )
 
 type GString struct {
@@ -164,6 +163,7 @@ func G_thread_new(thread_name string, f func(any), data any, thread_id int) *GTh
 }
 func G_thread_join(t *GThread) {
 	t.Thread.Wait()
+	return
 }
 
 func G_thread_unref(t *GThread) {

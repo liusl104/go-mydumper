@@ -38,7 +38,7 @@ type fifo struct {
 
 var (
 	conf                    *configuration
-	fifo_hash               map[*os.File](*fifo)
+	fifo_hash               map[*os.File]*fifo
 	fifo_table_mutex        *sync.Mutex
 	append_if_not_exist     bool
 	change_master_statement *GString

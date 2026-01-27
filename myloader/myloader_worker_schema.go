@@ -8,7 +8,7 @@ import (
 var (
 	refresh_db_queue2 *GAsyncQueue
 	schema_td         []*thread_data
-	second_round      bool
+	second_round      bool = false
 
 	schema_threads []*GThread
 )
@@ -75,6 +75,7 @@ func process_schema(td *thread_data) bool {
 		break
 	case CJT_RESUME:
 		cjt_resume()
+		fallthrough // 与 C 版本 "// fall through" 对应，需继续执行 SCHEMA_TABLE 分支以从 table_queue 取 JOB_SHUTDOWN 并退出
 	case SCHEMA_TABLE, SCHEMA_SEQUENCE:
 		var qname string
 		job = G_async_queue_pop(td.conf.table_queue).(*control_job)
@@ -151,11 +152,11 @@ func process_schema(td *thread_data) bool {
 			log.Infof("Table creation enqueing completed")
 			var n uint
 			/* we also sending to ourselves and upper loop of worker_schema_thread() will send us to SCHEMA_TABLE/JOB_SHUTDOWN */
-
+			// td = schema_td[n]
 			for n = 0; n < MaxThreadsForSchemaCreation; n++ {
-				// td = schema_td[n]
+				td = schema_td[n]
 				log.Debugf("table_queue <- JOB_SHUTDOWN")
-				G_async_queue_push(schema_td[n].conf.table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
+				G_async_queue_push(td.conf.table_queue, new_control_job(JOB_SHUTDOWN, nil, nil))
 				if !postpone_load || n < MaxThreadsForSchemaCreation-1 {
 					schema_queue_push(SCHEMA_TABLE, " (second round)")
 				}

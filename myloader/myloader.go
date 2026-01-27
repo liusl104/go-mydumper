@@ -379,7 +379,7 @@ func StartLoad() {
 	} else {
 		log.Infof("Using %d loader threads", NumThreads)
 	}
-	Initialize_set_names()
+
 	log.Infof("MyDumper restore version: %s", VERSION)
 	Hide_password()
 	Ask_password()
@@ -643,21 +643,23 @@ func print_help() {
 	Print_string("tables-list", TablesList)
 	Print_string("pmm-path", PmmPath)
 	Print_string("pmm-resolution", PmmResolution)
-
-	Print_bool("enable-binlog", EnableBinlog)
-	if !innodb_optimize_keys {
-		Print_string("innodb-optimize-keys", SKIP)
+	if EnableBinlog {
+		Print_bool("enable-binlog", EnableBinlog)
+	}
+	if !optimize_keys {
+		Print_string("optimize-keys", SKIP)
 	} else if optimize_keys_per_table {
-		Print_string("innodb-optimize-keys", AFTER_IMPORT_PER_TABLE)
+		Print_string("optimize-keys", AFTER_IMPORT_PER_TABLE)
 	} else if optimize_keys_all_tables {
-		Print_string("innodb-optimize-keys", AFTER_IMPORT_ALL_TABLES)
+		Print_string("optimize-keys", AFTER_IMPORT_ALL_TABLES)
 	} else {
-		Print_string("innodb-optimize-keys", "")
+		Print_string("optimize-keys", "")
 	}
 
 	Print_bool("no-schemas", NoSchemas)
 
-	Print_string("purge-mode", PurgeModeStr)
+	// Print_string("purge-mode", PurgeModeStr)
+	Print_bool("local-infile", LocalInFile)
 	Print_bool("disable-redo-log", DisableRedoLog)
 	Print_string("checksum", checksum_str)
 	Print_bool("overwrite-tables", OverwriteTables)
@@ -676,7 +678,7 @@ func print_help() {
 	Print_int("rows", Rows)
 	Print_uint("queries-per-transaction", CommitCount)
 	Print_bool("append-if-not-exist", append_if_not_exist)
-	Print_string("set-names", SetNamesStr)
+	Print_string("set-names", Set_names_in_conn_by_default)
 
 	Print_bool("skip-definer", SkipDefiner)
 	Print_bool("help", Help)

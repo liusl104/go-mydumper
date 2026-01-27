@@ -41,7 +41,7 @@ type replication_statements struct {
 type check_sum func(conn *DBConnection, database, table string) string
 
 func initialize_common() {
-	refresh_table_list_counter = int64(RefreshTableListInterval)
+	refresh_table_list_counter = RefreshTableListInterval
 	db_hash_mutex = G_mutex_new()
 	tbl_hash = make(map[string]string)
 	db_hash = make(map[string]*database)
@@ -479,7 +479,7 @@ func refresh_table_list_without_table_hash_lock(conf *configuration, force bool)
 
 		}
 		conf.table_list = table_list
-		atomic.AddInt64(&refresh_table_list_counter, int64(RefreshTableListInterval))
+		atomic.StoreInt64(&refresh_table_list_counter, RefreshTableListInterval)
 		conf.table_list_mutex.Unlock()
 	}
 }

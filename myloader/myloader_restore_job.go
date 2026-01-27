@@ -339,8 +339,9 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					execute_drop_database(td, rj.data.srj.database.real_database)
 				}
 
+				// 与 C 版本一致：CREATE_DATABASE 时传 nil（不切换数据库），其他情况传 database
 				var db *database
-				if strings.EqualFold(rj.data.srj.object, CREATE_DATABASE) {
+				if !strings.EqualFold(rj.data.srj.object, CREATE_DATABASE) {
 					db = rj.data.srj.database
 				}
 				if restore_data_from_file(td, rj.filename, true, db) > 0 {

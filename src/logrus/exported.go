@@ -231,7 +231,6 @@ func Fatalf(format string, args ...interface{}) {
 	std.Fatalf(format, args...)
 }
 func Criticalf(format string, args ...interface{}) {
-	panic(format)
 	std.Criticalf(format, args...)
 }
 

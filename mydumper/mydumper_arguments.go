@@ -182,7 +182,7 @@ func statement_entries() {
 	pflag.IntVarP(&StatementSize, "statement-size", "s", 1000000, "Attempted size of INSERT statement in bytes")
 	pflag.BoolVar(&SkipTz, "tz-utc", false, "SET TIME_ZONE='+00:00' at top of dump to allow dumping of TIMESTAMP data when a server has data in different time zones or data is being moved between servers with different time zones, defaults to on use --skip-tz-utc to disable. ")
 	pflag.BoolVar(&SkipTz, "skip-tz-utc", false, "Doesn't add SET TIMEZONE on the backup files")
-	pflag.StringVar(&SetNamesStr, "set-names", "", "Sets the names, use it at your own risk")
+	pflag.StringVar(&Set_names_in_conn_by_default, "set-names", "", "Sets the names, use it at your own risk, default binary")
 	pflag.StringVar(&DefaultCharacterSet, "default-character-set", "", "Accepts a list of up to 2 charsets, and executes 'SET NAMES' with the proper charset from the list, where the first item is used when executes SHOW CREATE TABLE and the second item is used for the rest. Use it at your own risk as it might cause inconsistencies #1974. Default: auto,binary. auto means that it is going to use the table character set.")
 	pflag.StringVar(&TableEngineForViewDependency, "table-engine-for-view-dependency", MEMORY, "Table engine to be used for the CREATE TABLE statement for temporary tables when using views")
 }
