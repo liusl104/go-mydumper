@@ -480,9 +480,11 @@ func escape_tab_with(to []byte) {
 func Create_dir(directory string) bool {
 	if !Help {
 		err := os.Mkdir(directory, 0750)
-		isExist := os.IsExist(err)
-		if !isExist {
-			log.Criticalf("Unable to create `%s': %v", directory, err)
+		if err != nil {
+			// 与 C 版本一致：如果目录已存在（os.IsExist），不报错，只返回 false
+			if !os.IsExist(err) {
+				log.Criticalf("Unable to create `%s': %v", directory, err)
+			}
 			return false
 		}
 		return true
@@ -780,7 +782,6 @@ func M_error(msg string, args ...any) {
 }
 
 func M_critical(msg string, args ...any) {
-	panic(msg)
 	Execute_gstring(main_connection, Set_global_back)
 	log.Criticalf(msg, args...)
 	os.Exit(EXIT_FAILURE)
@@ -1032,19 +1033,17 @@ func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...
 }
 func m_query(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
 	conn.Query = query
-	stmt, err := conn.Conn.Prepare(query)
-	if err == nil {
-		conn.Stmt = stmt
+	conn.Stmt, conn.Err = conn.Conn.Prepare(query)
+	if conn.Err == nil {
 		conn.Code = 0
-		conn.Err = nil
 		return false
 	} else {
+		log.Errorf("query: %s : error: %v", query, conn.Err)
 		var myerr *mysql.MyError
-		errors.As(err, &myerr)
+		errors.As(conn.Err, &myerr)
 		if myerr != nil {
 			conn.Code = int16(myerr.Code)
 		}
-		conn.Err = err
 		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 	}
 	return true

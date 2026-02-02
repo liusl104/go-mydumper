@@ -130,8 +130,9 @@ func reconnect_connection_data(cd *connection_data) {
 }
 
 func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is_schema bool, query_counter *uint) uint {
-	en := Mysql_real_query(cd.thrconn, data.Str.String())
-	if en == nil {
+	// 与 C 版本一致：mysql_real_query 返回非零值表示错误
+	Mysql_real_query(cd.thrconn, data.Str.String())
+	if Mysql_errno(cd.thrconn) != 0 {
 		if is_schema {
 			log.Warnf("Thread %d using connection %d - ERROR %d: %s %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 		} else {
@@ -147,7 +148,9 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 				}
 			}
 			atomic.AddUint64(&detailed_errors.retries, 1)
-			if Mysql_real_query(cd.thrconn, data.Str.String()) == nil {
+			// 与 C 版本一致：重试后仍然失败
+			Mysql_real_query(cd.thrconn, data.Str.String())
+			if Mysql_errno(cd.thrconn) != 0 {
 				if is_schema {
 					log.Criticalf("Thread %d using connection %d - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 				} else {
@@ -159,7 +162,7 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 		}
 	}
 	*query_counter = *query_counter + 1
-	data = nil
+	G_string_set_size(data, 0)
 	return 0
 }
 
@@ -205,8 +208,10 @@ func wait_for_available_restore_thread(td *thread_data, start_transaction bool, 
 
 func request_another_connection(td *thread_data, io_restore_result *io_restore_result, start_transaction bool, use_database *database, header *GString) bool {
 	if control_job_ended && td.granted_connections < td.dbt.max_threads && td.dbt.restore_job_list.Len() == 0 {
-		var cd *connection_data = G_async_queue_try_pop(connection_pool).(*connection_data)
-		if cd != nil {
+		// 先检查返回值是否为 nil，避免对 nil 进行类型断言导致 panic
+		popResult := G_async_queue_try_pop(connection_pool)
+		if popResult != nil {
+			var cd *connection_data = popResult.(*connection_data)
 			setup_connection(cd, td, io_restore_result, start_transaction, use_database, header)
 			return true
 		}
@@ -288,7 +293,8 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 				transaction_size = 0
 			}
 			if tr > 0 {
-				log.Errorf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
+				// 与 C 版本一致：g_error 是致命错误，使用 log.Criticalf 对应
+				log.Criticalf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
 			}
 			if Mysql_warning_count(cd.thrconn) != 0 {
 				log.Warnf("Connection %d: Warnings found during INSERT between lines: %d and %d: %s", cd.connection_id, offset_line, current_offset_line, show_warnings_if_possible(cd.thrconn))

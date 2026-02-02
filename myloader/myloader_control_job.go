@@ -254,7 +254,8 @@ func control_job_thread(c any) {
 					}
 				} else {
 					log.Debugf("Thread will be waiting | all_jobs_are_enqueued: %v | giveup: %v", all_jobs_are_enqueued, giveup)
-					for threads_waiting < _num_threads {
+					// 与 C 版本一致：只递增一次，而不是循环递增到 _num_threads
+					if threads_waiting < _num_threads {
 						threads_waiting++
 					}
 				}

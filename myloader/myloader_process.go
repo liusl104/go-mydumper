@@ -4,9 +4,6 @@ import (
 	"bufio"
 	"container/list"
 	"fmt"
-	"github.com/go-ini/ini"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"io"
 	"os"
 	"path"
@@ -15,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/go-ini/ini"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 type osFile struct {
@@ -380,9 +381,9 @@ func process_database_filename(filename string) {
 
 		if strings.HasPrefix(db_kname, "mydumper_") {
 			db_vname = get_database_name_from_content(path.Join(directory, filename))
-			if db_vname == "" {
-				log.Criticalf("It was not possible to process db content in file: %s", filename)
-			}
+		}
+		if db_vname == "" {
+			log.Criticalf("It was not possible to process db content in file: %s", filename)
 		}
 
 	} else {
@@ -396,6 +397,8 @@ func process_database_filename(filename string) {
 		var rj = new_schema_restore_job(filename, JOB_RESTORE_SCHEMA_FILENAME, nil, real_db_name, nil, CREATE_DATABASE)
 		G_async_queue_push(conf.database_queue, new_control_job(JOB_RESTORE, rj, nil))
 	} else {
+		// 与 C 版本一致：当设置了 -B 参数时，直接将状态设置为 CREATED
+		// database_db 会在 start_worker_schema 之前被创建，所以数据库应该已经存在
 		real_db_name.schema_state = CREATED
 	}
 }
@@ -416,6 +419,8 @@ func process_table_filename(filename string) bool {
 	dbt.schema_state = NOT_CREATED
 	var cj *control_job = load_schema(dbt, path.Join(directory, filename, ""))
 	if cj == nil {
+		// 与 C 版本一致：如果 load_schema 失败，释放 dbt
+		free_dbt(dbt)
 		return false
 	}
 	real_db_name.mutex.Lock()
@@ -651,6 +656,7 @@ func process_schema_filename(filename string, object string) bool {
 	return true
 }
 
+// 与 C 版本一致：返回 -1（rj1 < rj2）、0（rj1 == rj2）或 1（rj1 > rj2）
 func cmp_restore_job(rj1 *restore_job, rj2 *restore_job) int {
 	if rj1.data.drj.part != rj2.data.drj.part {
 		var a = rj1.data.drj.part
@@ -662,15 +668,30 @@ func cmp_restore_job(rj1 *restore_job, rj2 *restore_job) int {
 		if a%2 > b%2 {
 			return 1
 		} else {
-			return 0
+			return -1
 		}
 	}
 	if rj1.data.drj.sub_part > rj2.data.drj.sub_part {
 		return 1
-	} else {
-		return 0
+	} else if rj1.data.drj.sub_part < rj2.data.drj.sub_part {
+		return -1
 	}
+	return 0
+}
 
+// 与 C 版本的 g_list_insert_sorted 对应：按 cmp_restore_job 排序插入
+func insert_restore_job_sorted(l *list.List, rj *restore_job) {
+	if l.Len() == 0 {
+		l.PushBack(rj)
+		return
+	}
+	for e := l.Front(); e != nil; e = e.Next() {
+		if cmp_restore_job(rj, e.Value.(*restore_job)) < 0 {
+			l.InsertBefore(rj, e)
+			return
+		}
+	}
+	l.PushBack(rj)
 }
 
 func process_data_filename(filename string) bool {
@@ -691,8 +712,8 @@ func process_data_filename(filename string) bool {
 		dbt.mutex.Lock()
 		atomic.AddInt64(&dbt.remaining_jobs, 1)
 		dbt.count++
-		dbt.restore_job_list.PushBack(rj)
-		//  dbt.restore_job_list=g_list_append(dbt.restore_job_list,rj);
+		// 与 C 版本一致：使用排序插入保持 restore_job_list 有序
+		insert_restore_job_sorted(dbt.restore_job_list, rj)
 		dbt.mutex.Unlock()
 	} else {
 		log.Warnf("Ignoring file %s on `%s`.`%s`", filename, dbt.database.name, dbt.table)

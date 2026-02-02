@@ -2,10 +2,10 @@ package mydumper
 
 import (
 	"errors"
-	"github.com/go-mysql-org/go-mysql/client"
+	"time"
+
 	"github.com/go-mysql-org/go-mysql/mysql"
 	log "github.com/liusl104/go-mydumper/src/logrus"
-	"time"
 )
 
 var Errors int
@@ -14,7 +14,6 @@ type MYSQL_RES struct {
 	Result    *mysql.Result
 	Rows      chan []mysql.FieldValue
 	RecNumber int
-	IsDone    bool
 }
 
 type M_ROW struct {
@@ -36,7 +35,7 @@ func Mysql_fetch_row(m *MYSQL_RES) []mysql.FieldValue {
 
 func Mysql_fetch_fields(res *MYSQL_RES) []*mysql.Field {
 	for {
-		if res.RecNumber == 0 && !res.IsDone {
+		if res.RecNumber == 0 && !res.Result.StreamingDone {
 			time.Sleep(1 * time.Millisecond)
 			continue
 		}
@@ -45,9 +44,10 @@ func Mysql_fetch_fields(res *MYSQL_RES) []*mysql.Field {
 	}
 	return res.Result.Fields
 }
+
 func Mysql_num_fields(res *MYSQL_RES) uint {
 	for {
-		if res.RecNumber == 0 && !res.IsDone {
+		if res.RecNumber == 0 && !res.Result.StreamingDone {
 			time.Sleep(1 * time.Millisecond)
 			continue
 		}
@@ -62,15 +62,18 @@ func Mysql_error(conn *DBConnection) string {
 	}
 	return conn.Err.Error()
 }
+
 func Mysql_errno(conn *DBConnection) int16 {
 	return conn.Code
 }
+
 func Mysql_ping(conn *DBConnection) bool {
 	if err := conn.Ping(); err != nil {
 		return false
 	}
 	return true
 }
+
 func Mysql_free_result(m *MYSQL_RES) {
 	if m == nil {
 		return
@@ -86,6 +89,7 @@ func Mysql_real_query(conn *DBConnection, data string) *mysql.Result {
 	conn.Result, conn.Err = conn.Conn.Execute(data)
 	return conn.Result
 }
+
 func init_result() *MYSQL_RES {
 	return &MYSQL_RES{
 		Rows:      make(chan []mysql.FieldValue),
@@ -114,7 +118,6 @@ func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 				r.Rows <- row
 			}
 		}
-		r.IsDone = true
 		close(r.Rows)
 	}()
 	return r
@@ -124,8 +127,8 @@ func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
 func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 	var res = init_result()
 	var err error
-	go func() {
-		err = conn.Stmt.ExecuteSelectStreaming(res.Result, func(row []mysql.FieldValue) error {
+	go func(cn *DBConnection) {
+		err = cn.Stmt.ExecuteSelectStreaming(res.Result, func(row []mysql.FieldValue) error {
 			res.RecNumber++
 			rowCopy := make([]mysql.FieldValue, len(row))
 			// 这里是浅拷贝
@@ -139,32 +142,16 @@ func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 		}, nil)
 		// res.Result, err = conn.Stmt.Execute()
 		if err != nil {
-			conn.Err = err
-			conn.Code = -1
+			cn.Err = err
+			cn.Code = -1
 			return
 		}
-		/*for _, row := range res.Result.Values {
-			select {
-			default:
-				res.RecNumber++
-				res.Rows <- row
-			}
-		}*/
-
 		close(res.Rows)
-		res.IsDone = true
 		return
-	}()
+	}(conn)
 	return res
 }
 
-func newClientConnection() (*client.Conn, error) {
-	cli, err := client.Connect("10.23.40.220:5000", "admin", "$M7Z1^gy80NvwnkS83FKLks3ZHSb@T", "test")
-	if err != nil {
-		return nil, err
-	}
-	return cli, err
-}
 func Mysql_warning_count(conn *DBConnection) int {
 	res, _ := conn.Conn.Execute("SHOW WARNINGS")
 	return len(res.Values)
@@ -174,6 +161,9 @@ func (d *DBConnection) Ping() error {
 	if d.Err != nil {
 		var myError *mysql.MyError
 		errors.As(d.Err, &myError)
+		if myError == nil {
+			return d.Err
+		}
 		d.Code = int16(myError.Code)
 	} else {
 		d.Code = 0

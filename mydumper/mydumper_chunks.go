@@ -3,12 +3,13 @@ package mydumper
 import (
 	"container/list"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/mysql"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const MIN_CHUNK_STEP_SIZE = 1000
@@ -254,7 +255,7 @@ func get_rows_from_count(conn *DBConnection, dbt *db_table, where *GString) uint
 		whereKey = " WHERE "
 		whereOpt = where.Str.String()
 	}
-	query = fmt.Sprintf("SELECT %s COUNT(*) FROM %s%s%s.%s%s%s%s%s", cache,
+	query = fmt.Sprintf("SELECT %s COUNT(*) FROM %s%s%s.%s%s%s %s%s", cache,
 		Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
 		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str,
 		whereKey, whereOpt)

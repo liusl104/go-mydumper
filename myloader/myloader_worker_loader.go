@@ -102,7 +102,8 @@ func inform_restore_job_running() {
 			} else {
 				fmt.Fprintf(os.Stdout, ".")
 			}
-			time.Sleep(RESTORE_JOB_RUNNING_INTERVAL * time.Millisecond)
+			// 与 C 版本一致：sleep 的单位是秒
+			time.Sleep(RESTORE_JOB_RUNNING_INTERVAL * time.Second)
 			prev_sum = sum
 			sum = 0
 			for n = 0; n < NumThreads; n++ {

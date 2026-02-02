@@ -3,16 +3,17 @@ package myloader
 import (
 	"container/list"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
-	"github.com/spf13/pflag"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/client"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -329,11 +330,12 @@ func create_database(td *thread_data, database string) {
 	if G_file_test(filepath) {
 		atomic.AddUint64(&detailed_errors.schema_errors, uint64(restore_data_from_file(td, filename, true, nil)))
 	} else {
-		// var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS %s%s%s", Identifier_quote_character, database, Identifier_quote_character)
-		//if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) != 0 {
-		//	atomic.AddUint64(&detailed_errors.schema_errors, 1)
-		//}
-		// data = nil
+		var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS ")
+		G_string_append_printf(data, "%s%s%s", Identifier_quote_character, database, Identifier_quote_character)
+		if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) {
+			atomic.AddUint64(&detailed_errors.schema_errors, 1)
+		}
+		data = nil
 	}
 	return
 }
@@ -393,7 +395,7 @@ func StartLoad() {
 	if Stream != "" && !No_stream {
 		Create_dir(directory)
 	}
-	Create_dir(FifoDirectory)
+	// Create_dir(FifoDirectory)
 	log.Infof("Using %s as FIFO directory, please remove it if restoration fails", FifoDirectory)
 	Start_pmm_thread(conf)
 	err = os.Chdir(directory)
@@ -475,9 +477,9 @@ func StartLoad() {
 		M_thread_new("myloader_directory", process_directory, conf, "Directory thread could not be created")
 	}
 	if Stream != "" {
-		wait_directory_to_process_metadata()
-	} else {
 		wait_stream_to_process_metadata_header()
+	} else {
+		wait_directory_to_process_metadata()
 	}
 	remove_ignore_set_session_from_hash()
 	Refresh_set_session_from_hash(Set_session, set_session_hash)

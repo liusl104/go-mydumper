@@ -30,7 +30,8 @@ func process_directory(c any) {
 		G_async_queue_push(metadata_sync_queue, 1)
 		log.Infof("metadata pushed")
 	} else {
-		log.Errorf("metadata file was not found")
+		// 与 C 版本一致：g_error 是致命错误，使用 log.Criticalf 对应
+		log.Criticalf("metadata file was not found")
 	}
 	if Resume {
 		log.Info("Using resume file")

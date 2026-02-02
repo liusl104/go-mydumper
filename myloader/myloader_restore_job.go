@@ -287,7 +287,8 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					log.Warnf("Drop table %s.%s succeeded!", dbt.database.real_database, dbt.real_table)
 				}
 			}
-			if (purge_mode == TRUNCATE || purge_mode == DELETE) && overwrite_error {
+			// 与 C 版本一致：如果是 TRUNCATE 或 DELETE 模式，且 overwrite 操作成功（没有错误），则跳过表创建
+			if (purge_mode == TRUNCATE || purge_mode == DELETE) && !overwrite_error {
 				log.Infof("Skipping table creation %s.%s from %s", dbt.database.real_database, dbt.real_table, rj.filename)
 			} else {
 				log.Infof("Thread %d: Creating table %s.%s from content in %s. On db: %s", td.thread_id, dbt.database.real_database, dbt.real_table, rj.filename, dbt.database.name)

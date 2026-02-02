@@ -3,15 +3,16 @@ package mydumper
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"math"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/mysql"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
@@ -948,7 +949,7 @@ func write_table_job_into_file(tj *table_job) {
 		Identifier_quote_character_str, tj.dbt.table, Identifier_quote_character_str,
 		tj.partition, where1, where_option1, where2, where_option2, where3, where_option3, order, order_option, limit, limit_opt)
 	var result = M_store_result(conn, query, M_warning, "Failed to execute query")
-	if result == nil {
+	if result == nil && conn.Err != nil {
 		if !it_is_a_consistent_backup {
 			log.Warnf("Thread %d: Error dumping table (%s.%s) data: %s\nQuery: %s", tj.td.thread_id, tj.dbt.database.name, tj.dbt.table,
 				Mysql_error(conn), query)
@@ -1001,8 +1002,8 @@ func get_estimated_remaining_of_all_chunks() uint64 {
 }
 
 func initiliaze_load_data_files(tj *table_job, dbt *db_table) {
-	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+	m_close(tj.thd.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	m_close(tj.thd.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
 	tj.sql.file.status = 0
 	tj.rows.file = nil
@@ -1017,8 +1018,8 @@ func initiliaze_load_data_files(tj *table_job, dbt *db_table) {
 }
 
 func initiliaze_clickhouse_files(tj *table_job, dbt *db_table) {
-	m_close(tj.td.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
-	m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+	m_close(tj.thd.thread_id, tj.sql.file, tj.sql.filename, 1, dbt)
+	m_close(tj.thd.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 	tj.sql.file = nil
 	tj.sql.file.status = 0
 	tj.rows.file = nil
@@ -1077,7 +1078,7 @@ func execute_select_streaming(conn *DBConnection, query string, escaped *GString
 				from = to
 				message_dumping_data(tj)
 			}
-			check_pause_resume(tj.td)
+			check_pause_resume(tj.thd)
 			if shutdown_triggered {
 				return nil
 			}
@@ -1092,7 +1093,7 @@ func execute_select_streaming(conn *DBConnection, query string, escaped *GString
 				initiliaze_clickhouse_files(tj, dbt)
 				break
 			case SQL_INSERT:
-				m_close(tj.td.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
+				m_close(tj.thd.thread_id, tj.rows.file, tj.rows.filename, 1, dbt)
 				tj.rows.file = nil
 				tj.rows.file.status = 0
 				update_files_on_table_job(tj)

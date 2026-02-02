@@ -2,14 +2,15 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"math"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-mysql-org/go-mysql/mysql"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const (
@@ -119,21 +120,21 @@ func start_working_thread(c any) {
 	conf := c.(*Configuration)
 	var n uint
 	threads = make([]*GThread, NumThreads)
-	td = make([]*thread_data, NumThreads) // thread_data
+	thd = make([]*thread_data, NumThreads) // thread_data
 	log.Infof("Creating workers")
 	for n = 0; n < NumThreads; n++ {
-		td[n] = new(thread_data)
-		td[n].conf = conf
-		td[n].thread_id = n + 1
-		td[n].binlog_snapshot_gtid_executed = ""
-		td[n].pause_resume_mutex = nil
-		td[n].table_name = ""
-		td[n].thread_data_buffers = new(thread_data_buffers)
-		td[n].thread_data_buffers.statement = G_string_sized_new(2 * StatementSize)
-		td[n].thread_data_buffers.row = G_string_sized_new(StatementSize)
-		td[n].thread_data_buffers.column = G_string_sized_new(StatementSize)
-		td[n].thread_data_buffers.escaped = G_string_sized_new(StatementSize)
-		threads[n] = M_thread_new("data", working_thread, td[n], "Data thread could not be created")
+		thd[n] = new(thread_data)
+		thd[n].conf = conf
+		thd[n].thread_id = n + 1
+		thd[n].binlog_snapshot_gtid_executed = ""
+		thd[n].pause_resume_mutex = nil
+		thd[n].table_name = ""
+		thd[n].thread_data_buffers = new(thread_data_buffers)
+		thd[n].thread_data_buffers.statement = G_string_sized_new(2 * StatementSize)
+		thd[n].thread_data_buffers.row = G_string_sized_new(StatementSize)
+		thd[n].thread_data_buffers.column = G_string_sized_new(StatementSize)
+		thd[n].thread_data_buffers.escaped = G_string_sized_new(StatementSize)
+		threads[n] = M_thread_new("data", working_thread, thd[n], "Data thread could not be created")
 	}
 	if SyncThreadLockMode == GTID {
 		var _binlog_snapshot_gtid_executed string = ""
@@ -144,9 +145,9 @@ func start_working_thread(c any) {
 			for n = 0; n < NumThreads; n++ {
 				G_async_queue_pop(conf.gtid_pos_checked)
 			}
-			_binlog_snapshot_gtid_executed = td[0].binlog_snapshot_gtid_executed
+			_binlog_snapshot_gtid_executed = thd[0].binlog_snapshot_gtid_executed
 			for n = 1; n < NumThreads; n++ {
-				binlog_snapshot_gtid_executed_status_local = binlog_snapshot_gtid_executed_status_local && strings.Compare(td[n].binlog_snapshot_gtid_executed, _binlog_snapshot_gtid_executed) == 0
+				binlog_snapshot_gtid_executed_status_local = binlog_snapshot_gtid_executed_status_local && strings.Compare(thd[n].binlog_snapshot_gtid_executed, _binlog_snapshot_gtid_executed) == 0
 			}
 			for n = 0; n < NumThreads; n++ {
 				if binlog_snapshot_gtid_executed_status_local {
@@ -174,7 +175,7 @@ func finalize_working_thread() {
 	if binlog_snapshot_gtid_executed != "" {
 		binlog_snapshot_gtid_executed = ""
 	}
-	td = nil
+	thd = nil
 	threads = nil
 	finalize_table()
 }
@@ -749,84 +750,84 @@ func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 }
 
 func working_thread(c any) {
-	thd := c.(*thread_data)
+	td := c.(*thread_data)
 	init_mutex.Lock()
-	thd.thrconn = Mysql_init()
+	td.thrconn = Mysql_init()
 	init_mutex.Unlock()
-	initialize_thread(thd)
-	Execute_gstring(thd.thrconn, Set_session)
+	initialize_thread(td)
+	Execute_gstring(td.thrconn, Set_session)
 	// Initialize connection
 	if !SkipTz {
-		M_query_critical(thd.thrconn, "/*!40103 SET TIME_ZONE='+00:00' */", "Failed to set time zone")
+		M_query_critical(td.thrconn, "/*!40103 SET TIME_ZONE='+00:00' */", "Failed to set time zone")
 	}
 	if UseSavepoints {
-		M_query_critical(thd.thrconn, "SET SQL_LOG_BIN = 0", "Failed to disable binlog for the thread")
+		M_query_critical(td.thrconn, "SET SQL_LOG_BIN = 0", "Failed to disable binlog for the thread")
 	}
 
-	initialize_consistent_snapshot(thd)
-	check_connection_status(thd)
+	initialize_consistent_snapshot(td)
+	check_connection_status(td)
 
-	G_async_queue_push(thd.conf.ready, 1)
+	G_async_queue_push(td.conf.ready, 1)
 	// Thread Ready to process jobs
-	log.Infof("Thread %d: Creating Jobs", thd.thread_id)
-	process_queue(thd.conf.initial_queue, thd, true, nil)
-	G_async_queue_push(thd.conf.initial_completed_queue, 1)
-	log.Infof("Thread %d: Schema queue", thd.thread_id)
-	process_queue(thd.conf.schema_queue, thd, false, nil)
+	log.Infof("Thread %d: Creating Jobs", td.thread_id)
+	process_queue(td.conf.initial_queue, td, true, nil)
+	G_async_queue_push(td.conf.initial_completed_queue, 1)
+	log.Infof("Thread %d: Schema queue", td.thread_id)
+	process_queue(td.conf.schema_queue, td, false, nil)
 
 	if Stream != "" {
 		send_initial_metadata()
 	}
 	if !NoData {
-		log.Infof("Thread %d: Schema jobs are done, Starting exporting data for Non-Transactional tables", thd.thread_id)
+		log.Infof("Thread %d: Schema jobs are done, Starting exporting data for Non-Transactional tables", td.thread_id)
 
-		G_async_queue_push(thd.conf.ready, 1)
-		G_async_queue_pop(thd.conf.ready_non_transactional_queue)
+		G_async_queue_push(td.conf.ready, 1)
+		G_async_queue_pop(td.conf.ready_non_transactional_queue)
 		if TrxTables != 0 {
 			// Processing non-transactional tables
 			// This queue should be empty, but we are processing just in case.
-			process_queue(thd.conf.non_transactional.queue, thd, false, thd.conf.non_transactional.request_chunk)
-			process_queue(thd.conf.non_transactional.deferQueue, thd, false, nil)
+			process_queue(td.conf.non_transactional.queue, td, false, td.conf.non_transactional.request_chunk)
+			process_queue(td.conf.non_transactional.deferQueue, td, false, nil)
 			// This push will unlock the FTWRL on the Main Connection
-			G_async_queue_push(thd.conf.unlock_tables, 1)
+			G_async_queue_push(td.conf.unlock_tables, 1)
 		} else {
 			// Sending LOCK TABLE over all non-transactional tables
-			if thd.conf.lock_tables_statement != nil {
-				log.Infof("Thread %d: Locking non-transactional tables", thd.thread_id)
-				M_query_critical(thd.thrconn, thd.conf.lock_tables_statement.Str.String(), "Error locking non-transactional tables")
+			if td.conf.lock_tables_statement != nil {
+				log.Infof("Thread %d: Locking non-transactional tables", td.thread_id)
+				M_query_critical(td.thrconn, td.conf.lock_tables_statement.Str.String(), "Error locking non-transactional tables")
 			}
 			// This push will unlock the FTWRL on the Main Connection
-			G_async_queue_push(thd.conf.unlock_tables, 1)
+			G_async_queue_push(td.conf.unlock_tables, 1)
 
 			// Processing non-transactional tables
-			process_queue(thd.conf.non_transactional.queue, thd, false, thd.conf.non_transactional.request_chunk)
-			process_queue(thd.conf.non_transactional.deferQueue, thd, false, nil)
+			process_queue(td.conf.non_transactional.queue, td, false, td.conf.non_transactional.request_chunk)
+			process_queue(td.conf.non_transactional.deferQueue, td, false, nil)
 
 			// At this point, this thread is able to unlock the non-transactional tables
-			M_query_critical(thd.thrconn, UNLOCK_TABLES, "Error locking non-transactional tables")
+			M_query_critical(td.thrconn, UNLOCK_TABLES, "Error locking non-transactional tables")
 		}
 		// Processing Transactional tables
-		log.Infof("Thread %d: Non-Transactional tables are done, Starting exporting data for Transactional tables", thd.thread_id)
-		process_queue(thd.conf.transactional.queue, thd, false, thd.conf.transactional.request_chunk)
-		process_queue(thd.conf.transactional.deferQueue, thd, false, nil)
+		log.Infof("Thread %d: Non-Transactional tables are done, Starting exporting data for Transactional tables", td.thread_id)
+		process_queue(td.conf.transactional.queue, td, false, td.conf.transactional.request_chunk)
+		process_queue(td.conf.transactional.deferQueue, td, false, nil)
 		//  start_processing(td, resume_mutex);
 	} else {
-		G_async_queue_push(thd.conf.unlock_tables, 1)
+		G_async_queue_push(td.conf.unlock_tables, 1)
 	}
-	if UseSavepoints && thd.table_name != "" {
-		M_query_critical(thd.thrconn, "ROLLBACK TO SAVEPOINT mydumper", "Rollback to savepoint failed")
+	if UseSavepoints && td.table_name != "" {
+		M_query_critical(td.thrconn, "ROLLBACK TO SAVEPOINT mydumper", "Rollback to savepoint failed")
 	}
-	log.Infof("Thread %d: Processing remaining objects jobs", thd.thread_id)
-	process_queue(thd.conf.post_data_queue, thd, false, nil)
+	log.Infof("Thread %d: Processing remaining objects jobs", td.thread_id)
+	process_queue(td.conf.post_data_queue, td, false, nil)
 
-	log.Infof("Thread %d: shutting down", thd.thread_id)
+	log.Infof("Thread %d: shutting down", td.thread_id)
 
-	if thd.binlog_snapshot_gtid_executed != "" {
-		thd.binlog_snapshot_gtid_executed = ""
+	if td.binlog_snapshot_gtid_executed != "" {
+		td.binlog_snapshot_gtid_executed = ""
 	}
 
-	if thd.thrconn != nil {
-		thd.thrconn.Close()
+	if td.thrconn != nil {
+		td.thrconn.Close()
 	}
 	return
 }

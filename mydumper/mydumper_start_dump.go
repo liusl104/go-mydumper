@@ -36,7 +36,7 @@ var (
 	UpdatedSince                       int
 	DumpTablespaces                    bool
 	threads                            []*GThread
-	td                                 []*thread_data
+	thd                                []*thread_data
 	all_dbts                           map[string]*db_table
 	conf_per_table                     *Configuration_per_table = new(Configuration_per_table)
 	it_is_a_consistent_backup          bool

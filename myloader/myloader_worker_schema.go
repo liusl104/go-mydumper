@@ -129,6 +129,10 @@ func process_schema(td *thread_data) bool {
 			/* Wait while all DB created and go "second round" */
 			for _, real_db_name = range db_hash {
 				real_db_name.mutex.Lock()
+				// 如果设置了 -B 参数，且这个数据库的 real_database 等于 DB，且 database_db 已经被创建，则跳过检查
+				if DB != "" && database_db != nil && real_db_name.real_database == database_db.real_database && database_db.schema_state == CREATED {
+					real_db_name.schema_state = CREATED
+				}
 				if real_db_name.schema_state != CREATED {
 					log.Debugf("INTERMEDIATE_ENDED waits %s created, current state: %s", real_db_name.name, status2str(real_db_name.schema_state))
 					if real_db_name.schema_state == NOT_FOUND {

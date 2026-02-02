@@ -2,11 +2,6 @@ package myloader
 
 import (
 	"fmt"
-	"github.com/go-ini/ini"
-	"github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"os/exec"
 	"path"
@@ -16,6 +11,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/go-ini/ini"
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
@@ -355,21 +356,24 @@ func eval_table(db_name string, table_name string, mutex *sync.Mutex) bool {
 func execute_use(cd *connection_data) bool {
 	if cd.current_database != nil {
 		var query = fmt.Sprintf("USE `%s`", cd.current_database.real_database)
-		if M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
-			return true
+		// Go 版本的 M_query_warning 返回值逻辑与 C 版本相反：成功返回 true，失败返回 false
+		// 所以这里需要取反，以保持与 C 版本一致：成功返回 false，失败返回 true
+		if !M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
+			return true // 失败返回 true（与 C 版本一致）
 		}
 
 	} else {
 		log.Warnf("Thread %d with connection %d: Not able to switch database", cd.thread_id, cd.connection_id)
 	}
-	return false
+	return false // 成功返回 false（与 C 版本一致）
 }
 
 func execute_use_if_needs_to(cd *connection_data, database *database, msg string) {
+	// 与 C 版本完全一致：如果设置了 -B 参数，只有当 current_database 为 nil 时才执行 USE
 	if database != nil && (DB == "" || cd.current_database == nil) {
 		if cd.current_database == nil || strings.Compare(database.real_database, cd.current_database.real_database) != 0 {
 			cd.current_database = database
-			if !execute_use(cd) {
+			if execute_use(cd) {
 				log.Criticalf("Thread %d with connection %d: Error switching to database `%s` %s: %s", cd.thread_id, cd.connection_id, cd.current_database.real_database, msg, Mysql_error(cd.thrconn))
 			}
 		}
@@ -383,8 +387,8 @@ func get_file_type(filename string) file_type {
 		has_exec_per_thread_extension(filename)) {
 		return METADATA_GLOBAL
 	}
-	if SourceDb != "" && !(strings.HasPrefix(filename, SourceDb) && len(filename) > len(SourceDb) && (strings.Contains(filename[:len(SourceDb)], ".")) ||
-		strings.Contains(filename[:len(SourceDb)], "-")) && !strings.HasPrefix(filename, "mydumper_") {
+	// 与 C 版本一致：检查文件名是否以 source_db 开头，且 source_db 之后的第一个字符是 '.' 或 '-'
+	if SourceDb != "" && !(strings.HasPrefix(filename, SourceDb) && len(filename) > len(SourceDb) && (filename[len(SourceDb)] == '.' || filename[len(SourceDb)] == '-')) && !strings.HasPrefix(filename, "mydumper_") {
 		return IGNORED
 	}
 	if m_filename_has_suffix(filename, "-schema.sql") {
