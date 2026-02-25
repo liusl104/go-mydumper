@@ -17,6 +17,7 @@ var (
 	post_threads            []*GThread
 )
 
+// initialize_post_loding_threads creates MaxThreadsForPostCreation post worker threads (worker_post_thread) and sync mutexes.
 func initialize_post_loding_threads(conf *configuration) {
 	var n uint
 	// post_threads = make([]*sync.WaitGroup, Threads.MaxThreadsForPostCreation)
@@ -38,6 +39,7 @@ func initialize_post_loding_threads(conf *configuration) {
 	}
 }
 
+// sync_threads decrements counter; when it reaches zero, unlocks mutex (barrier for post workers).
 func sync_threads(counter *int64, mutex *sync.Mutex) {
 	if G_atomic_int_dec_and_test(counter) {
 		mutex.Unlock()
@@ -47,6 +49,7 @@ func sync_threads(counter *int64, mutex *sync.Mutex) {
 	}
 }
 
+// worker_post_thread processes jobs from post_table_queue, post_queue, and view_queue until JOB_SHUTDOWN; then signals sync_threads_remaining2.
 func worker_post_thread(c any) {
 	td := c.(*thread_data)
 	var cnf *configuration = td.conf
@@ -77,6 +80,7 @@ func worker_post_thread(c any) {
 	log.Debugf("Thread %d: ending", td.thread_id)
 }
 
+// create_post_shutdown_job pushes JOB_SHUTDOWN to post_queue, post_table_queue, and view_queue for each post worker.
 func create_post_shutdown_job(conf *configuration) {
 	var n uint
 	for n = 0; n < MaxThreadsForPostCreation; n++ {
@@ -86,6 +90,7 @@ func create_post_shutdown_job(conf *configuration) {
 	}
 }
 
+// wait_post_worker_to_finish joins all post worker threads.
 func wait_post_worker_to_finish() {
 	var n uint
 	for n = 0; n < MaxThreadsForPostCreation; n++ {
@@ -93,6 +98,7 @@ func wait_post_worker_to_finish() {
 	}
 }
 
+// free_post_worker_threads clears post_td and post_threads.
 func free_post_worker_threads() {
 	post_td = nil
 	post_threads = nil

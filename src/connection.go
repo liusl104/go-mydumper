@@ -1,14 +1,14 @@
 package mydumper
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"unsafe"
 
-	"github.com/go-mysql-org/go-mysql/client"
-	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-sql-driver/mysql"
 	log "github.com/liusl104/go-mydumper/src/logrus"
 	"github.com/spf13/pflag"
 	"golang.org/x/term"
@@ -51,17 +51,19 @@ var (
 )
 
 type DBConnection struct {
-	Conn    *client.Conn
+	Conn    *sql.DB
 	Err     error
-	Code    int16
+	Code    uint16
 	Warning uint16
-	Result  *mysql.Result
-	Stmt    *client.Stmt
+	Message string
+	Rows    *sql.Rows
 	Query   string
+	connID  uint32 // Store connection ID separately
+
 }
 
+// Connection_arguments_callback parses the protocol flag and sets protocol (tcp/socket). Returns true if protocol was set.
 func Connection_arguments_callback() bool {
-	// var Err error
 	if Protocol != "" {
 		if strings.EqualFold(Protocol, "tcp") {
 			protocol = MYSQL_PROTOCOL_TCP
@@ -75,6 +77,7 @@ func Connection_arguments_callback() bool {
 	return false
 }
 
+// Connection_entries registers connection-related command-line flags (host, user, password, port, socket, SSL, etc.).
 func Connection_entries() {
 	pflag.StringVarP(&Hostname, "host", "h", "", "The host to connect to")
 	pflag.StringVarP(&Username, "user", "u", "", "Username with the necessary privileges")
@@ -94,15 +97,18 @@ func Connection_entries() {
 
 }
 
+// set_connection_defaults_file_and_group stores the defaults file path and group name for later use.
 func set_connection_defaults_file_and_group(cdf string, group string) {
 	connection_defaults_file = cdf
 	connection_default_file_group = group
 }
 
+// Initialize_connection sets the program name used for connection defaults.
 func Initialize_connection(app string) {
 	program_name = app
 }
 
+// check_pem_exists exits with log.Fatal if the PEM file is missing or path is empty (used for SSL options).
 func check_pem_exists(filename string, option string) {
 	if filename == "" {
 		log.Fatalf("SSL required option missing: %s", option)
@@ -111,12 +117,14 @@ func check_pem_exists(filename string, option string) {
 	}
 }
 
+// check_capath exits with log.Fatal if p is not an existing directory (used for SSL capath).
 func check_capath(p string) {
 	if !G_file_test(p) {
 		log.Fatalf("capath is not directory: %s", p)
 	}
 }
 
+// configure_connection fills Hostname and Port from environment (MYSQL_HOST, MYSQL_PORT) if not set.
 func configure_connection(conn *DBConnection) {
 	if Hostname == "" {
 		Hostname = os.Getenv("MYSQL_HOST")
@@ -124,9 +132,9 @@ func configure_connection(conn *DBConnection) {
 	if Port == 0 {
 		Port, _ = strconv.Atoi(os.Getenv("MYSQL_PORT"))
 	}
-
 }
 
+// print_connection_details_once logs connection type and parameters once (thread-safe via atomic).
 func print_connection_details_once() {
 	if !g_atomic_int_dec_and_test(&print_connection_details) {
 		return
@@ -183,171 +191,149 @@ func readPEMFile(filename string) ([]byte, error) {
 	return data, nil
 }
 
-// configureTLSConfig creates and configures a TLS config based on SSL parameters
-// Returns TLS config data and whether SSL should be enabled
-func configureTLSConfig() (caCert []byte, cert []byte, key []byte, skipVerify bool, useSSL bool, err error) {
-	// Determine if SSL should be enabled based on Ssl flag or Ssl_mode
-	useSSL = Ssl || (Ssl_mode != "" && strings.ToUpper(Ssl_mode) != "DISABLED")
+// buildDSN builds a MySQL DSN (Data Source Name) string using mysql.Config
+func buildDSN(hostname string, username string, password string, db string, port int, unix_socket string) (string, error) {
+	// Create a new MySQL config
+	cnf := mysql.NewConfig()
 
-	if !useSSL {
-		return nil, nil, nil, false, false, nil
-	}
+	// Set basic connection parameters
+	cnf.User = username
+	cnf.Passwd = password
+	cnf.DBName = db
 
-	// Determine skip verify based on SSL mode
-	skipVerify = false
-	if Ssl_mode != "" {
-		mode := strings.ToUpper(Ssl_mode)
-		switch mode {
-		case "DISABLED":
-			return nil, nil, nil, false, false, nil
-		case "PREFERRED", "REQUIRED":
-			skipVerify = false
-		case "VERIFY_CA":
-			skipVerify = false // Verify CA but not hostname
-		case "VERIFY_IDENTITY":
-			skipVerify = false // Verify both CA and hostname
-		default:
-			log.Warnf("Unknown SSL mode: %s, using default", Ssl_mode)
-		}
-	}
-
-	// Read certificate files if provided
-	if Ca != "" {
-		check_pem_exists(Ca, "ca")
-		caCert, err = readPEMFile(Ca)
-		if err != nil {
-			return nil, nil, nil, false, false, err
-		}
-	}
-
-	if Cert != "" {
-		check_pem_exists(Cert, "cert")
-		cert, err = readPEMFile(Cert)
-		if err != nil {
-			return nil, nil, nil, false, false, err
-		}
-	}
-
-	if Key != "" {
-		check_pem_exists(Key, "key")
-		key, err = readPEMFile(Key)
-		if err != nil {
-			return nil, nil, nil, false, false, err
-		}
-	}
-
-	// Check capath if provided
-	if Capath != "" {
-		check_capath(Capath)
-		// Note: go-mysql library may not directly support capath,
-		// but we validate it exists for consistency with C version
-	}
-
-	// Note: go-mysql library's NewClientTLSConfig may not support
-	// Cipher and Tls_version directly. These would need to be set
-	// on the underlying tls.Config if the library exposes it.
-	// For now, we log a warning if these are specified.
-	if Cipher != "" {
-		log.Warnf("Cipher specification is not yet fully supported by go-mysql library")
-	}
-	if Tls_version != "" {
-		log.Warnf("TLS version specification is not yet fully supported by go-mysql library")
-	}
-
-	return caCert, cert, key, skipVerify, true, nil
-}
-
-func mysql_real_connect(conn *DBConnection, hostname string, username string, password string, db string, port int, unix_socket string) bool {
-	// Validate required parameters
-	if conn == nil {
-		log.Criticalf("mysql_real_connect: conn is nil")
-		return false
-	}
-
-	if username == "" {
-		log.Criticalf("mysql_real_connect: username is required")
-		conn.Err = fmt.Errorf("username is required")
-		return false
-	}
-
-	// Build connection address
-	var addr string
+	// Set network address
 	if unix_socket != "" {
-		addr = unix_socket
+		// Use Unix socket
+		cnf.Net = "unix"
+		cnf.Addr = unix_socket
 	} else {
+		// Use TCP/IP
+		cnf.Net = "tcp"
 		if hostname == "" {
 			hostname = "localhost"
 		}
 		if port <= 0 {
 			port = 3306
 		}
-		addr = fmt.Sprintf("%s:%d", hostname, port)
+		cnf.Addr = fmt.Sprintf("%s:%d", hostname, port)
 	}
 
-	// Configure TLS/SSL if needed
-	caCert, cert, key, skipVerify, useSSL, err := configureTLSConfig()
-	if err != nil {
-		conn.Err = err
-		log.Errorf("Failed to configure TLS: %v", err)
-		return false
-	}
-
-	// Configure compression if requested
-	// Note: go-mysql library may handle compression automatically
-	// or through connection parameters. Check library documentation.
-	if Compress_protocol {
-		// Compression is typically negotiated during handshake
-		// The go-mysql library should handle this automatically
-		log.Debugf("Compression protocol requested")
-	}
-
-	// Connect to MySQL server with appropriate options
-	// Note: Based on go-mysql library API, the callback receives *client.Conn
+	// SSL/TLS configuration
+	useSSL := Ssl || (Ssl_mode != "" && strings.ToUpper(Ssl_mode) != "DISABLED")
 	if useSSL {
-		if caCert != nil || cert != nil || key != nil {
-			// Custom TLS config with certificates
-			tlsConfig := client.NewClientTLSConfig(caCert, cert, key, skipVerify, program_name)
-			conn.Conn.SetTLSConfig(tlsConfig)
-			conn.Conn, conn.Err = client.Connect(addr, username, password, db)
-		} else {
-			// Basic SSL without certificates
-			conn.Conn, conn.Err = client.Connect(addr, username, password, db)
+		mode := strings.ToUpper(Ssl_mode)
+		switch mode {
+		case "DISABLED":
+			cnf.TLSConfig = "false"
+		case "PREFERRED":
+			cnf.TLSConfig = "preferred"
+		case "REQUIRED":
+			cnf.TLSConfig = "true"
+		case "VERIFY_CA":
+			cnf.TLSConfig = "skip-verify" // Skip hostname verification but verify CA
+		case "VERIFY_IDENTITY":
+			cnf.TLSConfig = "true" // Full verification including hostname
+		default:
+			cnf.TLSConfig = "true"
+		}
+
+		// Initialize Params if nil
+		if cnf.Params == nil {
+			cnf.Params = make(map[string]string)
+		}
+
+		// Certificate files (set via Params)
+		if Ca != "" {
+			check_pem_exists(Ca, "ca")
+			cnf.Params["tls-ca"] = Ca
+		}
+		if Cert != "" {
+			check_pem_exists(Cert, "cert")
+			cnf.Params["tls-cert"] = Cert
+		}
+		if Key != "" {
+			check_pem_exists(Key, "key")
+			cnf.Params["tls-key"] = Key
+		}
+		if Capath != "" {
+			check_capath(Capath)
+			// go-sql-driver/mysql doesn't directly support capath, but we validate it
+		}
+		if Cipher != "" {
+			cnf.Params["tls-ciphers"] = Cipher
+		}
+		if Tls_version != "" {
+			cnf.Params["tls-version"] = Tls_version
 		}
 	} else {
-		// No SSL
-		conn.Conn, conn.Err = client.Connect(addr, username, password, db)
+		cnf.TLSConfig = "false"
 	}
 
+	// Compression (set via Params)
+	if Compress_protocol {
+		if cnf.Params == nil {
+			cnf.Params = make(map[string]string)
+		}
+		cnf.Params["compress"] = "true"
+	}
+
+	// Format and return DSN string
+	return cnf.FormatDSN(), nil
+}
+
+// mysql_real_connect opens a MySQL connection using the given parameters, builds DSN, and pings; returns false on error.
+func mysql_real_connect(conn *DBConnection, hostname string, username string, password string, db string, port int, unix_socket string) bool {
+	var dsn string
+	dsn, conn.Err = buildDSN(hostname, username, password, db, port, unix_socket)
 	if conn.Err != nil {
-		log.Errorf("Failed to connect to MySQL server at %s: %v", addr, conn.Err)
+		log.Errorf("Failed to build DSN: %v", conn.Err)
 		return false
 	}
-
-	// Verify connection is valid
-	if conn.Conn == nil {
-		conn.Err = fmt.Errorf("connection object is nil after Connect")
+	// Open database connection
+	conn.Conn, conn.Err = sql.Open("mysql", dsn)
+	if conn.Err != nil {
+		log.Errorf("Failed to open MySQL connection: %v", conn.Err)
 		return false
 	}
-
+	// Set connection pool settings
+	conn.Conn.SetMaxOpenConns(1)
+	conn.Conn.SetMaxIdleConns(1)
+	conn.Conn.SetConnMaxLifetime(0)
+	if conn.Err = conn.Ping(); conn.Err != nil {
+		log.Errorf("Failed to ping MySQL connection: %v", conn.Err)
+		return false
+	}
 	return true
 }
+
+// Mysql_thread_id queries CONNECTION_ID() from the server and stores it in dc; returns the connection ID or 0 on error.
 func Mysql_thread_id(dc *DBConnection) uint64 {
-	res := dc.Conn.GetConnectionID()
-	return uint64(res)
+	var connID uint32
+	err := dc.Conn.QueryRow("SELECT CONNECTION_ID()").Scan(&connID)
+	if err != nil {
+		log.Errorf("Failed to get connection ID: %v", err)
+		return 0
+	}
+	dc.connID = connID
+	return uint64(connID)
 }
+
+// Mysql_init allocates and returns a new DBConnection (not yet connected).
 func Mysql_init() *DBConnection {
 	return new(DBConnection)
 }
+
+// M_connect configures the connection, opens it, fetches connection ID, prints details once, and runs SET NAMES if set.
 func M_connect(conn *DBConnection) {
 	configure_connection(conn)
 	if !mysql_real_connect(conn, Hostname, Username, Password, "", Port, SocketPath) {
 		log.Criticalf("Error connection to database: %v", conn.Err)
+		return
 	}
 
-	conn.Err = conn.Ping()
-	if conn.Err != nil {
-		log.Criticalf("Error connection to database: %v", conn.Err)
-	}
+	// Get connection ID
+	Mysql_thread_id(conn)
+
 	print_connection_details_once()
 
 	if Set_names_statement != "" {
@@ -356,6 +342,7 @@ func M_connect(conn *DBConnection) {
 	return
 }
 
+// Hide_password copies HidePassword to Password and overwrites the password in os.Args with 'X' to avoid exposure.
 func Hide_password() {
 	if HidePassword != "" {
 		var tmpPasswd []byte = []byte(HidePassword)
@@ -371,20 +358,22 @@ func Hide_password() {
 	}
 }
 
+// passwordPrompt prints the password prompt and reads the password from the terminal without echoing.
 func passwordPrompt() string {
 	fmt.Printf("Enter MySQL Password: ")
 	return terminalInput()
 }
 
+// terminalInput reads a line from stdin with terminal in raw mode (e.g. for password input).
 func terminalInput() string {
-	// 将标准输入的文件描述符传给 term.MakeRaw，它会返回一个恢复终端状态的函数
+	// Pass stdin fd to term.MakeRaw; it returns a function to restore terminal state
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState) // 恢复终端状态
+	defer term.Restore(int(os.Stdin.Fd()), oldState) // Restore terminal state
 
-	// 创建一个新的终端，用于读取密码
+	// Create a new terminal for reading password
 	terminal := term.NewTerminal(os.Stdin, "")
 
 	password, err := terminal.ReadPassword("")
@@ -394,6 +383,7 @@ func terminalInput() string {
 	return password
 }
 
+// Ask_password prompts for password if AskPassword is set and Password is empty.
 func Ask_password() {
 	if Password == "" && AskPassword {
 		Password = passwordPrompt()

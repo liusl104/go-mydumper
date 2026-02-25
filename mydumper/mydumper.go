@@ -25,6 +25,7 @@ var (
 	DIRECTORY          string = "export"
 )
 
+// parse_disk_limits parses DiskLimits (e.g. "p_at:r_at") and calls set_disk_limits.
 func parse_disk_limits() {
 	strsplit := strings.SplitN(DiskLimits, ":", 3)
 	if len(strsplit) != 2 {
@@ -41,6 +42,7 @@ func parse_disk_limits() {
 	set_disk_limits(uint(p_at), uint(r_at))
 }
 
+// CommandDump is the main entry point: loads context, prints help/version, initializes options and directories, and runs the dump (or daemon).
 func CommandDump() {
 	load_contex_entries()
 	if Help {
@@ -93,12 +95,12 @@ func CommandDump() {
 			}
 		}
 		/*
-			这里不需要借助命令行压缩，使用第三方内置包
-			 exec_per_thread_cmd=g_strsplit(exec_per_thread, " ", 0);
-			    gchar *tmpcmd=g_find_program_in_path(exec_per_thread_cmd[0]);
-			    if (!tmpcmd)
-			      m_critical("%s was not found in PATH, use --exec-per-thread for non default locations",exec_per_thread_cmd[0]);
-			    exec_per_thread_cmd[0]=tmpcmd;
+			No need for command-line compression here; use third-party built-in package.
+			exec_per_thread_cmd=g_strsplit(exec_per_thread, " ", 0);
+			gchar *tmpcmd=g_find_program_in_path(exec_per_thread_cmd[0]);
+			if (!tmpcmd)
+			  m_critical("%s was not found in PATH, use --exec-per-thread for non default locations",exec_per_thread_cmd[0]);
+			exec_per_thread_cmd[0]=tmpcmd;
 		*/
 	}
 	Initialize_set_names()
@@ -137,6 +139,7 @@ func CommandDump() {
 	return
 }
 
+// print_help prints mydumper usage, pflag defaults, and all option values then exits successfully.
 func print_help() {
 	fmt.Printf("Usage:\n")
 	fmt.Printf("  %s [OPTION…] multi-threaded MySQL dumping\n", MYDUMPER)
@@ -252,6 +255,7 @@ func print_help() {
 	os.Exit(EXIT_SUCCESS)
 }
 
+// initialize_directories sets output_directory from OutputDirectoryStr or a timestamped default (DIRECTORY-20060102-150405).
 func initialize_directories() {
 	if OutputDirectoryStr == "" {
 		var datatimestr = time.Now().Format("20060102-150405")

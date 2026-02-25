@@ -6,6 +6,7 @@ import (
 	"os"
 )
 
+// set_format configures the log formatter to JSON or text based on isJson and debug level.
 func set_format(isJson bool) {
 	if isJson {
 		if log.IsLevelEnabled(log.DebugLevel) {
@@ -31,6 +32,7 @@ func set_format(isJson bool) {
 	}
 }
 
+// Set_verbose configures log output (file or stdout), log level from Verbose, and formatter (JSON or text).
 func Set_verbose() error {
 	var err error
 	if Logger == nil {
@@ -89,6 +91,7 @@ func Set_verbose() error {
 	return nil
 }
 
+// Set_debug sets Verbose to 4 and log level to Debug.
 func Set_debug() {
 	Verbose = 4
 	log.SetLevel(log.DebugLevel)

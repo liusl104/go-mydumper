@@ -66,6 +66,7 @@ type schema_restore_job struct {
 	object    string
 }
 
+// initialize_restore_job creates file_list_to_do queue and mutexes for restore job processing.
 func initialize_restore_job() {
 	file_list_to_do = G_async_queue_new()
 	single_threaded_create_table = G_mutex_new()
@@ -74,6 +75,7 @@ func initialize_restore_job() {
 
 }
 
+// new_data_restore_job_internal allocates a data_restore_job with the given index, part, and sub_part.
 func new_data_restore_job_internal(index uint, part uint, sub_part uint) *data_restore_job {
 	var drj = new(data_restore_job)
 	drj.index = index
@@ -82,6 +84,7 @@ func new_data_restore_job_internal(index uint, part uint, sub_part uint) *data_r
 	return drj
 }
 
+// new_schema_restore_job_internal allocates a schema_restore_job with database, statement, and object type.
 func new_schema_restore_job_internal(database *database, statement *GString, object string) *schema_restore_job {
 	var srj = new(schema_restore_job)
 	srj.database = database
@@ -90,6 +93,7 @@ func new_schema_restore_job_internal(database *database, statement *GString, obj
 	return srj
 }
 
+// new_restore_job allocates a restore_job with filename, dbt, and job_type; data structs are initialized empty.
 func new_restore_job(filename string, dbt *db_table, job_type restore_job_type) *restore_job {
 	var rj = new(restore_job)
 	rj.data = new(restore_job_data)
@@ -101,27 +105,32 @@ func new_restore_job(filename string, dbt *db_table, job_type restore_job_type) 
 	return rj
 }
 
+// new_data_restore_job creates a restore_job for data with part and sub_part; drj index is dbt.count+1.
 func new_data_restore_job(filename string, job_type restore_job_type, dbt *db_table, part uint, sub_part uint) *restore_job {
 	var rj = new_restore_job(filename, dbt, job_type)
 	rj.data.drj = new_data_restore_job_internal(dbt.count+1, part, sub_part)
 	return rj
 }
 
+// new_schema_restore_job creates a restore_job for schema with the given database, statement, and object type.
 func new_schema_restore_job(filename string, job_type restore_job_type, dbt *db_table, database *database, statement *GString, object string) *restore_job {
 	var srj = new_restore_job(filename, dbt, job_type)
 	srj.data.srj = new_schema_restore_job_internal(database, statement, object)
 	return srj
 }
 
+// free_restore_job clears the restore job filename and nil's the pointer (no-op for GC).
 func free_restore_job(rj *restore_job) {
 	rj.filename = ""
 	rj = nil
 }
 
+// free_schema_restore_job clears the schema restore job reference (no-op in Go).
 func free_schema_restore_job(srj *schema_restore_job) {
 	srj = nil
 }
 
+// overwrite_table_message logs with Criticalf if OverwriteUnsafe else Warnf (for overwrite/drop/truncate messages).
 func overwrite_table_message(m string, a ...any) {
 	if OverwriteUnsafe {
 		log.Criticalf(m, a...)
@@ -130,6 +139,7 @@ func overwrite_table_message(m string, a ...any) {
 	}
 }
 
+// overwrite_table runs DROP/TRUNCATE/DELETE on the table per purge_mode and returns true if the operation failed.
 func overwrite_table(td *thread_data, dbt *db_table) bool {
 	var truncate_or_delete_failed bool
 	var data *GString = G_string_new("")
@@ -163,6 +173,7 @@ func overwrite_table(td *thread_data, dbt *db_table) bool {
 	return truncate_or_delete_failed
 }
 
+// increse_object_error increments the appropriate detailed_errors counter for the object type (sequence, trigger, view, etc.).
 func increse_object_error(object string) {
 	switch strings.ToLower(object) {
 	case SEQUENCE:
@@ -186,6 +197,7 @@ func increse_object_error(object string) {
 	}
 }
 
+// schema_state_increment increments total if dbt.schema_state >= schema_state (used for counting done/created).
 func schema_state_increment(key string, dbt *db_table, total *uint, schema_state schema_status) {
 	_ = key
 	if dbt.schema_state >= schema_state {
@@ -193,34 +205,40 @@ func schema_state_increment(key string, dbt *db_table, total *uint, schema_state
 	}
 }
 
+// is_all_done increments total for tables that have reached ALL_DONE schema state.
 func is_all_done(key string, dbt *db_table, total *uint) {
 	_ = key
 	schema_state_increment(key, dbt, total, ALL_DONE)
 }
 
+// is_created increments total for tables that have reached CREATED schema state.
 func is_created(key string, dbt *db_table, total *uint) {
 	_ = key
 	schema_state_increment(key, dbt, total, CREATED)
 }
 
+// g_hash_table_foreach calls f for each (key, dbt) in the hash with total (for aggregation).
 func g_hash_table_foreach(hash_table map[string]*db_table, f func(string, *db_table, *uint), total *uint) {
 	for key, dbt := range hash_table {
 		f(key, dbt, total)
 	}
 }
 
+// get_total_done counts tables in conf.table_hash that have reached ALL_DONE and sets total.
 func get_total_done(conf *configuration, total *uint) {
 	conf.table_hash_mutex.Lock()
 	g_hash_table_foreach(conf.table_hash, is_all_done, total)
 	conf.table_hash_mutex.Unlock()
 }
 
+// get_total_created counts tables in conf.table_hash that have reached CREATED and sets total.
 func get_total_created(conf *configuration, total *uint) {
 	conf.table_hash_mutex.Lock()
 	g_hash_table_foreach(conf.table_hash, is_created, total)
 	conf.table_hash_mutex.Unlock()
 }
 
+// execute_drop_database runs DROP DATABASE IF EXISTS for the given database and increments schema_errors on failure.
 func execute_drop_database(td *thread_data, database string) {
 	var data *GString = G_string_new("DROP DATABASE IF EXISTS ")
 	G_string_append_printf(data, "`%s`", database)
@@ -229,6 +247,8 @@ func execute_drop_database(td *thread_data, database string) {
 		atomic.AddUint64(&detailed_errors.schema_errors, 1)
 	}
 }
+
+// process_restore_job handles one restore job: JOB_RESTORE_STRING, JOB_TO_CREATE_TABLE, JOB_RESTORE_FILENAME, or JOB_RESTORE_SCHEMA_FILENAME; returns true to retry.
 func process_restore_job(td *thread_data, rj *restore_job) bool {
 	var dbt = rj.dbt
 	var total uint
@@ -287,7 +307,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					log.Warnf("Drop table %s.%s succeeded!", dbt.database.real_database, dbt.real_table)
 				}
 			}
-			// 与 C 版本一致：如果是 TRUNCATE 或 DELETE 模式，且 overwrite 操作成功（没有错误），则跳过表创建
+			// Consistent with C: if TRUNCATE or DELETE mode and overwrite succeeded (no error), skip table creation
 			if (purge_mode == TRUNCATE || purge_mode == DELETE) && !overwrite_error {
 				log.Infof("Skipping table creation %s.%s from %s", dbt.database.real_database, dbt.real_table, rj.filename)
 			} else {
@@ -340,7 +360,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 					execute_drop_database(td, rj.data.srj.database.real_database)
 				}
 
-				// 与 C 版本一致：CREATE_DATABASE 时传 nil（不切换数据库），其他情况传 database
+				// Consistent with C: pass nil for CREATE_DATABASE (no DB switch), otherwise pass database
 				var db *database
 				if !strings.EqualFold(rj.data.srj.object, CREATE_DATABASE) {
 					db = rj.data.srj.database
@@ -365,6 +385,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	return false
 }
 
+// signal_thread waits for SIGINT/SIGTERM, calls sig_triggered, then signals completion via signal_threads.Done().
 func signal_thread(data any) {
 	defer signal_threads.Done()
 
@@ -375,6 +396,7 @@ func signal_thread(data any) {
 	log.Infof("Ending signal thread")
 }
 
+// sig_triggered handles SIGTERM (immediate shutdown) or SIGINT (Y/N prompt, then writes resume file and graceful shutdown); returns true to resume, false to exit.
 func sig_triggered(user_data any, signal os.Signal) bool {
 	var cnf *configuration = user_data.(*configuration)
 	var i uint
@@ -441,11 +463,13 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	return false
 }
 
+// stop_signal_thread acquires and releases shutdown_triggered_mutex (synchronization point).
 func stop_signal_thread() {
 	shutdown_triggered_mutex.Lock()
 	shutdown_triggered_mutex.Unlock()
 }
 
+// restore_job_finish pushes NO_MORE_FILES to file_list_to_do if shutdown was triggered (signals stream/workers to finish).
 func restore_job_finish() {
 	if shutdown_triggered {
 		G_async_queue_push(file_list_to_do, "NO_MORE_FILES")

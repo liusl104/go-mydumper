@@ -2,15 +2,16 @@ package mydumper
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
@@ -25,19 +26,23 @@ var (
 	routine_type    []string = []string{"FUNCTION", "PROCEDURE", "PACKAGE", "PACKAGE BODY"}
 )
 
+// file_write wraps a writable file (or pipe) with write, close, and flush callbacks.
 type file_write struct {
 	write    write_fun
+	writeStr write_str_fun
 	close    close_fun
 	flush    flush_fun
 	filename string
 	status   int
 }
 
+// initialize_common initializes ref_table mutex and map for table filename masquerading.
 func initialize_common() {
 	ref_table_mutex = G_mutex_new()
 	ref_table = make(map[string]string)
 }
 
+// free_common clears ref_table and releases its mutex.
 func free_common() {
 	ref_table_mutex.Lock()
 	ref_table = nil
@@ -45,6 +50,7 @@ func free_common() {
 	ref_table_mutex = nil
 }
 
+// determine_filename returns either the table name (if allowed by regex) or a masqueraded name mydumper_N.
 func determine_filename(table string) string {
 	if !masquerade_filename && Check_filename_regex(table) && !strings.Contains(table, ".") && !strings.HasSuffix(table, "mydumper_") {
 		return table
@@ -55,6 +61,7 @@ func determine_filename(table string) string {
 	}
 }
 
+// get_ref_table returns the (possibly masqueraded) filename for table key k; caches result in ref_table.
 func get_ref_table(k string) string {
 	ref_table_mutex.Lock()
 	var val string = ref_table[k]
@@ -67,10 +74,12 @@ func get_ref_table(k string) string {
 	return val
 }
 
+// escape_string escapes special characters in str for MySQL (delegates to Escape).
 func escape_string(str string) string {
-	return mysql.Escape(str)
+	return Escape(str)
 }
 
+// build_schema_table_filename returns the full path for database.table-suffix.sql under dump_directory.
 func build_schema_table_filename(database string, table string, suffix string) string {
 	var filename string
 	filename = fmt.Sprintf("%s.%s-%s.sql", database, table, suffix)
@@ -78,6 +87,7 @@ func build_schema_table_filename(database string, table string, suffix string) s
 	return r
 }
 
+// build_schema_filename returns the full path for database-suffix.sql under dump_directory.
 func build_schema_filename(database, suffix string) string {
 	var filename string
 	filename = fmt.Sprintf("%s-%s.sql", database, suffix)
@@ -85,10 +95,12 @@ func build_schema_filename(database, suffix string) string {
 	return r
 }
 
+// build_tablespace_filename returns the path for the tablespace schema file.
 func build_tablespace_filename() string {
 	return path.Join(dump_directory, "all-schema-create-tablespace.sql")
 }
 
+// build_meta_filename returns the full path for a meta file (database.table-suffix or database-suffix) under dump_directory.
 func build_meta_filename(dump_directory, database string, table string, suffix string) string {
 	var filename string
 	if table != "" {
@@ -100,6 +112,7 @@ func build_meta_filename(dump_directory, database string, table string, suffix s
 	return r
 }
 
+// set_charset appends SET statements to save and set character_set_client, character_set_results, collation_connection.
 func set_charset(statement *GString, character_set []byte, collation_connection []byte) {
 	G_string_printf(statement, "SET @PREV_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT;\n")
 	G_string_append(statement, "SET @PREV_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS;\n")
@@ -110,12 +123,14 @@ func set_charset(statement *GString, character_set []byte, collation_connection 
 
 }
 
+// restore_charset appends SET statements to restore charset from saved session variables.
 func restore_charset(statement *GString) {
 	G_string_append(statement, "SET character_set_client = @PREV_CHARACTER_SET_CLIENT;\n")
 	G_string_append(statement, "SET character_set_results = @PREV_CHARACTER_SET_RESULTS;\n")
 	G_string_append(statement, "SET collation_connection = @PREV_COLLATION_CONNECTION;\n")
 }
 
+// clear_dump_directory removes all files inside the given directory; returns error on open or remove failure.
 func clear_dump_directory(directory string) error {
 	dir, err := os.Open(directory)
 
@@ -143,10 +158,12 @@ func clear_dump_directory(directory string) error {
 	return nil
 }
 
+// set_transaction_isolation_level_repeatable_read sets the session transaction isolation level to REPEATABLE READ.
 func set_transaction_isolation_level_repeatable_read(conn *DBConnection) {
 	M_query_critical(conn, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ", "Failed to set isolation level")
 }
 
+// build_filename returns the full path for a dump file: database.table.part[.sub_part].extension under dump_directory.
 func build_filename(database string, table string, part uint64, sub_part uint, extension string, second_extension string) string {
 	var filename string
 	var ext string
@@ -164,14 +181,17 @@ func build_filename(database string, table string, part uint64, sub_part uint, e
 	return r
 }
 
+// build_sql_filename returns the path for a table chunk SQL file (extension .sql).
 func build_sql_filename(database string, table string, part uint64, sub_part uint) string {
 	return build_filename(database, table, part, sub_part, SQL, "")
 }
 
+// build_rows_filename returns the path for a table chunk data file (extension from rows_file_extension).
 func build_rows_filename(database string, table string, part uint64, sub_part uint) string {
 	return build_filename(database, table, part, sub_part, rows_file_extension, "")
 }
 
+// m_real_escape_string escapes MySQL special characters in from (\\0, \\n, \\r, \\, ', \", \\Z).
 func m_real_escape_string(from string) string {
 	var to strings.Builder
 	for _, ch := range from {
@@ -200,22 +220,24 @@ func m_real_escape_string(from string) string {
 	return to.String()
 }
 
+// m_escape_char_with_char returns a copy of to where each occurrence of needle is preceded by repl (escape character).
 func m_escape_char_with_char(needle byte, repl byte, to []byte) []byte {
-	// 预分配缓冲区：最坏情况下（全是目标字符）长度会翻倍，这里按原长度的1.5倍预分配减少扩容
+	// Pre-allocate buffer: worst case (all target chars) doubles length; use 1.5x to reduce realloc
 	buf := bytes.NewBuffer(make([]byte, 0, len(to)*3/2))
 
 	for _, b := range to {
-		// 若当前字符是目标字符，先写入替换字符
+		// If current char is target, write replacement first
 		if b == needle {
 			buf.WriteByte(repl)
 		}
-		// 写入当前字符（无论是否为目标字符）
+		// Write current char (whether target or not)
 		buf.WriteByte(b)
 	}
 
 	return buf.Bytes()
 }
 
+// m_replace_char_with_char replaces every occurrence of needle with repl in from (in place); returns string(from).
 func m_replace_char_with_char(needle byte, repl byte, from []byte) string {
 	for i := 0; i < len(from); i++ {
 		if from[i] == needle {
@@ -226,17 +248,18 @@ func m_replace_char_with_char(needle byte, repl byte, from []byte) string {
 	return string(from)
 }
 
+// determine_show_table_status_columns sets column indices for Engine, Comment, Collation, Rows from the result set.
 func determine_show_table_status_columns(result *MYSQL_RES, ecol *uint, ccol *uint, collcol *uint, rowscol *uint) {
 	var fields = Mysql_fetch_fields(result)
 	var i uint
 	for i = 0; i < Mysql_num_fields(result); i++ {
-		if strings.EqualFold(string(fields[i].Name), "Engine") {
+		if strings.EqualFold(fields[i].Name(), "Engine") {
 			*ecol = i
-		} else if strings.EqualFold(string(fields[i].Name), "Comment") {
+		} else if strings.EqualFold(fields[i].Name(), "Comment") {
 			*ccol = i
-		} else if strings.EqualFold(string(fields[i].Name), "Collation") {
+		} else if strings.EqualFold(fields[i].Name(), "Collation") {
 			*collcol = i
-		} else if strings.EqualFold(string(fields[i].Name), "Rows") {
+		} else if strings.EqualFold(fields[i].Name(), "Rows") {
 			*rowscol = i
 		}
 	}
@@ -245,27 +268,29 @@ func determine_show_table_status_columns(result *MYSQL_RES, ecol *uint, ccol *ui
 	G_assert(*collcol > 0)
 }
 
+// determine_explain_columns sets the column index for rows (or estRows for TiDB) from EXPLAIN result.
 func determine_explain_columns(result *MYSQL_RES, rowscol *uint) {
-	var fields []*mysql.Field = Mysql_fetch_fields(result)
+	var fields []*sql.ColumnType = Mysql_fetch_fields(result)
 	var i int
 	for i = 0; i < len(fields); i++ {
-		if strings.EqualFold(string(fields[i].Name), "rows") {
+		if strings.EqualFold(fields[i].Name(), "rows") {
 			*rowscol = uint(i)
-		} else if strings.EqualFold(string(fields[i].Name), "estRows") { // TiDB
+		} else if strings.EqualFold(fields[i].Name(), "estRows") { // TiDB
 			*rowscol = uint(i)
 		}
 	}
 }
 
+// determine_charset_and_coll_columns_from_show sets column indices for character_set_client and collation_connection.
 func determine_charset_and_coll_columns_from_show(result *MYSQL_RES, charcol *uint, collcol *uint) {
 	*charcol = 0
 	*collcol = 0
-	var fields []*mysql.Field = Mysql_fetch_fields(result)
+	var fields []*sql.ColumnType = Mysql_fetch_fields(result)
 	var i uint
 	for i = 0; i < uint(len(fields)); i++ {
-		if strings.EqualFold(string(fields[i].Name), "character_set_client") {
+		if strings.EqualFold(fields[i].Name(), "character_set_client") {
 			*charcol = i
-		} else if strings.EqualFold(string(fields[i].Name), "collation_connection") {
+		} else if strings.EqualFold(fields[i].Name(), "collation_connection") {
 			*collcol = i
 		}
 	}
@@ -273,6 +298,7 @@ func determine_charset_and_coll_columns_from_show(result *MYSQL_RES, charcol *ui
 	G_assert(*collcol > 0)
 }
 
+// initialize_header_in_gstring writes SET NAMES, FOREIGN_KEY_CHECKS, SQL_MODE, TIME_ZONE into _headers based on server type.
 func initialize_header_in_gstring(_headers *GString, charset string) {
 	if Is_mysql_like() {
 		if charset != "" {
@@ -297,19 +323,24 @@ func initialize_header_in_gstring(_headers *GString, charset string) {
 	}
 }
 
+// initialize_sql_statement copies the global headers into statement (used at start of each SQL file).
 func initialize_sql_statement(statement *GString) {
 	G_string_printf(statement, headers.Str.String())
 }
 
+// initialize_headers builds the global headers string (SET NAMES, FOREIGN_KEY_CHECKS, etc.) using SetNamesInFileByDefault.
 func initialize_headers() {
 	headers = G_string_sized_new(100)
 	initialize_header_in_gstring(headers, SetNamesInFileByDefault)
 }
+
+// set_tidb_snapshot sets the TiDB snapshot timestamp on the connection for consistent backup.
 func set_tidb_snapshot(conn *DBConnection) {
 	var query string = fmt.Sprintf("SET SESSION tidb_snapshot = '%s'", TidbSnapshot)
 	M_query_critical(conn, query, "Failed to set tidb_snapshot (It could be related to https://github.com/pingcap/tidb/issues/8887)")
 }
 
+// my_pow_two_plus_prev returns 2^max + prev (used for chunk part numbering).
 func my_pow_two_plus_prev(prev uint64, max uint) uint64 {
 	var r uint64 = 1
 	var i uint
@@ -319,6 +350,7 @@ func my_pow_two_plus_prev(prev uint64, max uint) uint64 {
 	return r + prev
 }
 
+// parse_rows_per_chunk parses "min:start:max" or "start" style rows-per-chunk string into min, start, max; returns false on error.
 func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *uint64, message string) bool {
 	if strings.HasPrefix(rows_p_chunk, "-") {
 		return false
@@ -348,6 +380,8 @@ func parse_rows_per_chunk(rows_p_chunk string, min *uint64, start *uint64, max *
 	_ = err
 	return true
 }
+
+// is_empty_dir returns true if directory exists, is a directory, and contains no entries; otherwise returns false.
 func is_empty_dir(directory string) bool {
 	dir, err := os.Stat(directory)
 	if err != nil {

@@ -8,6 +8,7 @@ package myloader
 }
 */
 
+// kill_pmm_thread stops the PMM thread (currently a no-op; pmm thread is commented out).
 func kill_pmm_thread() {
 
 }

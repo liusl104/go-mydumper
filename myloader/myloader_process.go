@@ -47,6 +47,7 @@ var (
 	replicationStatements   *replication_statements
 )
 
+// initialize_process sets replicationStatements, conf, fifo_hash, and fifo_table_mutex.
 func initialize_process(c *configuration) {
 	replicationStatements = new(replication_statements)
 	replicationStatements.reset_replica = nil
@@ -59,6 +60,7 @@ func initialize_process(c *configuration) {
 	fifo_table_mutex = G_mutex_new()
 }
 
+// append_new_db_table returns or creates a db_table in conf.table_hash for the given database/table; updates rows and indexes if present.
 func append_new_db_table(real_db_name *database, table string, number_rows uint64, alter_table_statement *GString) *db_table {
 	var lkey = Build_dbt_key(real_db_name.filename, table)
 	var dbt *db_table = conf.table_hash[lkey]
@@ -119,12 +121,14 @@ func append_new_db_table(real_db_name *database, table string, number_rows uint6
 	return dbt
 }
 
+// free_dbt clears table name, constraints, and mutex on the db_table (no-op for GC).
 func free_dbt(dbt *db_table) {
 	dbt.table = ""
 	dbt.constraints = nil
 	dbt.mutex = nil
 }
 
+// free_table_hash deletes all entries from table_hash while holding conf.table_hash_mutex.
 func free_table_hash(table_hash map[string]*db_table) {
 	conf.table_hash_mutex.Lock()
 	var lkey string
@@ -136,6 +140,7 @@ func free_table_hash(table_hash map[string]*db_table) {
 	conf.table_hash_mutex.Unlock()
 }
 
+// myl_open opens the file (or a decompression pipe via get_command_and_basename) and returns an osFile.
 func myl_open(filename string, mode int) (*osFile, error) {
 	var file *osFile
 	var err error
@@ -170,6 +175,7 @@ func myl_open(filename string, mode int) (*osFile, error) {
 	return file, nil
 }
 
+// myl_close closes the osFile (and optional fifo/pipe), optionally removing the fifo file.
 func myl_close(filename string, file *osFile, rm bool) {
 	fifo_table_mutex.Lock()
 	fifo_table_mutex.Unlock()
@@ -178,6 +184,7 @@ func myl_close(filename string, file *osFile, rm bool) {
 	_ = file.close()
 }
 
+// load_schema reads the schema file, parses CREATE TABLE (and optional ALTER), builds a restore job, and returns a control_job for JOB_TO_CREATE_TABLE.
 func load_schema(dbt *db_table, filename string) *control_job {
 	var infile *osFile
 	var data *GString = G_string_sized_new(512)
@@ -289,6 +296,7 @@ func load_schema(dbt *db_table, filename string) *control_job {
 	return cj
 }
 
+// get_database_table_part_name_from_filename parses database.table.part.sub_part from the filename (split by '.').
 func get_database_table_part_name_from_filename(filename string, database *string, table *string, part *uint, sub_part *uint) {
 	var split_db_tbl = strings.SplitN(filename, ".", 4)
 	if len(split_db_tbl) > 2 {
@@ -313,12 +321,14 @@ func get_database_table_part_name_from_filename(filename string, database *strin
 	return
 }
 
+// get_database_name_from_filename returns the database name by stripping "-schema-create.sql" from the filename.
 func get_database_name_from_filename(filename string) string {
 	var split_file = strings.SplitN(filename, "-schema-create.sql", 2)
 	var db_name = split_file[0]
 	return db_name
 }
 
+// get_database_table_name_from_filename parses database and table from filename by splitting on suffix and then on '.'.
 func get_database_table_name_from_filename(filename string, suffix string, database *string, table *string) {
 	var split_file = strings.SplitN(filename, suffix, 2)
 	var split_db_tbl = strings.Split(split_file[0], ".")
@@ -332,6 +342,7 @@ func get_database_table_name_from_filename(filename string, suffix string, datab
 
 }
 
+// get_database_name_from_content opens the schema file and extracts the database name from the CREATE DATABASE (or CREATE SCHEMA) statement.
 func get_database_name_from_content(filename string) string {
 	var infile *osFile
 	var err error
@@ -367,11 +378,13 @@ func get_database_name_from_content(filename string) string {
 	return real_database
 }
 
+// process_tablespace_filename creates a schema restore job for the tablespace and pushes it to conf.database_queue.
 func process_tablespace_filename(filename string) {
 	var rj = new_schema_restore_job(filename, JOB_RESTORE_SCHEMA_FILENAME, nil, nil, nil, TABLESPACE)
 	G_async_queue_push(conf.database_queue, new_control_job(JOB_RESTORE, rj, nil))
 }
 
+// process_database_filename resolves database name from filename/content, gets or creates database in db_hash, and enqueues CREATE_DATABASE job if DB is not set.
 func process_database_filename(filename string) {
 	var db_kname, db_vname string
 	db_kname = get_database_name_from_filename(filename)
@@ -397,12 +410,13 @@ func process_database_filename(filename string) {
 		var rj = new_schema_restore_job(filename, JOB_RESTORE_SCHEMA_FILENAME, nil, real_db_name, nil, CREATE_DATABASE)
 		G_async_queue_push(conf.database_queue, new_control_job(JOB_RESTORE, rj, nil))
 	} else {
-		// 与 C 版本一致：当设置了 -B 参数时，直接将状态设置为 CREATED
-		// database_db 会在 start_worker_schema 之前被创建，所以数据库应该已经存在
+		// Consistent with C: when -B is set, set state to CREATED directly
+		// database_db is created before start_worker_schema, so database should already exist
 		real_db_name.schema_state = CREATED
 	}
 }
 
+// process_table_filename parses db/table from filename, eval_table, append_new_db_table, load_schema; enqueues to real_db_name.queue or conf.table_queue. Returns false if skipped or schema not ready.
 func process_table_filename(filename string) bool {
 	var db_name, table_name string
 	var dbt *db_table
@@ -419,7 +433,7 @@ func process_table_filename(filename string) bool {
 	dbt.schema_state = NOT_CREATED
 	var cj *control_job = load_schema(dbt, path.Join(directory, filename, ""))
 	if cj == nil {
-		// 与 C 版本一致：如果 load_schema 失败，释放 dbt
+		// Consistent with C: if load_schema fails, free dbt
 		free_dbt(dbt)
 		return false
 	}
@@ -438,6 +452,7 @@ func process_table_filename(filename string) bool {
 	return true
 }
 
+// process_metadata_global loads the metadata file (INI), applies config, builds db/table list with checksums, and enqueues schema/data jobs.
 func process_metadata_global(file string) {
 	var pt = path.Join(directory, file)
 	var kf = Load_config_file(pt)
@@ -573,6 +588,7 @@ func process_metadata_global(file string) {
 	M_remove(directory, file)
 }
 
+// process_schema_view_filename parses db/table from filename, eval_table, append_new_db_table, and enqueues a view restore job to conf.view_queue.
 func process_schema_view_filename(filename string) bool {
 	var db_name, table_name string
 	var real_db_name *database
@@ -592,6 +608,7 @@ func process_schema_view_filename(filename string) bool {
 	return true
 }
 
+// process_schema_sequence_filename parses db/table from filename, loads sequence SQL, and enqueues a JOB_RESTORE_STRING job to the database's sequence_queue.
 func process_schema_sequence_filename(filename string) bool {
 	var db_name, table_name string
 	var real_db_name *database
@@ -632,6 +649,7 @@ func process_schema_sequence_filename(filename string) bool {
 
 }
 
+// process_schema_filename loads the schema file (triggers or post) and enqueues a JOB_RESTORE_STRING job to the appropriate queue (post_queue).
 func process_schema_filename(filename string, object string) bool {
 	var db_name, table_name string
 	var real_db_name *database
@@ -656,7 +674,7 @@ func process_schema_filename(filename string, object string) bool {
 	return true
 }
 
-// 与 C 版本一致：返回 -1（rj1 < rj2）、0（rj1 == rj2）或 1（rj1 > rj2）
+// cmp_restore_job compares two restore jobs. Returns -1 (rj1 < rj2), 0 (rj1 == rj2), or 1 (rj1 > rj2). Consistent with C.
 func cmp_restore_job(rj1 *restore_job, rj2 *restore_job) int {
 	if rj1.data.drj.part != rj2.data.drj.part {
 		var a = rj1.data.drj.part
@@ -679,7 +697,7 @@ func cmp_restore_job(rj1 *restore_job, rj2 *restore_job) int {
 	return 0
 }
 
-// 与 C 版本的 g_list_insert_sorted 对应：按 cmp_restore_job 排序插入
+// insert_restore_job_sorted inserts rj into list l keeping order by cmp_restore_job (equivalent to C g_list_insert_sorted).
 func insert_restore_job_sorted(l *list.List, rj *restore_job) {
 	if l.Len() == 0 {
 		l.PushBack(rj)
@@ -694,6 +712,7 @@ func insert_restore_job_sorted(l *list.List, rj *restore_job) {
 	l.PushBack(rj)
 }
 
+// process_data_filename parses db/table/part/sub_part from filename, eval_table, append_new_db_table, and enqueues a data restore job into dbt.restore_job_list (sorted).
 func process_data_filename(filename string) bool {
 	var db_name, table_name string
 	var part, sub_part uint
@@ -712,7 +731,7 @@ func process_data_filename(filename string) bool {
 		dbt.mutex.Lock()
 		atomic.AddInt64(&dbt.remaining_jobs, 1)
 		dbt.count++
-		// 与 C 版本一致：使用排序插入保持 restore_job_list 有序
+		// Consistent with C: use sorted insert to keep restore_job_list ordered
 		insert_restore_job_sorted(dbt.restore_job_list, rj)
 		dbt.mutex.Unlock()
 	} else {
@@ -722,6 +741,7 @@ func process_data_filename(filename string) bool {
 	return true
 }
 
+// process_checksum_filename parses db/table from filename, gets dbt from table_hash, and sets dbt.data_checksum from file content (or database checksum if table is empty).
 func process_checksum_filename(filename string) bool {
 	var db_name, table_name string
 	get_database_table_from_file(filename, "-", &db_name, &table_name)

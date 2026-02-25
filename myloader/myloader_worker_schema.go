@@ -13,11 +13,13 @@ var (
 	schema_threads []*GThread
 )
 
+// schema_queue_push pushes the given file_type and message onto refresh_db_queue2 for schema worker processing.
 func schema_queue_push(current_ft file_type, message string) {
 	log.Debugf("refresh_db_queue2 <- %s%s", ft2str(current_ft), message)
 	G_async_queue_push(refresh_db_queue2, current_ft)
 }
 
+// set_db_schema_created marks the database schema as CREATED and requeues pending control jobs from the database queue to the table queue.
 func set_db_schema_created(real_db_name *database, conf *configuration) {
 	var cj *control_job
 	var ft file_type
@@ -41,6 +43,7 @@ func set_db_schema_created(real_db_name *database, conf *configuration) {
 
 }
 
+// set_table_schema_state_to_created sets schema_state to CREATED for all tables in conf.table_list that were NOT_FOUND.
 func set_table_schema_state_to_created(conf *configuration) {
 	conf.table_list_mutex.Lock()
 	var dbt *db_table
@@ -54,6 +57,7 @@ func set_table_schema_state_to_created(conf *configuration) {
 	conf.table_list_mutex.Unlock()
 }
 
+// process_schema pops a file_type from refresh_db_queue2 and processes it (SCHEMA_CREATE, SCHEMA_TABLE, SCHEMA_SEQUENCE, INTERMEDIATE_ENDED, etc.); returns true to continue.
 func process_schema(td *thread_data) bool {
 	var ft file_type
 	var real_db_name *database
@@ -75,7 +79,7 @@ func process_schema(td *thread_data) bool {
 		break
 	case CJT_RESUME:
 		cjt_resume()
-		fallthrough // 与 C 版本 "// fall through" 对应，需继续执行 SCHEMA_TABLE 分支以从 table_queue 取 JOB_SHUTDOWN 并退出
+		fallthrough // Fall through to SCHEMA_TABLE to pop JOB_SHUTDOWN from table_queue and exit (consistent with C)
 	case SCHEMA_TABLE, SCHEMA_SEQUENCE:
 		var qname string
 		job = G_async_queue_pop(td.conf.table_queue).(*control_job)
@@ -129,7 +133,7 @@ func process_schema(td *thread_data) bool {
 			/* Wait while all DB created and go "second round" */
 			for _, real_db_name = range db_hash {
 				real_db_name.mutex.Lock()
-				// 如果设置了 -B 参数，且这个数据库的 real_database 等于 DB，且 database_db 已经被创建，则跳过检查
+				// If -B is set and this DB's real_database equals DB and database_db is already created, skip check
 				if DB != "" && database_db != nil && real_db_name.real_database == database_db.real_database && database_db.schema_state == CREATED {
 					real_db_name.schema_state = CREATED
 				}
@@ -178,6 +182,7 @@ func process_schema(td *thread_data) bool {
 	return ret
 }
 
+// worker_schema_thread is the main loop for a schema worker: repeatedly calls process_schema until done.
 func worker_schema_thread(c any) {
 	td := c.(*thread_data)
 	var cnf *configuration = td.conf
@@ -191,6 +196,7 @@ func worker_schema_thread(c any) {
 	log.Infof("S-Thread %d: Import completed", td.thread_id)
 }
 
+// initialize_worker_schema creates refresh_db_queue2 and allocates schema_td/schema_threads for MaxThreadsForSchemaCreation workers.
 func initialize_worker_schema(conf *configuration) {
 	var n uint
 	refresh_db_queue2 = G_async_queue_new()
@@ -204,12 +210,15 @@ func initialize_worker_schema(conf *configuration) {
 
 }
 
+// start_worker_schema starts MaxThreadsForSchemaCreation schema worker threads.
 func start_worker_schema() {
 	var n uint
 	for n = 0; n < MaxThreadsForSchemaCreation; n++ {
 		schema_threads[n] = M_thread_new("myloader_schema", worker_schema_thread, schema_td[n], "Schema thread could not be created")
 	}
 }
+
+// wait_schema_worker_to_finish joins all schema worker threads.
 func wait_schema_worker_to_finish() {
 	var n uint
 	log.Debugf("Waiting schema worker to finish")
@@ -221,6 +230,7 @@ func wait_schema_worker_to_finish() {
 	log.Debugf("Schema worker finished")
 }
 
+// free_schema_worker_threads clears schema_td and schema_threads.
 func free_schema_worker_threads() {
 	schema_td = nil
 	schema_threads = nil

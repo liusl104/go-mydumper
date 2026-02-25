@@ -12,13 +12,18 @@ var (
 	metadata_sync_queue *GAsyncQueue
 )
 
+// initialize_directory creates the metadata_sync_queue for directory processing.
 func initialize_directory() {
 	metadata_sync_queue = G_async_queue_new()
 }
+
+// wait_directory_to_process_metadata blocks until the directory thread pushes to metadata_sync_queue, then unreferences it.
 func wait_directory_to_process_metadata() {
 	G_async_queue_pop(metadata_sync_queue)
 	G_async_queue_unref(metadata_sync_queue)
 }
+
+// process_directory checks for the metadata file, runs process_metadata_global, and pushes to metadata_sync_queue; fatal if metadata missing.
 func process_directory(c any) {
 	cnf := c.(*configuration)
 	var err error
@@ -30,7 +35,7 @@ func process_directory(c any) {
 		G_async_queue_push(metadata_sync_queue, 1)
 		log.Infof("metadata pushed")
 	} else {
-		// 与 C 版本一致：g_error 是致命错误，使用 log.Criticalf 对应
+		// Consistent with C: g_error is fatal; use log.Criticalf
 		log.Criticalf("metadata file was not found")
 	}
 	if Resume {

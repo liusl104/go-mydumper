@@ -3,24 +3,27 @@ package mydumper
 import (
 	"container/list"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
+	"strings"
+
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
-	"strings"
 )
 
+// initialize_table initializes all_dbts_mutex, character_set_hash_mutex, and character_set_hash.
 func initialize_table() {
 	all_dbts_mutex = G_mutex_new()
 	character_set_hash_mutex = G_mutex_new()
 	character_set_hash = make(map[string]string)
 }
 
+// finalize_table clears character_set_hash and related mutexes.
 func finalize_table() {
 	character_set_hash = nil
 	all_dbts_mutex = nil
 	character_set_hash_mutex = nil
 }
 
+// free_db_table resets dbt chunk-related state and clears insert_statement, select_fields, etc.
 func free_db_table(dbt *db_table) {
 	dbt.chunks_mutex.Lock()
 	dbt.rows_lock = nil
@@ -35,6 +38,7 @@ func free_db_table(dbt *db_table) {
 	dbt = nil
 }
 
+// get_character_set_from_collation returns the character set name for the given collation (cached in character_set_hash).
 func get_character_set_from_collation(conn *DBConnection, collation string) string {
 	character_set_hash_mutex.Lock()
 	character_set, _ := character_set_hash[collation]
@@ -51,22 +55,23 @@ func get_character_set_from_collation(conn *DBConnection, collation string) stri
 	return character_set
 }
 
+// get_primary_key fills dbt.primary_key from SHOW INDEX (PRIMARY, or first non-subpart column, or use_any_index).
 func get_primary_key(conn *DBConnection, dbt *db_table, conf *Configuration) {
-	var indexes *mysql.Result
-	var row []mysql.FieldValue
+	var indexes *M_ROW
+	var row []FieldValue
 	var query string = fmt.Sprintf("SHOW INDEX FROM %s%s%s.%s%s%s", Identifier_quote_character_str, dbt.database.name, Identifier_quote_character_str,
 		Identifier_quote_character_str, dbt.table, Identifier_quote_character_str)
-	indexes = conn.Execute(query)
+	indexes = M_store_result_row(conn, query, M_warning, nil, "Failed to execute SHOW INDEX over %s", dbt.database.name)
 	if indexes != nil {
-		for _, row = range indexes.Values {
-			if strings.EqualFold(string(row[2].AsString()), "PRIMARY") {
+		for _, row = range indexes.Res.FieldValues {
+			if strings.EqualFold(row[2].String(), "PRIMARY") {
 				dbt.primary_key = append(dbt.primary_key, string(row[4].AsString()))
 			}
 		}
 		if dbt.primary_key != nil {
 			return
 		}
-		for _, row = range indexes.Values {
+		for _, row = range indexes.Res.FieldValues {
 			if strings.EqualFold(string(row[1].AsString()), "0") {
 				dbt.primary_key = append(dbt.primary_key, string(row[4].AsString()))
 			}
@@ -78,7 +83,7 @@ func get_primary_key(conn *DBConnection, dbt *db_table, conf *Configuration) {
 			var max_cardinality uint64
 			var cardinality uint64
 			var field string
-			for _, row = range indexes.Values {
+			for _, row = range indexes.Res.FieldValues {
 				if row[3].AsUint64() == 1 {
 					if row[6].Value() != nil {
 						cardinality = row[6].AsUint64()
@@ -97,6 +102,7 @@ func get_primary_key(conn *DBConnection, dbt *db_table, conf *Configuration) {
 
 }
 
+// get_primary_key_separated_by_comma builds a comma-separated quoted list of primary key columns and stores it in dbt.primary_key_separated_by_comma.
 func get_primary_key_separated_by_comma(dbt *db_table) {
 	var field_list string
 	var list = dbt.primary_key
@@ -116,6 +122,7 @@ func get_primary_key_separated_by_comma(dbt *db_table) {
 	}
 }
 
+// get_selectable_fields returns a comma-separated list of column names (excluding VIRTUAL/STORED generated) for the table.
 func get_selectable_fields(conn *DBConnection, database string, table string) string {
 	var field_list string
 	var query string = fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' and extra not like '%%VIRTUAL GENERATED%%' and extra not like '%%STORED GENERATED%%' ORDER BY ORDINAL_POSITION ASC", database, table)
@@ -139,6 +146,7 @@ func get_selectable_fields(conn *DBConnection, database string, table string) st
 	return field_list
 }
 
+// detect_generated_fields returns true if the table has generated columns (unless IgnoreGeneratedFields).
 func detect_generated_fields(conn *DBConnection, database string, table string) bool {
 	var result bool
 	var query string
@@ -152,6 +160,7 @@ func detect_generated_fields(conn *DBConnection, database string, table string) 
 	return result
 }
 
+// has_json_fields returns true if the table has any JSON column.
 func has_json_fields(conn *DBConnection, database string, table string) bool {
 	var query string
 	query = fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' and COLUMN_TYPE ='json'", database, table)
@@ -164,6 +173,7 @@ func has_json_fields(conn *DBConnection, database string, table string) bool {
 	return false
 }
 
+// new_db_table creates or reuses a db_table for the given database/table, registers it in all_dbts, and returns true if newly created.
 func new_db_table(d **db_table, conn *DBConnection, conf *Configuration, database *database, table string, table_collation string, is_sequence bool) bool {
 	var b bool
 	var lkey = Build_dbt_key(database.name, table)

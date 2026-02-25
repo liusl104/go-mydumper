@@ -2,12 +2,12 @@ package mydumper
 
 import (
 	"container/list"
+	"database/sql"
 	"fmt"
 	"math"
 	"sync"
 	"time"
 
-	"github.com/go-mysql-org/go-mysql/mysql"
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
 )
@@ -38,16 +38,20 @@ var (
 	chunk_builder                                      *GThread
 )
 
+// initialize_chunk creates the transactional and non-transactional chunk request queues.
 func initialize_chunk() {
 	give_me_another_transactional_chunk_step_queue = G_async_queue_new()
 	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new()
 }
+
+// start_chunk_builder starts the chunk_builder_thread (unless NoData).
 func start_chunk_builder(conf *Configuration) {
 	if !NoData {
 		chunk_builder = M_thread_new("chunk_builder", chunk_builder_thread, conf, "Chunk builder thread could not be created")
 	}
 }
 
+// finalize_chunk unreferences chunk queues and joins the chunk_builder thread.
 func finalize_chunk() {
 	G_async_queue_unref(give_me_another_transactional_chunk_step_queue)
 	G_async_queue_unref(give_me_another_non_transactional_chunk_step_queue)
@@ -56,11 +60,13 @@ func finalize_chunk() {
 	}
 }
 
+// process_none_chunk dumps the entire table in one shot via write_table_job_into_file (no chunking).
 func process_none_chunk(tj *table_job, csi *chunk_step_item) {
 	_ = csi
 	write_table_job_into_file(tj)
 }
 
+// initialize_chunk_step_as_none sets csi to NONE chunk type with process_none_chunk.
 func initialize_chunk_step_as_none(csi *chunk_step_item) {
 	csi.part = 0
 	csi.chunk_type = NONE
@@ -69,6 +75,7 @@ func initialize_chunk_step_as_none(csi *chunk_step_item) {
 	csi.chunk_step = nil
 }
 
+// new_none_chunk_step allocates a chunk_step_item configured as NONE (full table dump).
 func new_none_chunk_step() *chunk_step_item {
 	var csi *chunk_step_item = new(chunk_step_item)
 	csi.chunk_functions = new(chunk_functions)
@@ -76,6 +83,7 @@ func new_none_chunk_step() *chunk_step_item {
 	return csi
 }
 
+// initialize_chunk_step_item determines chunk type from MIN/MAX of the key column: returns integer step, char step, or NONE chunk.
 func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint, rows uint64, prefix *GString) *chunk_step_item {
 	var csi *chunk_step_item
 	var query, cache string
@@ -116,19 +124,19 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint
 		log.Infof("It is NONE with minmax == NULL")
 		return new_none_chunk_step()
 	}
-	var fields []*mysql.Field = Mysql_fetch_fields(mr.Res)
+	var fields []*sql.ColumnType = Mysql_fetch_fields(mr.Res)
 	var diff_btwn_max_min, unmin, unmax uint64
 	var nmin, nmax int64
 	// var lengths = minmax.Fields
 
-	switch fields[0].Type {
-	case mysql.MYSQL_TYPE_TINY, mysql.MYSQL_TYPE_SHORT, mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_LONGLONG, mysql.MYSQL_TYPE_INT24:
+	switch GetStandardType(fields[0].DatabaseTypeName()) {
+	case "MYSQL_TYPE_TINY", "MYSQL_TYPE_SHORT", "MYSQL_TYPE_LONG", "MYSQL_TYPE_LONGLONG", "MYSQL_TYPE_INT24":
 		log.Debugf("Integer PK found on `%s`.`%s`", dbt.database.name, dbt.table)
 		unmin = mr.Row[0].AsUint64()
 		unmax = mr.Row[1].AsUint64()
 		nmin = mr.Row[0].AsInt64()
 		nmax = mr.Row[1].AsInt64()
-		var unsign bool = (fields[0].Flag & mysql.UNSIGNED_FLAG) != 0
+		var unsign bool = IsColumnUnsigned(fields[0])
 		if unsign {
 			diff_btwn_max_min = gint64_abs(int64(unmax - unmin))
 		} else {
@@ -186,7 +194,7 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint
 			}
 		}
 		break
-	case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_VAR_STRING:
+	case "MYSQL_TYPE_STRING", "MYSQL_TYPE_VAR_STRING":
 		log.Tracef("String type %d", position)
 		M_store_result_row_free(mr)
 		if position > 0 {
@@ -208,6 +216,7 @@ func initialize_chunk_step_item(conn *DBConnection, dbt *db_table, position uint
 	return nil
 }
 
+// get_rows_from_explain runs EXPLAIN on the table (with optional WHERE/field) and returns the rows estimate from the result.
 func get_rows_from_explain(conn *DBConnection, dbt *db_table, where *GString, field string) uint64 {
 	var query string
 	var cache string
@@ -245,6 +254,7 @@ func get_rows_from_explain(conn *DBConnection, dbt *db_table, where *GString, fi
 	return rows_in_explain
 }
 
+// get_rows_from_count runs SELECT COUNT(*) on the table (with optional WHERE) and returns the count.
 func get_rows_from_count(conn *DBConnection, dbt *db_table, where *GString) uint64 {
 	var cache, query string
 	var whereOpt, whereKey string
@@ -269,6 +279,7 @@ func get_rows_from_count(conn *DBConnection, dbt *db_table, where *GString) uint
 	return rows
 }
 
+// set_chunk_strategy_for_dbt gets row count (or estimate), then builds the initial chunk (partition, integer, or NONE) and enqueues it; sets dbt.status to READY.
 func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 	dbt.chunks_mutex.Lock()
 	var csi *chunk_step_item
@@ -304,6 +315,7 @@ func set_chunk_strategy_for_dbt(conn *DBConnection, dbt *db_table) {
 	dbt.chunks_mutex.Unlock()
 }
 
+// get_next_dbt_and_chunk_step_item finds the next table and chunk step from dbt_list (DEFINING or READY with chunks), assigns to pointers, and returns whether any job is still defining.
 func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_item, dbt_list *MList) bool {
 	var iter *list.Element
 	var dbt *db_table
@@ -384,6 +396,7 @@ func get_next_dbt_and_chunk_step_item(dbt_pointer **db_table, csi **chunk_step_i
 	return are_there_jobs_defining
 }
 
+// enqueue_shutdown_jobs pushes NumThreads JOB_SHUTDOWN jobs into the queue so workers can exit.
 func enqueue_shutdown_jobs(queue *GAsyncQueue) {
 	var n uint
 	var j *job
@@ -394,11 +407,14 @@ func enqueue_shutdown_jobs(queue *GAsyncQueue) {
 	}
 }
 
+// enqueue_shutdown sends shutdown jobs to both queue and deferQueue of the table_queuing.
 func enqueue_shutdown(q *table_queuing) {
 	enqueue_shutdown_jobs(q.queue)
 	enqueue_shutdown_jobs(q.deferQueue)
 
 }
+
+// table_job_enqueue loops: waits for request_chunk, gets next dbt/csi via get_next_dbt_and_chunk_step_item, creates dump or determine_chunk_type jobs, then calls enqueue_shutdown when no more work.
 func table_job_enqueue(q *table_queuing) {
 	var dbt *db_table
 	var csi *chunk_step_item
@@ -461,6 +477,7 @@ func table_job_enqueue(q *table_queuing) {
 	enqueue_shutdown(q)
 }
 
+// chunk_builder_thread runs table_job_enqueue for non_transactional then transactional queues (consumes request_chunk and enqueues dump jobs).
 func chunk_builder_thread(c any) {
 	conf := c.(*Configuration)
 	table_job_enqueue(conf.non_transactional)

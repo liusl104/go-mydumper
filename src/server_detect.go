@@ -36,6 +36,7 @@ var (
 	Case_sensitive_suffix     string
 )
 
+// Get_product_name returns the human-readable name of the detected server product (e.g. "MySQL", "MariaDB").
 func Get_product_name() string {
 	switch Get_product() {
 	case SERVER_TYPE_PERCONA:
@@ -63,6 +64,7 @@ func Is_mysql_like() bool {
 		Get_product() == SERVER_TYPE_DOLT || Get_product() == SERVER_TYPE_UNKNOWN
 }
 
+// Server_support_tablespaces returns true if the detected server supports tablespaces (Percona, MySQL, or unknown).
 func Server_support_tablespaces() bool {
 	return Get_product() == SERVER_TYPE_PERCONA || Get_product() == SERVER_TYPE_MYSQL || Get_product() == SERVER_TYPE_UNKNOWN
 }
@@ -92,12 +94,14 @@ func Detect_product(_ascii_version_comment, _ascii_version string) error {
 	return nil
 }
 
+// Detect_version parses major.secondary.revision from sver and stores them in package variables.
 func Detect_version(sver []string) {
 	major, _ = strconv.Atoi(sver[0])
 	secondary, _ = strconv.Atoi(sver[1])
 	revision, _ = strconv.Atoi(sver[2])
 }
 
+// Detect_server_version queries @@version_comment and @@version (or ClickHouse build_options), then calls Detect_product and Detect_version.
 func Detect_server_version(conn *DBConnection) {
 	var mr = M_store_result_row(conn, "SELECT @@version_comment, @@version", M_warning, M_message, "Not able to determine database version")
 	var ascii_version_comment string
@@ -126,6 +130,7 @@ func Detect_server_version(conn *DBConnection) {
 	Detect_version(sver)
 }
 
+// Detect_lower_case_table_names queries @@lower_case_table_names and sets Case_sensitive_prefix/Suffix (CAST/AS BINARY or empty).
 func Detect_lower_case_table_names(conn *DBConnection) {
 	var lower_case_table_names uint
 	var mr *M_ROW = M_store_result_row(conn, "SELECT @@lower_case_table_names", M_warning, M_message, "Not able to determine lower_case_table_names")
@@ -142,6 +147,7 @@ func Detect_lower_case_table_names(conn *DBConnection) {
 	M_store_result_row_free(mr)
 }
 
+// Detect_replica sets replica-related SQL command strings (START/STOP REPLICA, etc.) based on product and version.
 func Detect_replica() {
 	Show_replica_status = SHOW_SLAVE_STATUS
 	Show_binary_log_status = SHOW_MASTER_STATUS
@@ -218,6 +224,7 @@ func Detect_replica() {
 	}
 }
 
+// Server_detect runs full server detection: version (or ServerVersionArg), lower_case_table_names, and replica commands.
 func Server_detect(conn *DBConnection) {
 	if ServerVersionArg != "" {
 		var _product []string = strings.SplitN(ServerVersionArg, "-", 2)

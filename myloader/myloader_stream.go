@@ -25,6 +25,7 @@ var (
 	m_close_stream        func(*os.File) error
 )
 
+// initialize_stream starts the stream thread (process_stream) and initializes metadata_header mutex/cond.
 func initialize_stream(c *configuration) {
 	stream_thread = M_thread_new("myloader_stream", process_stream, c, "Stream thread could not be created")
 	metadata_header_mutex = G_mutex_new()
@@ -35,15 +36,17 @@ func initialize_stream(c *configuration) {
 	}
 }
 
+// wait_stream_to_finish joins the stream thread if it was started.
 func wait_stream_to_finish() {
 	if stream_thread != nil {
 		G_thread_join(stream_thread)
 	}
 }
 
+// wait_stream_to_process_metadata_header blocks until metadata_header_done is true (signaled by metadata_has_been_processed).
 func wait_stream_to_process_metadata_header() {
 	if metadata_header_mutex == nil {
-		// 如果 stream 没有被初始化，直接返回（不应该发生，但添加安全检查）
+		// If stream is not initialized, return (should not happen, but add safety check)
 		return
 	}
 	metadata_header_mutex.Lock()
@@ -53,9 +56,10 @@ func wait_stream_to_process_metadata_header() {
 	metadata_header_mutex.Unlock()
 }
 
+// metadata_has_been_processed sets metadata_header_done and signals waiters (stream metadata header is done).
 func metadata_has_been_processed() {
 	if metadata_header_mutex == nil {
-		// 如果 stream 没有被初始化，直接返回（不应该发生，但添加安全检查）
+		// If stream is not initialized, return (should not happen, but add safety check)
 		return
 	}
 	metadata_header_mutex.Lock()
@@ -64,11 +68,13 @@ func metadata_has_been_processed() {
 	metadata_header_mutex.Unlock()
 }
 
+// read_stream_line reads up to c_to_read bytes from stdin into buffer; returns bytes read.
 func read_stream_line(buffer []byte, c_to_read int) int {
 	n, _ := os.Stdin.Read(buffer[:c_to_read])
 	return n
 }
 
+// flush_stream writes buffer[from:to+1] to file and adds the length to total_size.
 func flush_stream(buffer []byte, from int, to int, file *os.File, total_size *uint) {
 	if file != nil {
 		data := buffer[from : to+1]
@@ -80,6 +86,7 @@ func flush_stream(buffer []byte, from int, to int, file *os.File, total_size *ui
 	}
 }
 
+// has_mydumper_suffix returns true if the line looks like a mydumper output filename (.dat, .sql, metadata.partial, or metadata).
 func has_mydumper_suffix(line string) bool {
 	return m_filename_has_suffix(line, ".dat") ||
 		m_filename_has_suffix(line, ".sql") ||
@@ -87,6 +94,7 @@ func has_mydumper_suffix(line string) bool {
 		strings.HasPrefix(line, "metadata")
 }
 
+// process_stream reads from stdin (or small buffer if No_stream), parses mydumper stream format, and dispatches filenames to the intermediate queue.
 func process_stream(c any) {
 	stream_conf := c.(*configuration)
 	var filename, real_filename, previous_filename string

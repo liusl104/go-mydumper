@@ -19,6 +19,7 @@ type command struct {
 	cmd *exec.Cmd
 }
 
+// exec_this_command starts the given command with args (with FILENAME replaced) or waits for an existing command for that filename to finish.
 func exec_this_command(bin string, c_arg []string, filename string) {
 	var found bool
 	var this *command
@@ -48,6 +49,7 @@ func exec_this_command(bin string, c_arg []string, filename string) {
 
 }
 
+// process_exec_command pops filenames from Stream_queue, replaces FILENAME in exec_command args, and runs exec_this_command; exits on empty filename.
 func process_exec_command(a any) {
 	_ = a
 	var arguments = strings.Split(exec_command, " ")
@@ -67,6 +69,8 @@ func process_exec_command(a any) {
 	}
 
 }
+
+// initialize_exec_command creates Stream_queue and Num_exec_threads worker threads running process_exec_command.
 func initialize_exec_command() {
 	log.Warnf("initialize_exec_command: Started")
 	Stream_queue = G_async_queue_new()
@@ -78,6 +82,7 @@ func initialize_exec_command() {
 	}
 }
 
+// wait_exec_command_to_finish pushes empty filenames to Stream_queue to signal shutdown, then joins all exec threads.
 func wait_exec_command_to_finish() {
 	var i uint
 	for i = 0; i < Num_exec_threads; i++ {

@@ -50,6 +50,7 @@ var (
 	DefaultCharacterSet          string
 )
 
+// entries registers main mydumper flags: help, outputdir, clear, logfile, disk-limits, etc.
 func entries() {
 	pflag.BoolVarP(&Help, "help", "?", false, "Show help options")
 	pflag.StringVarP(&OutputDirectoryStr, "outputdir", "o", "", "Directory to output files to")
@@ -64,6 +65,8 @@ func entries() {
 	pflag.IntVar(&ftwrl_timeout_retries, "ftwrl-timeout-retries", 0, "Sets the amount of retries before give up acquiring FLUSH TABLES. Default: 0, never gives up.")
 	pflag.StringVar(&ReplicaDataStr, "replica-data", "", "Includes the replica information")
 }
+
+// extra_entries registers chunk-filesize, compress, compact, use-defer, and related options.
 func extra_entries() {
 	pflag.UintVarP(&ChunkFilesize, "chunk-filesize", "F", 0, "Split data files into pieces of this size in MB. Useful for myloader multi-threading.")
 	pflag.BoolVar(&ExitIfBrokenTableFound, "exit-if-broken-table-found", false, "Exits if a broken table has been found")
@@ -78,6 +81,7 @@ func extra_entries() {
 
 }
 
+// lock_entries registers lock-related flags: tidb-snapshot, no-locks, sync-thread-lock-mode, trx-tables, etc.
 func lock_entries() {
 	pflag.StringVarP(&TidbSnapshot, "tidb-snapshot", "z", "", "Snapshot to use for TiDB")
 	pflag.BoolVarP(&NoLocks, "no-locks", "k", false, "This option is deprecated use --sync-thread-lock-mode instead")
@@ -91,6 +95,7 @@ func lock_entries() {
 	pflag.BoolVar(&SkipDdlLocks, "skip-ddl-locks", false, "Do not send DDL locks when possible")
 }
 
+// query_running_entries registers long-query-guard, kill-long-queries, and retry options.
 func query_running_entries() {
 	pflag.IntVar(&LongqueryRetries, "long-query-retries", 0, "Retry checking for long queries, default 0 (do not retry)")
 	pflag.IntVar(&LongqueryRetryInterval, "long-query-retry-interval", 60, "Time to wait before retrying the long query check in seconds")
@@ -99,6 +104,7 @@ func query_running_entries() {
 
 }
 
+// exec_entries registers exec and exec-per-thread related flags.
 func exec_entries() {
 	pflag.UintVar(&Num_exec_threads, "exec-threads", 4, "Amount of threads to use with --exec")
 	pflag.StringVar(&Exec_command, "exec", "", "Command to execute using the file as parameter")
@@ -106,12 +112,15 @@ func exec_entries() {
 	pflag.StringVar(&ExecPerThreadExtension, "exec-per-thread-extension", "", "Set the extension for the STDOUT file when --exec-per-thread is used")
 }
 
+// pmm_entries registers PMM collector path and resolution flags.
 func pmm_entries() {
 	// pmm
 	pflag.StringVar(&PmmPath, "pmm-path", "", "which default value will be /usr/local/percona/pmm2/collectors/textfile-collector/high-resolution")
 	pflag.StringVar(&PmmResolution, "pmm-resolution", "", "which default will be high")
 
 }
+
+// daemon_entries registers daemon mode, pid-file, snapshot-interval, and snapshot-count.
 func daemon_entries() {
 	pflag.BoolVarP(&DaemonMode, "daemon", "D", false, "Enable daemon mode")
 	pflag.StringVar(&PidFile, "pid-file", fmt.Sprintf("/tmp/%s.pid", MYDUMPER), "Pid file used by Daemon mode.")
@@ -119,6 +128,7 @@ func daemon_entries() {
 	pflag.IntVarP(&SnapshotCount, "snapshot-count", "X", 2, "number of snapshots, default 2")
 }
 
+// chunks_entries registers chunk-related flags: rows, max-threads-per-table, split-partitions, etc.
 func chunks_entries() {
 	// chunks
 	pflag.IntVar(&MaxTimePerSelect, "max-time-per-select", 2, "Maximum amount of seconds that a select should take. Default: 2")
@@ -130,6 +140,7 @@ func chunks_entries() {
 
 }
 
+// checksum_entries registers checksum-all, data-checksums, schema-checksums, routine-checksums.
 func checksum_entries() {
 	// Checksum
 	pflag.BoolVarP(&DumpChecksums, "checksum-all", "M", false, "Dump checksums for all elements")
@@ -138,6 +149,8 @@ func checksum_entries() {
 	pflag.BoolVar(&RoutineChecksums, "routine-checksums", false, "Dump triggers, functions and routines checksums")
 
 }
+
+// filter_entries registers database, ignore-engines, where, updated-since, partition-regex.
 func filter_entries() {
 	// filter
 	pflag.StringVarP(&DB, "database", "B", "", "Comma delimited list of databases to dump")
@@ -148,6 +161,7 @@ func filter_entries() {
 
 }
 
+// objects_entries registers no-schemas, no-data, triggers, events, routines, views, etc.
 func objects_entries() {
 	// Objects
 	pflag.BoolVarP(&NoSchemas, "no-schemas", "m", false, "Do not dump table schemas with the data and triggers")
@@ -162,6 +176,8 @@ func objects_entries() {
 	pflag.BoolVarP(&NoDumpViews, "no-views", "W", false, "Do not dump VIEWs")
 
 }
+
+// statement_entries registers load-data, csv, format, statement-size, complete-insert, hex-blob, etc.
 func statement_entries() {
 	// statement
 	pflag.BoolVar(&LoadData, "load-data", false, "Instead of creating INSERT INTO statements, it creates LOAD DATA statements and .dat files")
@@ -187,6 +203,7 @@ func statement_entries() {
 	pflag.StringVar(&TableEngineForViewDependency, "table-engine-for-view-dependency", MEMORY, "Table engine to be used for the CREATE TABLE statement for temporary tables when using views")
 }
 
+// load_contex_entries registers all mydumper flag groups, parses flags, and runs connection/stream/arguments callbacks.
 func load_contex_entries() {
 	entries()
 	Common_entries()
@@ -210,6 +227,7 @@ func load_contex_entries() {
 	_ = Set_verbose()
 }
 
+// arguments_callback applies post-parse logic: compress method, output format, lock mode, rows per chunk, etc.; returns true to continue.
 func arguments_callback() bool {
 	if Compress {
 		if Exec_command == "" {
@@ -314,6 +332,7 @@ func arguments_callback() bool {
 	return Common_arguments_callback()
 }
 
+// connection_arguments_callback applies connection-related post-parse options (e.g. defaults file).
 func connection_arguments_callback() {
 	if HidePassword != "" {
 		var tempPasswd []byte = make([]byte, len(HidePassword))

@@ -12,10 +12,12 @@ var (
 	SnapshotCount    int = 2
 )
 
+// initialize_daemon_thread prepares daemon-related state (currently a no-op).
 func initialize_daemon_thread() {
 
 }
 
+// runDaemon reborns the process as a daemon with the configured PidFile, WorkDir, and optional LogFile; returns nil in the child.
 func runDaemon() *daemon.Context {
 	cntxt := &daemon.Context{
 		PidFileName: PidFile,

@@ -31,12 +31,14 @@ type stream_queue_element struct {
 	filename string
 }
 
+// metadata_partial_queue_push pushes dbt onto metadata_partial_queue (nil is ignored).
 func metadata_partial_queue_push(dbt *db_table) {
 	if dbt != nil {
 		G_async_queue_push(metadata_partial_queue, dbt)
 	}
 }
 
+// new_stream_queue_element allocates a stream_queue_element for (dbt, filename).
 func new_stream_queue_element(dbt *db_table, filename string) *stream_queue_element {
 	var sf = new(stream_queue_element)
 	sf.dbt = dbt
@@ -44,10 +46,12 @@ func new_stream_queue_element(dbt *db_table, filename string) *stream_queue_elem
 	return sf
 }
 
+// get_stream_queue_length returns the length of the given async queue.
 func get_stream_queue_length(queue *GAsyncQueue) int64 {
 	return G_async_queue_length(queue)
 }
 
+// stream_queue_push pushes (dbt, filename) to Stream_queue and waits on done; then pushes dbt to metadata_partial_queue.
 func stream_queue_push(dbt *db_table, filename string) {
 	var done = G_async_queue_new()
 	G_async_queue_push(Stream_queue, new_stream_queue_element(dbt, filename))
@@ -56,6 +60,7 @@ func stream_queue_push(dbt *db_table, filename string) {
 	metadata_partial_queue_push(dbt)
 }
 
+// process_stream pops stream_queue_element from Stream_queue, writes file headers to stdout, and streams file content (or removes file); exits on empty filename.
 func process_stream(c any) {
 	_ = c
 	var f *os.File
@@ -163,11 +168,13 @@ func process_stream(c any) {
 	return
 }
 
+// send_initial_metadata signals initial_metadata_queue and blocks on initial_metadata_lock_queue.
 func send_initial_metadata() {
 	G_async_queue_push(initial_metadata_queue, 1)
 	G_async_queue_pop(initial_metadata_lock_queue)
 }
 
+// metadata_partial_writer drains metadata_partial_queue, writes partial metadata files (print_dbt_on_metadata_gstring), and pushes them to the stream; runs until metadata_partial_writer_alive is false.
 func metadata_partial_writer(data any) {
 	_ = data
 	var dbt *db_table
@@ -243,11 +250,13 @@ func metadata_partial_writer(data any) {
 
 }
 
+// make_partial_filename returns the filename for the i-th partial metadata file.
 func make_partial_filename(i uint) string {
 	return fmt.Sprintf("metadata.partial.%d", i)
 
 }
 
+// initialize_stream creates stream queues and starts stream_thread and metadata_partial_writer_thread.
 func initialize_stream() {
 	initial_metadata_queue = G_async_queue_new()
 	initial_metadata_lock_queue = G_async_queue_new()
@@ -258,6 +267,7 @@ func initialize_stream() {
 
 }
 
+// wait_stream_to_finish blocks until the stream thread has finished.
 func wait_stream_to_finish() {
 	stream_thread.Thread.Wait()
 }
