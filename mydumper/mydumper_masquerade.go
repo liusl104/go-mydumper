@@ -2,10 +2,10 @@ package mydumper
 
 import (
 	"bufio"
-	"github.com/go-mysql-org/go-mysql/mysql"
+	"os"
+
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
-	"os"
 )
 
 var (
@@ -14,17 +14,22 @@ var (
 	identity_function_pointer *Function_pointer = &Function_pointer{identity_function, false, "", nil, nil, nil, false, 0, 0, nil, false}
 )
 
+// initialize_masquerade initializes file_hash for masquerade configuration.
 func initialize_masquerade() {
 	file_hash = make(map[string]map[string][]string)
 }
-func identity_function(str string) mysql.FieldValue {
-	return mysql.FieldValue{Type: mysql.BLOB_FLAG}
+
+// identity_function returns an empty FieldValue (no transformation).
+func identity_function(str string) FieldValue {
+	return FieldValue{}
 }
 
+// finalize_masquerade clears file_hash.
 func finalize_masquerade() {
 	file_hash = nil
 }
 
+// load_file_content reads filename and returns a map of key-value pairs; currently returns empty map (Read_data not filling file_content).
 func load_file_content(filename string) map[string]string {
 	var file_content = make(map[string]string)
 	var file *os.File
@@ -45,6 +50,7 @@ func load_file_content(filename string) map[string]string {
 	return file_content
 }
 
+// init_function_pointer builds a Function_pointer from a value string; currently returns nil.
 func init_function_pointer(value string) *Function_pointer {
 	return nil
 }

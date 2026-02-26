@@ -3,8 +3,6 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"path"
 	"slices"
@@ -12,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const (
@@ -52,10 +53,13 @@ type statement struct {
 	td                *thread_data
 }
 
+// initialize_restore creates load_data_list_mutex and load_data_list map for LOAD DATA synchronization.
 func initialize_restore() {
 	load_data_list_mutex = G_mutex_new()
 	load_data_list = make(map[string]*sync.Mutex)
 }
+
+// new_connection_data allocates a connection_data (using thrconn or a new connection), runs Set_session, and pushes it to connection_pool.
 func new_connection_data(thrconn *DBConnection) *connection_data {
 	var cd *connection_data = new(connection_data)
 	if thrconn != nil {
@@ -66,7 +70,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 	}
 	cd.current_database = nil
 	cd.thread_id = Mysql_thread_id(cd.thrconn)
-	cd.ready = G_async_queue_new()
+	cd.ready = G_async_queue_new("connection_data.ready")
 	cd.queue = nil
 	cd.in_use = G_mutex_new()
 	log.Infof("Executing set session")
@@ -75,12 +79,15 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 	return cd
 }
 
+// new_io_restore_result allocates an io_restore_result with empty result and restore queues.
 func new_io_restore_result() *io_restore_result {
 	var iors *io_restore_result = new(io_restore_result)
-	iors.result = G_async_queue_new()
-	iors.restore = G_async_queue_new()
+	iors.result = G_async_queue_new("io_restore_result.result")
+	iors.restore = G_async_queue_new("io_restore_result.restore")
 	return iors
 }
+
+// initialize_connection_pool sets restore_data_from_file (mysqldump vs mydumper), creates connection_pool, restore_queues, free_results_queue, and restore_threads.
 func initialize_connection_pool() {
 	if MySQLDump {
 		restore_data_from_file = restore_data_from_mysqldump_file
@@ -88,9 +95,9 @@ func initialize_connection_pool() {
 		restore_data_from_file = restore_data_from_mydumper_file
 	}
 	var n uint
-	connection_pool = G_async_queue_new()
-	restore_queues = G_async_queue_new()
-	free_results_queue = G_async_queue_new()
+	connection_pool = G_async_queue_new("connection_pool")
+	restore_queues = G_async_queue_new("restore_queues")
+	free_results_queue = G_async_queue_new("free_results_queue")
 	var iors *io_restore_result
 	restore_threads = make([]*GThread, NumThreads)
 	for n = 0; n < NumThreads; n++ {
@@ -102,12 +109,15 @@ func initialize_connection_pool() {
 	}
 }
 
+// start_connection_pool starts NumThreads restore threads (restore_thread).
 func start_connection_pool() {
 	var n uint
 	for n = 0; n < NumThreads; n++ {
 		restore_threads[n] = M_thread_new("myloader_conn", restore_thread, nil, "Restore thread could not be created")
 	}
 }
+
+// wait_restore_threads_to_close pops each connection from the pool, signals end_restore_thread, and joins all restore threads.
 func wait_restore_threads_to_close() {
 	var n uint
 	var cd *connection_data
@@ -120,6 +130,7 @@ func wait_restore_threads_to_close() {
 	}
 }
 
+// reconnect_connection_data closes the connection, creates a new one with M_connect, and re-runs execute_use and Set_session.
 func reconnect_connection_data(cd *connection_data) {
 	cd.thrconn.Close()
 	cd.thrconn = Mysql_init()
@@ -129,9 +140,11 @@ func reconnect_connection_data(cd *connection_data) {
 	Execute_gstring(cd.thrconn, Set_session)
 }
 
+// restore_data_in_gstring_by_statement executes the SQL in data on the connection; on error retries once after reconnect. Returns 0 on success, 1 on error, 2 on lost connection.
 func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is_schema bool, query_counter *uint) uint {
-	en := Mysql_real_query(cd.thrconn, data.Str.String())
-	if en == nil {
+	// Consistent with C: mysql_real_query returns non-zero on error
+	Mysql_real_query(cd.thrconn, data.Str.String())
+	if Mysql_errno(cd.thrconn) != 0 {
 		if is_schema {
 			log.Warnf("Thread %d using connection %d - ERROR %d: %s %s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 		} else {
@@ -147,7 +160,9 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 				}
 			}
 			atomic.AddUint64(&detailed_errors.retries, 1)
-			if Mysql_real_query(cd.thrconn, data.Str.String()) == nil {
+			// Consistent with C: still failed after retry
+			Mysql_real_query(cd.thrconn, data.Str.String())
+			if Mysql_errno(cd.thrconn) != 0 {
 				if is_schema {
 					log.Criticalf("Thread %d using connection %d - ERROR %d: %s\n%s", cd.thread_id, cd.connection_id, Mysql_errno(cd.thrconn), Mysql_error(cd.thrconn), data.Str.String())
 				} else {
@@ -159,10 +174,11 @@ func restore_data_in_gstring_by_statement(cd *connection_data, data *GString, is
 		}
 	}
 	*query_counter = *query_counter + 1
-	data = nil
+	G_string_set_size(data, 0)
 	return 0
 }
 
+// close_restore_thread pops a connection from the pool and pushes end_restore_thread to its ready queue; returns the connection if return_connection.
 func close_restore_thread(return_connection bool) *connection_data {
 	var cd *connection_data = G_async_queue_pop(connection_pool).(*connection_data)
 	G_async_queue_push(cd.ready, &end_restore_thread)
@@ -172,6 +188,7 @@ func close_restore_thread(return_connection bool) *connection_data {
 	return nil
 }
 
+// setup_connection assigns the connection to the thread, optionally runs USE and START TRANSACTION, sets cd.queue and executes header, then pushes to ready.
 func setup_connection(cd *connection_data, td *thread_data, io_restore_result *io_restore_result, start_transaction bool, use_database *database, header *GString) {
 	log.Debugf("Thread %d: Connection %d granted", td.thread_id, cd.thread_id)
 	if err := cd.thrconn.Ping(); err != nil {
@@ -197,16 +214,20 @@ func setup_connection(cd *connection_data, td *thread_data, io_restore_result *i
 	G_async_queue_push(cd.ready, cd.queue)
 }
 
+// wait_for_available_restore_thread pops a connection from the pool and sets it up for the thread (restore_queues, start_transaction, use_database).
 func wait_for_available_restore_thread(td *thread_data, start_transaction bool, use_database *database) *connection_data {
 	var cd *connection_data = G_async_queue_pop(connection_pool).(*connection_data)
 	setup_connection(cd, td, G_async_queue_pop(restore_queues).(*io_restore_result), start_transaction, use_database, nil)
 	return cd
 }
 
+// request_another_connection tries to pop an extra connection from the pool when control_job_ended and more threads are allowed; sets it up and returns true if obtained.
 func request_another_connection(td *thread_data, io_restore_result *io_restore_result, start_transaction bool, use_database *database, header *GString) bool {
 	if control_job_ended && td.granted_connections < td.dbt.max_threads && td.dbt.restore_job_list.Len() == 0 {
-		var cd *connection_data = G_async_queue_try_pop(connection_pool).(*connection_data)
-		if cd != nil {
+		// Check return value for nil first to avoid panic on type assertion of nil
+		popResult := G_async_queue_try_pop(connection_pool)
+		if popResult != nil {
+			var cd *connection_data = popResult.(*connection_data)
 			setup_connection(cd, td, io_restore_result, start_transaction, use_database, header)
 			return true
 		}
@@ -214,6 +235,7 @@ func request_another_connection(td *thread_data, io_restore_result *io_restore_r
 	return false
 }
 
+// m_commit runs COMMIT on the connection; returns 0 on success, 2 on failure.
 func m_commit(cd *connection_data) int {
 	if M_query_warning(cd.thrconn, "COMMIT", "COMMIT failed") {
 		return 2
@@ -221,6 +243,7 @@ func m_commit(cd *connection_data) int {
 	return 0
 }
 
+// m_commit_and_start_transaction commits, resets query_counter, and starts a new transaction; returns non-zero on commit failure.
 func m_commit_and_start_transaction(cd *connection_data, query_counter *uint) uint {
 	if e := m_commit(cd); e != 0 {
 		return uint(e)
@@ -230,6 +253,7 @@ func m_commit_and_start_transaction(cd *connection_data, query_counter *uint) ui
 	return 0
 }
 
+// restore_insert parses INSERT statement from data, splits by Rows/CommitCount/MaxTransactionSize, executes each batch, and returns the number of errors.
 func restore_insert(cd *connection_data, td *thread_data, data *GString, query_counter *uint, offset_line uint, dbt *db_table) int {
 	var next_line int
 	nextLineIndex := strings.Index(data.Str.String(), "VALUES ") + 6
@@ -288,7 +312,8 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 				transaction_size = 0
 			}
 			if tr > 0 {
-				log.Errorf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
+				// Consistent with C: g_error is fatal; use log.Criticalf
+				log.Criticalf("Thread %d with connection %d: Error occurs between lines: %d and %d in a splited INSERT: %s", td.thread_id, cd.connection_id, offset_line, current_offset_line, Mysql_error(cd.thrconn))
 			}
 			if Mysql_warning_count(cd.thrconn) != 0 {
 				log.Warnf("Connection %d: Warnings found during INSERT between lines: %d and %d: %s", cd.connection_id, offset_line, current_offset_line, show_warnings_if_possible(cd.thrconn))
@@ -300,7 +325,7 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 		r += tr
 		offset_line = current_offset_line + 1
 		current_line++
-		// 检查是否处理完所有行
+		// Check if all rows have been processed
 		if next_line == -1 {
 			break
 		}
@@ -308,6 +333,7 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 	return int(r)
 }
 
+// restore_thread is the connection worker: pops io_restore_result from ready, processes INSERT/OTHER statements from restore queue, commits on CLOSE, returns connection to pool.
 func restore_thread(c any) {
 	var conn *DBConnection
 	if c != nil {
@@ -323,6 +349,7 @@ func restore_thread(c any) {
 		}
 		for {
 			ir = G_async_queue_pop(cd.queue.restore).(*statement)
+			log.Debugf("restore_thread conn %d: got statement kind=%v", cd.connection_id, ir.kind_of_statement)
 			if ir.kind_of_statement == CLOSE {
 				log.Debugf("Releasing connection: %d", cd.thread_id)
 				if cd.transaction && query_counter > 0 {
@@ -365,9 +392,9 @@ func restore_thread(c any) {
 		log.Debugf("Returning connection to pool: %d", cd.connection_id)
 		G_async_queue_push(connection_pool, cd)
 	}
-	return
 }
 
+// load_data_mutex_locate gets or creates a mutex for the load_data filename in load_data_list; returns true if caller owns the new mutex (should lock).
 func load_data_mutex_locate(filename string, mutex **sync.Mutex) bool {
 	load_data_list_mutex.Lock()
 
@@ -386,6 +413,7 @@ func load_data_mutex_locate(filename string, mutex **sync.Mutex) bool {
 	return false
 }
 
+// release_load_data_as_it_is_close unlocks and optionally clears the mutex for the filename in load_data_list.
 func release_load_data_as_it_is_close(filename string) {
 	load_data_list_mutex.Lock()
 	var mutex = load_data_list[filename]
@@ -397,12 +425,14 @@ func release_load_data_as_it_is_close(filename string) {
 	load_data_list_mutex.Unlock()
 }
 
+// free_statement frees the statement buffer and clears err (no-op for GC in Go).
 func free_statement(s *statement) {
 	G_string_free(s.buffer, true)
 	s.err = ""
 	s = nil
 }
 
+// initialize_statement resets result, error_number, and err on the statement; returns ir.
 func initialize_statement(ir *statement) *statement {
 	ir.result = 0
 	ir.error_number = 0
@@ -410,6 +440,7 @@ func initialize_statement(ir *statement) *statement {
 	return ir
 }
 
+// new_statement allocates a statement with empty filename and a sized buffer.
 func new_statement() *statement {
 	var stmt *statement = new(statement)
 	initialize_statement(stmt)
@@ -418,6 +449,7 @@ func new_statement() *statement {
 	return stmt
 }
 
+// assing_statement fills the statement with buffer, preline, is_schema, kind_of_statement, dbt, and td.
 func assing_statement(ir *statement, td *thread_data, dbt *db_table, stmt string, preline uint, is_schema bool, kind_of_statement kind_of_statement) {
 	initialize_statement(ir)
 	ir.buffer = G_string_new(stmt)
@@ -428,6 +460,7 @@ func assing_statement(ir *statement, td *thread_data, dbt *db_table, stmt string
 	ir.td = td
 }
 
+// process_result_vstatement_pop pops a statement from the queue, logs on error, and returns its result code.
 func process_result_vstatement_pop(get_insert_result_queue *GAsyncQueue, ir **statement, log_fun func(string, ...any), g_async_queue_pop_fun func(queue *GAsyncQueue) any, msg string, args ...any) int {
 	*ir = g_async_queue_pop_fun(get_insert_result_queue).(*statement)
 	if *ir == nil {
@@ -440,9 +473,12 @@ func process_result_vstatement_pop(get_insert_result_queue *GAsyncQueue, ir **st
 	return (*ir).result
 }
 
+// process_result_vstatement calls process_result_vstatement_pop with G_async_queue_pop.
 func process_result_vstatement(get_insert_result_queue *GAsyncQueue, ir **statement, log_fun func(string, ...any), msg string, args ...any) int {
 	return process_result_vstatement_pop(get_insert_result_queue, ir, log_fun, G_async_queue_pop, msg, args...)
 }
+
+// process_result_statement calls process_result_vstatement (alias for same behavior).
 func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **statement, log_fun func(string, ...any), msg string, args ...any) int {
 	return process_result_vstatement(get_insert_result_queue, ir, log_fun, msg, args...)
 }
@@ -573,6 +609,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 	}
 */
 
+// restore_data_from_mysqldump_file opens the file, reads statements (DELIMITER-aware), and sends them to a restore thread via assing_statement and process_result_statement.
 func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
 	var infile *osFile
 	var eof bool
@@ -644,6 +681,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 	return int(r)
 }
 
+// restore_data_from_mydumper_file opens the file, reads statements (;\n-separated), handles INSERT and LOAD DATA and headers, and sends them to a restore thread.
 func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
 	var infile *osFile
 	var eof bool
@@ -667,9 +705,9 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var header *GString = G_string_sized_new(256)
-	var inBufio *bufio.Scanner = bufio.NewScanner(infile.file)
+	var inBuffon *bufio.Scanner = bufio.NewScanner(infile.file)
 	for eof == false {
-		if Read_data(inBufio, data, &eof, &line) {
+		if Read_data(inBuffon, data, &eof, &line) {
 			if strings.HasSuffix(data.Str.String(), ";\n") {
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)
@@ -794,6 +832,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	return int(r)
 }
 
+// restore_data_in_gstring_extended splits data by ";\n", sends each statement to a restore thread, and returns true if any result was non-zero (error).
 func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema bool, use_database *database, log_fun func(string, ...any), msg string, args ...any) bool {
 	var cd *connection_data = wait_for_available_restore_thread(td, !is_schema && (CommitCount > 1), use_database)
 	var queue *io_restore_result = cd.queue
@@ -823,6 +862,7 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 	return r != 0
 }
 
+// restore_data_in_gstring calls restore_data_in_gstring_extended with M_warning and a default error message.
 func restore_data_in_gstring(td *thread_data, data *GString, is_schema bool, use_database *database) bool {
 	return restore_data_in_gstring_extended(td, data, is_schema, use_database, M_warning, "Failed to execute statement")
 }

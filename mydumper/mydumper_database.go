@@ -25,11 +25,13 @@ type database struct {
 	dump_triggers     bool
 }
 
+// initialize_database initializes database_hash and database_hash_mutex.
 func initialize_database() {
 	database_hash = make(map[string]*database)
 	database_hash_mutex = G_mutex_new()
 }
 
+// new_database creates a database struct, fills name/filename/escaped, and inserts it into database_hash.
 func new_database(conn *DBConnection, database_name string, already_dumped bool) *database {
 	var d *database = new(database)
 	_ = conn
@@ -46,6 +48,7 @@ func new_database(conn *DBConnection, database_name string, already_dumped bool)
 	return d
 }
 
+// free_database clears escaped and ad_mutex of the database (no-op for hash removal).
 func free_database(d *database) {
 	if d.escaped != "" {
 		d.escaped = ""
@@ -56,6 +59,7 @@ func free_database(d *database) {
 	d = nil
 }
 
+// free_databases clears database_hash and its mutex.
 func free_databases() {
 	database_hash_mutex.Lock()
 	database_hash = nil
@@ -63,6 +67,7 @@ func free_databases() {
 	database_hash_mutex = nil
 }
 
+// get_database looks up or creates the database in database_hash; returns true if newly created.
 func get_database(conn *DBConnection, database_name string, database **database) bool {
 	database_hash_mutex.Lock()
 	*database, _ = database_hash[database_name]
@@ -75,6 +80,7 @@ func get_database(conn *DBConnection, database_name string, database **database)
 	return false
 }
 
+// write_database_on_disk writes [database] and checksum lines to the metadata file for each database in database_hash.
 func write_database_on_disk(mdfile *os.File) {
 	var q = Identifier_quote_character
 	var d *database

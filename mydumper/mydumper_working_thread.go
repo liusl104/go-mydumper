@@ -1,15 +1,16 @@
 package mydumper
 
 import (
+	"database/sql"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"math"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const (
@@ -78,9 +79,11 @@ type thread_data struct {
 }
 type process_fun func(td *thread_data, job *job) bool
 type write_fun func(p []byte) (int, error)
+type write_str_fun func(str string) (int, error)
 type close_fun func() error
 type flush_fun func() error
 
+// initialize_working_thread sets up chunk step limits, character_set_hash, transactional/non_transactional lists, file handler, jobs, and chunks.
 func initialize_working_thread() {
 	database_counter = 0
 	if max_chunk_step_size > math.MaxUint64/uint64(NumThreads) {
@@ -115,25 +118,26 @@ func initialize_working_thread() {
 	}
 }
 
+// start_working_thread creates NumThreads worker threads (working_thread) and waits for them to be ready (and optionally for GTID sync).
 func start_working_thread(c any) {
 	conf := c.(*Configuration)
 	var n uint
 	threads = make([]*GThread, NumThreads)
-	td = make([]*thread_data, NumThreads) // thread_data
+	thd = make([]*thread_data, NumThreads) // thread_data
 	log.Infof("Creating workers")
 	for n = 0; n < NumThreads; n++ {
-		td[n] = new(thread_data)
-		td[n].conf = conf
-		td[n].thread_id = n + 1
-		td[n].binlog_snapshot_gtid_executed = ""
-		td[n].pause_resume_mutex = nil
-		td[n].table_name = ""
-		td[n].thread_data_buffers = new(thread_data_buffers)
-		td[n].thread_data_buffers.statement = G_string_sized_new(2 * StatementSize)
-		td[n].thread_data_buffers.row = G_string_sized_new(StatementSize)
-		td[n].thread_data_buffers.column = G_string_sized_new(StatementSize)
-		td[n].thread_data_buffers.escaped = G_string_sized_new(StatementSize)
-		threads[n] = M_thread_new("data", working_thread, td[n], "Data thread could not be created")
+		thd[n] = new(thread_data)
+		thd[n].conf = conf
+		thd[n].thread_id = n + 1
+		thd[n].binlog_snapshot_gtid_executed = ""
+		thd[n].pause_resume_mutex = nil
+		thd[n].table_name = ""
+		thd[n].thread_data_buffers = new(thread_data_buffers)
+		thd[n].thread_data_buffers.statement = G_string_sized_new(2 * StatementSize)
+		thd[n].thread_data_buffers.row = G_string_sized_new(StatementSize)
+		thd[n].thread_data_buffers.column = G_string_sized_new(StatementSize)
+		thd[n].thread_data_buffers.escaped = G_string_sized_new(StatementSize)
+		threads[n] = M_thread_new("data", working_thread, thd[n], "Data thread could not be created")
 	}
 	if SyncThreadLockMode == GTID {
 		var _binlog_snapshot_gtid_executed string = ""
@@ -144,9 +148,9 @@ func start_working_thread(c any) {
 			for n = 0; n < NumThreads; n++ {
 				G_async_queue_pop(conf.gtid_pos_checked)
 			}
-			_binlog_snapshot_gtid_executed = td[0].binlog_snapshot_gtid_executed
+			_binlog_snapshot_gtid_executed = thd[0].binlog_snapshot_gtid_executed
 			for n = 1; n < NumThreads; n++ {
-				binlog_snapshot_gtid_executed_status_local = binlog_snapshot_gtid_executed_status_local && strings.Compare(td[n].binlog_snapshot_gtid_executed, _binlog_snapshot_gtid_executed) == 0
+				binlog_snapshot_gtid_executed_status_local = binlog_snapshot_gtid_executed_status_local && strings.Compare(thd[n].binlog_snapshot_gtid_executed, _binlog_snapshot_gtid_executed) == 0
 			}
 			for n = 0; n < NumThreads; n++ {
 				if binlog_snapshot_gtid_executed_status_local {
@@ -163,6 +167,7 @@ func start_working_thread(c any) {
 	}
 }
 
+// finalize_working_thread clears thread-related globals and calls finalize_table.
 func finalize_working_thread() {
 	character_set_hash = nil
 	character_set_hash_mutex = nil
@@ -174,11 +179,12 @@ func finalize_working_thread() {
 	if binlog_snapshot_gtid_executed != "" {
 		binlog_snapshot_gtid_executed = ""
 	}
-	td = nil
+	thd = nil
 	threads = nil
 	finalize_table()
 }
 
+// wait_working_thread_to_finish joins all worker threads.
 func wait_working_thread_to_finish() {
 	var n uint
 	log.Infof("Waiting threads to complete")
@@ -187,9 +193,10 @@ func wait_working_thread_to_finish() {
 	}
 }
 
+// thd_JOB_DUMP_ALL_DATABASES lists databases via SHOW DATABASES, creates dump_schema and dump_database jobs for each (filtered), and signals db_ready when done.
 func thd_JOB_DUMP_ALL_DATABASES(td *thread_data, job *job) {
 	var databases *MYSQL_RES
-	var row []mysql.FieldValue
+	var row []FieldValue
 	databases = M_store_result(td.thrconn, "SHOW DATABASES", M_critical, "Unable to list databases")
 	for {
 		row = Mysql_fetch_row(databases)
@@ -219,6 +226,7 @@ func thd_JOB_DUMP_ALL_DATABASES(td *thread_data, job *job) {
 	Mysql_free_result(databases)
 }
 
+// thd_JOB_DUMP_DATABASE runs dump_database_thread for the job's database and signals db_ready when database_counter reaches zero.
 func thd_JOB_DUMP_DATABASE(td *thread_data, job *job) {
 	var ddj = job.job_data.(*dump_database_job)
 	log.Infof("Thread %d: dumping db information for `%s`", td.thread_id, ddj.database.name)
@@ -228,6 +236,7 @@ func thd_JOB_DUMP_DATABASE(td *thread_data, job *job) {
 	}
 }
 
+// get_table_info_to_process_from_list iterates table_list (db.table), fetches SHOW TABLE STATUS, and creates db_table + dump jobs for each table.
 func get_table_info_to_process_from_list(conn *DBConnection, conf *Configuration, table_list []string) {
 	var query string
 	var x int
@@ -256,7 +265,7 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *Configuration
 				db.ad_mutex.Unlock()
 			}
 		}
-		var row []mysql.FieldValue
+		var row []FieldValue
 		for {
 			row = Mysql_fetch_row(result)
 			if row == nil {
@@ -292,11 +301,13 @@ func get_table_info_to_process_from_list(conn *DBConnection, conf *Configuration
 	}
 }
 
+// thd_JOB_DUMP_TABLE_LIST delegates to get_table_info_to_process_from_list for the job's table list.
 func thd_JOB_DUMP_TABLE_LIST(td *thread_data, job *job) {
 	var dtlj = job.job_data.(*dump_table_list_job)
 	get_table_info_to_process_from_list(td.thrconn, td.conf, dtlj.table_list)
 }
 
+// new_partition_step creates a chunk_step with a single partition_step for the given partition name.
 func new_partition_step(partition string) *chunk_step {
 	_ = partition
 	var cs = new(chunk_step)
@@ -306,6 +317,7 @@ func new_partition_step(partition string) *chunk_step {
 	return cs
 }
 
+// m_async_queue_push_conservative pushes the job to the queue only if the table's current_threads_running is below max_threads_per_table.
 func m_async_queue_push_conservative(queue *GAsyncQueue, element *job) {
 	// Each job weights 500 bytes aprox.
 	// if we reach to 200k of jobs, which is 100MB of RAM, we are going to wait 5 seconds
@@ -320,6 +332,7 @@ func m_async_queue_push_conservative(queue *GAsyncQueue, element *job) {
 	G_async_queue_push(queue, element)
 }
 
+// thd_JOB_DUMP processes a table dump job: runs the chunk's process function (e.g. write_table_job_into_file) and decrements current_threads_running.
 func thd_JOB_DUMP(td *thread_data, job *job) {
 	var tj = job.job_data.(*table_job)
 	if UseSavepoints {
@@ -342,6 +355,7 @@ func thd_JOB_DUMP(td *thread_data, job *job) {
 	free_table_job(tj)
 }
 
+// initialize_thread connects the thread to the DB, applies Set_session, and sets tidb_snapshot if needed.
 func initialize_thread(td *thread_data) {
 
 	M_connect(td.thrconn)
@@ -349,6 +363,7 @@ func initialize_thread(td *thread_data) {
 
 }
 
+// initialize_consistent_snapshot starts a transaction (and optionally sets GTID snapshot) so the thread sees a consistent snapshot.
 func initialize_consistent_snapshot(td *thread_data) {
 	// var err error
 
@@ -368,7 +383,7 @@ func initialize_consistent_snapshot(td *thread_data) {
 			var res *MYSQL_RES
 			res = M_store_result_critical(td.thrconn, "SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'", "Failed to get binlog_snapshot_gtid_executed")
 			if res != nil {
-				var row []mysql.FieldValue = Mysql_fetch_row(res)
+				var row []FieldValue = Mysql_fetch_row(res)
 				if row != nil {
 					td.binlog_snapshot_gtid_executed = string(row[1].AsString())
 				} else {
@@ -394,6 +409,7 @@ func initialize_consistent_snapshot(td *thread_data) {
 	}
 }
 
+// check_connection_status pings the connection and reconnects + reapplies Set_session if needed.
 func check_connection_status(td *thread_data) {
 	if Get_product() == SERVER_TYPE_TIDB {
 		set_tidb_snapshot(td.thrconn)
@@ -414,6 +430,7 @@ func check_connection_status(td *thread_data) {
 
 }
 
+// get_binlog_position retrieves current binlog file, position, and optionally GTID from the server and assigns to the given pointers.
 func get_binlog_position(conn *DBConnection, masterlog *string, masterpos *string, mastergtid *string) {
 	var mr *M_ROW = M_store_result_row(conn, Show_binary_log_status, M_warning, M_message, "Couldn't get master position")
 	if mr.Row != nil {
@@ -437,6 +454,7 @@ func get_binlog_position(conn *DBConnection, masterlog *string, masterpos *strin
 	M_store_result_row_free(mr)
 }
 
+// write_snapshot_info writes metadata (binlog position, GTID, snapshot timestamp) to the metadata file.
 func write_snapshot_info(conn *DBConnection, file *os.File) {
 	get_binlog_position(conn, &initial_source_log, &initial_source_pos, &initial_source_gtid)
 	if initial_source_log != "" {
@@ -483,10 +501,11 @@ func write_snapshot_info(conn *DBConnection, file *os.File) {
 
 }
 
+// write_replica_info writes replica/source status (binlog, GTID) to the metadata file.
 func write_replica_info(conn *DBConnection, file *os.File) {
 	var slave *MYSQL_RES
-	var fields []*mysql.Field
-	var row []mysql.FieldValue
+	var fields []*sql.ColumnType
+	var row []FieldValue
 	var slavehost string
 	var slavelog string
 	var slavepos string
@@ -514,23 +533,23 @@ func write_replica_info(conn *DBConnection, file *os.File) {
 		}
 	}
 	for i = 0; i < Mysql_num_fields(slave); i++ {
-		if strings.EqualFold(string(fields[i].Name), "exec_master_log_pos") || strings.EqualFold(string(fields[i].Name), "exec_source_log_pos") {
+		if strings.EqualFold(fields[i].Name(), "exec_master_log_pos") || strings.EqualFold(fields[i].Name(), "exec_source_log_pos") {
 			slavepos = string(row[i].AsString())
-		} else if strings.EqualFold(string(fields[i].Name), "relay_master_log_file") || strings.EqualFold(string(fields[i].Name), "relay_source_log_file") {
+		} else if strings.EqualFold(fields[i].Name(), "relay_master_log_file") || strings.EqualFold(fields[i].Name(), "relay_source_log_file") {
 			slavelog = string(row[i].AsString())
-		} else if strings.EqualFold(string(fields[i].Name), "master_host") || strings.EqualFold(string(fields[i].Name), "source_host") {
+		} else if strings.EqualFold(fields[i].Name(), "master_host") || strings.EqualFold(fields[i].Name(), "source_host") {
 			slavehost = string(row[i].AsString())
-		} else if strings.EqualFold(string(fields[i].Name), "Executed_Gtid_Set") {
+		} else if strings.EqualFold(fields[i].Name(), "Executed_Gtid_Set") {
 			gtid_title = "Executed_Gtid_Set"
 			slavegtid = Remove_new_line(string(row[i].AsString()))
-		} else if strings.EqualFold(string(fields[i].Name), "Gtid_Slave_Pos") || strings.EqualFold(string(fields[i].Name), "Gtid_source_Pos") {
-			gtid_title = string(fields[i].Name)
+		} else if strings.EqualFold(fields[i].Name(), "Gtid_Slave_Pos") || strings.EqualFold(fields[i].Name(), "Gtid_source_Pos") {
+			gtid_title = fields[i].Name()
 			slavegtid = Remove_new_line(string(row[i].AsString()))
-		} else if (strings.EqualFold(string(fields[i].Name), "connection_name") || strings.EqualFold(string(fields[i].Name), "Channel_Name")) && len(row[i].AsString()) > 1 {
+		} else if (strings.EqualFold(fields[i].Name(), "connection_name") || strings.EqualFold(fields[i].Name(), "Channel_Name")) && len(row[i].AsString()) > 1 {
 			channel_name = string(row[i].AsString())
 		}
-		G_string_append_printf(replication_section_str, "# %s = ", fields[i].Name)
-		if fields[i].Type != mysql.MYSQL_TYPE_LONG && fields[i].Type != mysql.MYSQL_TYPE_LONGLONG && fields[i].Type != mysql.MYSQL_TYPE_INT24 && fields[i].Type != mysql.MYSQL_TYPE_SHORT {
+		G_string_append_printf(replication_section_str, "# %s = ", fields[i].Name())
+		if GetStandardType(fields[i].DatabaseTypeName()) != "MYSQL_TYPE_LONG" && GetStandardType(fields[i].DatabaseTypeName()) != "MYSQL_TYPE_LONGLONG" && GetStandardType(fields[i].DatabaseTypeName()) != "MYSQL_TYPE_INT24" && GetStandardType(fields[i].DatabaseTypeName()) != "MYSQL_TYPE_SHORT" {
 			G_string_append_printf(replication_section_str, "'%s'\n", Remove_new_line(string(row[i].AsString())))
 		} else {
 			G_string_append_printf(replication_section_str, "%s\n", Remove_new_line(string(row[i].AsString())))
@@ -587,6 +606,7 @@ func write_replica_info(conn *DBConnection, file *os.File) {
 	}
 }
 
+// process_job_builder_job handles JOB_DETERMINE_CHUNK_TYPE: sets chunk strategy for dbt and enqueues chunk dump jobs; returns true if a job was processed.
 func process_job_builder_job(td *thread_data, job *job) bool {
 	switch job.types {
 	case JOB_DUMP_TABLE_LIST:
@@ -619,6 +639,7 @@ func process_job_builder_job(td *thread_data, job *job) bool {
 	return true
 }
 
+// process_job dispatches the job to the appropriate handler (JOB_DUMP, JOB_TABLE, JOB_DUMP_DATABASE, etc.); returns true if handled.
 func process_job(td *thread_data, job *job) bool {
 	switch job.types {
 	case JOB_DETERMINE_CHUNK_TYPE:
@@ -669,6 +690,7 @@ func process_job(td *thread_data, job *job) bool {
 	return true
 }
 
+// check_pause_resume blocks until the thread's pause_resume_mutex is unlocked (used for disk space or user SIGINT pause).
 func check_pause_resume(td *thread_data) {
 	if td.conf.pause_resume != nil {
 		task := G_async_queue_try_pop(td.conf.pause_resume)
@@ -686,6 +708,7 @@ func check_pause_resume(td *thread_data) {
 	}
 }
 
+// process_queue pops jobs from queue, optionally processes builder jobs first, and runs process_job until JOB_SHUTDOWN.
 func process_queue(queue *GAsyncQueue, td *thread_data, do_builder bool, chunk_step_queue *GAsyncQueue) {
 	var j *job
 	for {
@@ -710,6 +733,7 @@ func process_queue(queue *GAsyncQueue, td *thread_data, do_builder bool, chunk_s
 	}
 }
 
+// build_lock_tables_statement builds the LOCK TABLE ... READ statement from conf.lock_tables_statement and table list.
 func build_lock_tables_statement(conf *Configuration) {
 	non_transactional_table.mutex.Lock()
 	var dbt *db_table
@@ -730,6 +754,7 @@ func build_lock_tables_statement(conf *Configuration) {
 	non_transactional_table.mutex.Unlock()
 }
 
+// update_estimated_remaining_chunks_on_dbt sets dbt.estimated_remaining_steps from the chunk step item (integer/char/partition).
 func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 	var l = dbt.chunks.Front()
 	var total uint64
@@ -748,89 +773,91 @@ func update_estimated_remaining_chunks_on_dbt(dbt *db_table) {
 	dbt.estimated_remaining_steps = total
 }
 
+// working_thread is the main loop for a worker: initialize_thread, initialize_consistent_snapshot, then process_queue for data and optionally chunk_step queues.
 func working_thread(c any) {
-	thd := c.(*thread_data)
+	td := c.(*thread_data)
 	init_mutex.Lock()
-	thd.thrconn = Mysql_init()
+	td.thrconn = Mysql_init()
 	init_mutex.Unlock()
-	initialize_thread(thd)
-	Execute_gstring(thd.thrconn, Set_session)
+	initialize_thread(td)
+	Execute_gstring(td.thrconn, Set_session)
 	// Initialize connection
 	if !SkipTz {
-		M_query_critical(thd.thrconn, "/*!40103 SET TIME_ZONE='+00:00' */", "Failed to set time zone")
+		M_query_critical(td.thrconn, "/*!40103 SET TIME_ZONE='+00:00' */", "Failed to set time zone")
 	}
 	if UseSavepoints {
-		M_query_critical(thd.thrconn, "SET SQL_LOG_BIN = 0", "Failed to disable binlog for the thread")
+		M_query_critical(td.thrconn, "SET SQL_LOG_BIN = 0", "Failed to disable binlog for the thread")
 	}
 
-	initialize_consistent_snapshot(thd)
-	check_connection_status(thd)
+	initialize_consistent_snapshot(td)
+	check_connection_status(td)
 
-	G_async_queue_push(thd.conf.ready, 1)
+	G_async_queue_push(td.conf.ready, 1)
 	// Thread Ready to process jobs
-	log.Infof("Thread %d: Creating Jobs", thd.thread_id)
-	process_queue(thd.conf.initial_queue, thd, true, nil)
-	G_async_queue_push(thd.conf.initial_completed_queue, 1)
-	log.Infof("Thread %d: Schema queue", thd.thread_id)
-	process_queue(thd.conf.schema_queue, thd, false, nil)
+	log.Infof("Thread %d: Creating Jobs", td.thread_id)
+	process_queue(td.conf.initial_queue, td, true, nil)
+	G_async_queue_push(td.conf.initial_completed_queue, 1)
+	log.Infof("Thread %d: Schema queue", td.thread_id)
+	process_queue(td.conf.schema_queue, td, false, nil)
 
 	if Stream != "" {
 		send_initial_metadata()
 	}
 	if !NoData {
-		log.Infof("Thread %d: Schema jobs are done, Starting exporting data for Non-Transactional tables", thd.thread_id)
+		log.Infof("Thread %d: Schema jobs are done, Starting exporting data for Non-Transactional tables", td.thread_id)
 
-		G_async_queue_push(thd.conf.ready, 1)
-		G_async_queue_pop(thd.conf.ready_non_transactional_queue)
+		G_async_queue_push(td.conf.ready, 1)
+		G_async_queue_pop(td.conf.ready_non_transactional_queue)
 		if TrxTables != 0 {
 			// Processing non-transactional tables
 			// This queue should be empty, but we are processing just in case.
-			process_queue(thd.conf.non_transactional.queue, thd, false, thd.conf.non_transactional.request_chunk)
-			process_queue(thd.conf.non_transactional.deferQueue, thd, false, nil)
+			process_queue(td.conf.non_transactional.queue, td, false, td.conf.non_transactional.request_chunk)
+			process_queue(td.conf.non_transactional.deferQueue, td, false, nil)
 			// This push will unlock the FTWRL on the Main Connection
-			G_async_queue_push(thd.conf.unlock_tables, 1)
+			G_async_queue_push(td.conf.unlock_tables, 1)
 		} else {
 			// Sending LOCK TABLE over all non-transactional tables
-			if thd.conf.lock_tables_statement != nil {
-				log.Infof("Thread %d: Locking non-transactional tables", thd.thread_id)
-				M_query_critical(thd.thrconn, thd.conf.lock_tables_statement.Str.String(), "Error locking non-transactional tables")
+			if td.conf.lock_tables_statement != nil {
+				log.Infof("Thread %d: Locking non-transactional tables", td.thread_id)
+				M_query_critical(td.thrconn, td.conf.lock_tables_statement.Str.String(), "Error locking non-transactional tables")
 			}
 			// This push will unlock the FTWRL on the Main Connection
-			G_async_queue_push(thd.conf.unlock_tables, 1)
+			G_async_queue_push(td.conf.unlock_tables, 1)
 
 			// Processing non-transactional tables
-			process_queue(thd.conf.non_transactional.queue, thd, false, thd.conf.non_transactional.request_chunk)
-			process_queue(thd.conf.non_transactional.deferQueue, thd, false, nil)
+			process_queue(td.conf.non_transactional.queue, td, false, td.conf.non_transactional.request_chunk)
+			process_queue(td.conf.non_transactional.deferQueue, td, false, nil)
 
 			// At this point, this thread is able to unlock the non-transactional tables
-			M_query_critical(thd.thrconn, UNLOCK_TABLES, "Error locking non-transactional tables")
+			M_query_critical(td.thrconn, UNLOCK_TABLES, "Error locking non-transactional tables")
 		}
 		// Processing Transactional tables
-		log.Infof("Thread %d: Non-Transactional tables are done, Starting exporting data for Transactional tables", thd.thread_id)
-		process_queue(thd.conf.transactional.queue, thd, false, thd.conf.transactional.request_chunk)
-		process_queue(thd.conf.transactional.deferQueue, thd, false, nil)
+		log.Infof("Thread %d: Non-Transactional tables are done, Starting exporting data for Transactional tables", td.thread_id)
+		process_queue(td.conf.transactional.queue, td, false, td.conf.transactional.request_chunk)
+		process_queue(td.conf.transactional.deferQueue, td, false, nil)
 		//  start_processing(td, resume_mutex);
 	} else {
-		G_async_queue_push(thd.conf.unlock_tables, 1)
+		G_async_queue_push(td.conf.unlock_tables, 1)
 	}
-	if UseSavepoints && thd.table_name != "" {
-		M_query_critical(thd.thrconn, "ROLLBACK TO SAVEPOINT mydumper", "Rollback to savepoint failed")
+	if UseSavepoints && td.table_name != "" {
+		M_query_critical(td.thrconn, "ROLLBACK TO SAVEPOINT mydumper", "Rollback to savepoint failed")
 	}
-	log.Infof("Thread %d: Processing remaining objects jobs", thd.thread_id)
-	process_queue(thd.conf.post_data_queue, thd, false, nil)
+	log.Infof("Thread %d: Processing remaining objects jobs", td.thread_id)
+	process_queue(td.conf.post_data_queue, td, false, nil)
 
-	log.Infof("Thread %d: shutting down", thd.thread_id)
+	log.Infof("Thread %d: shutting down", td.thread_id)
 
-	if thd.binlog_snapshot_gtid_executed != "" {
-		thd.binlog_snapshot_gtid_executed = ""
+	if td.binlog_snapshot_gtid_executed != "" {
+		td.binlog_snapshot_gtid_executed = ""
 	}
 
-	if thd.thrconn != nil {
-		thd.thrconn.Close()
+	if td.thrconn != nil {
+		td.thrconn.Close()
 	}
 	return
 }
 
+// new_table_to_dump creates a db_table for the given database/table, fetches SHOW TABLE STATUS, and enqueues schema/dump/trigger/view/checksum jobs as needed.
 func new_table_to_dump(conn *DBConnection, conf *Configuration, is_view bool, is_sequence bool, database *database, table string, collation string, ecol string) {
 	database.ad_mutex.Lock()
 	if !database.already_dumped {
@@ -892,10 +919,11 @@ func new_table_to_dump(conn *DBConnection, conf *Configuration, is_view bool, is
 	// if a view or sequence we care only about schema
 }
 
+// determine_if_schema_is_elected_to_dump_post returns true if the database has any tables/views/routines/events that were selected for dump (for post-schema jobs).
 func determine_if_schema_is_elected_to_dump_post(conn *DBConnection, database *database) bool {
 	var query string
 	var result *MYSQL_RES = Mysql_store_result(conn)
-	var row []mysql.FieldValue
+	var row []FieldValue
 	if DumpRoutines {
 		G_assert(nroutines > 0)
 		var r uint
@@ -948,6 +976,7 @@ func determine_if_schema_is_elected_to_dump_post(conn *DBConnection, database *d
 	return false
 }
 
+// dump_database_thread dumps one database: tables (with chunk jobs), views, sequences, triggers, routines, events, and post-schema jobs.
 func dump_database_thread(conn *DBConnection, conf *Configuration, database *database) {
 	if !conn.UseDB(database.name) {
 		log.Criticalf("Could not select database: %s (%v)", database.name, conn.Err)
@@ -966,7 +995,7 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 	var rowscol uint = 0
 	var i = 0
 	determine_show_table_status_columns(result, &ecol, &ccol, &collcol, &rowscol)
-	var row []mysql.FieldValue
+	var row []FieldValue
 	for {
 		row = Mysql_fetch_row(result)
 		if row == nil {
@@ -1048,6 +1077,7 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 	return
 }
 
+// thd_JOB_TABLE handles JOB_TABLE: creates db_table via new_db_table, sets chunk strategy, and enqueues schema/dump/trigger/view/checksum jobs.
 func thd_JOB_TABLE(td *thread_data, job *job) {
 	var dtj *dump_table_job = job.job_data.(*dump_table_job)
 	new_table_to_dump(td.thrconn, td.conf, dtj.is_view, dtj.is_sequence, dtj.database, dtj.table, dtj.collation, dtj.engine)
@@ -1056,12 +1086,13 @@ func thd_JOB_TABLE(td *thread_data, job *job) {
 	dtj = nil
 }
 
+/*
 func get_insertable_fields(conn *DBConnection, database string, table string) string {
 	var field_list string
 	var query string
-	var res *mysql.Result
+	var res *Result
 	query = fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' and `extra` not like '%%VIRTUAL GENERATED%%' and extra not like '%%STORED GENERATED%%'", database, table)
-	res = conn.Execute(query)
+	res = conn.Executes(query)
 	if conn.Err != nil {
 		log.Criticalf("get insertable field fail:%v", conn.Err)
 	}
@@ -1080,13 +1111,14 @@ func get_insertable_fields(conn *DBConnection, database string, table string) st
 	return field_list
 }
 
+// get_anonymized_function_for returns the per-column anonymization function pointers for the table from conf_per_table, or nil.
 func get_anonymized_function_for(conn *DBConnection, database string, table string) []*Function_pointer {
 	var k = fmt.Sprintf("`%s`.`%s`", database, table)
 	ht, ok := conf_per_table.All_anonymized_function[k]
 	var anonymized_function_list []*Function_pointer
 	if ok {
 		query := fmt.Sprintf("select COLUMN_NAME from information_schema.COLUMNS where TABLE_SCHEMA='%s' and TABLE_NAME='%s' ORDER BY ORDINAL_POSITION;", database, table)
-		res := conn.Execute(query)
+		res := conn.Executes(query)
 		log.Infof("Using masquerade function on `%s`.`%s`", database, table)
 		for _, row := range res.Values {
 			fp, _ := ht[string(row[0].AsString())]
@@ -1104,3 +1136,4 @@ func get_anonymized_function_for(conn *DBConnection, database string, table stri
 	}
 	return anonymized_function_list
 }
+*/

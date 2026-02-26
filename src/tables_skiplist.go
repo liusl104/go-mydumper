@@ -11,6 +11,7 @@ import (
 
 var tables_skiplist []string
 
+// Read_tables_skiplist loads database.table entries from filename (one per line), sorts them, and increments *errors on open failure.
 func Read_tables_skiplist(filename string, errors *int) {
 	var err error
 	var read_open *os.File
@@ -30,6 +31,7 @@ func Read_tables_skiplist(filename string, errors *int) {
 	return
 }
 
+// Check_skiplist returns true if "database.table" is in the loaded skiplist (omit list).
 func Check_skiplist(database string, table string) bool {
 	var k = fmt.Sprintf("%s.%s", database, table)
 	return slices.Contains(tables_skiplist, k)

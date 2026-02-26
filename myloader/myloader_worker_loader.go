@@ -19,6 +19,7 @@ var (
 	loader_td        []*thread_data
 )
 
+// initialize_loader_threads creates NumThreads loader threads (loader_thread), initializes loader_td, and waits for each to signal ready.
 func initialize_loader_threads(conf *configuration) {
 	var n uint
 	threads = make([]*GThread, NumThreads)
@@ -35,6 +36,7 @@ func initialize_loader_threads(conf *configuration) {
 
 }
 
+// process_loader_thread loops: requests DATA or SHUTDOWN via request_restore_data_job, processes data jobs via process_job, then enqueues indexes and maybe_shutdown_control_job.
 func process_loader_thread(td *thread_data) {
 	var job *control_job
 	var cont bool = true
@@ -70,6 +72,7 @@ func process_loader_thread(td *thread_data) {
 	maybe_shutdown_control_job()
 }
 
+// loader_thread signals ready, then runs process_loader_thread.
 func loader_thread(c any) {
 	td := c.(*thread_data)
 	var cnf *configuration = td.conf
@@ -79,6 +82,7 @@ func loader_thread(c any) {
 	log.Debugf("Thread %d: ending", td.thread_id)
 }
 
+// wait_loader_threads_to_finish joins all loader threads and calls restore_job_finish.
 func wait_loader_threads_to_finish() {
 	var n uint
 	for n = 0; n < NumThreads; n++ {
@@ -87,6 +91,7 @@ func wait_loader_threads_to_finish() {
 	restore_job_finish()
 }
 
+// inform_restore_job_running prints progress every RESTORE_JOB_RUNNING_INTERVAL seconds while loader threads are still STARTED (when shutdown_triggered).
 func inform_restore_job_running() {
 	if shutdown_triggered {
 		var n, sum, prev_sum uint
@@ -102,7 +107,8 @@ func inform_restore_job_running() {
 			} else {
 				fmt.Fprintf(os.Stdout, ".")
 			}
-			time.Sleep(RESTORE_JOB_RUNNING_INTERVAL * time.Millisecond)
+			// Consistent with C: sleep unit is seconds
+			time.Sleep(RESTORE_JOB_RUNNING_INTERVAL * time.Second)
 			prev_sum = sum
 			sum = 0
 			for n = 0; n < NumThreads; n++ {
@@ -115,6 +121,7 @@ func inform_restore_job_running() {
 	}
 }
 
+// free_loader_threads clears loader_td and threads slices.
 func free_loader_threads() {
 	loader_td = nil
 	threads = nil

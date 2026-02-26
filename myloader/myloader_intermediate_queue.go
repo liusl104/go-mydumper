@@ -25,9 +25,10 @@ var (
 	schema_counter             uint64
 )
 
+// initialize_intermediate_queue sets intermediate_conf, creates intermediate_queue and exec_process_id, starts intermediate_thread, and calls initialize_control_job.
 func initialize_intermediate_queue(c *configuration) {
 	intermediate_conf = c
-	intermediate_queue = G_async_queue_new()
+	intermediate_queue = G_async_queue_new("intermediate_queue")
 	exec_process_id = make(map[string]string)
 	exec_process_id_mutex = G_mutex_new()
 	start_intermediate_thread = G_mutex_new()
@@ -40,6 +41,7 @@ func initialize_intermediate_queue(c *configuration) {
 	initialize_control_job(c)
 }
 
+// intermediate_queue_new pushes an intermediate_filename (filename, iterations 0) onto intermediate_queue.
 func intermediate_queue_new(filename string) {
 	var iflnm = new(intermediate_filename)
 	iflnm.filename = filename
@@ -48,6 +50,7 @@ func intermediate_queue_new(filename string) {
 	G_async_queue_push(intermediate_queue, iflnm)
 }
 
+// intermediate_queue_end unlocks start_intermediate_thread, pushes END, joins the intermediate thread, and sets intermediate_queue_ended.
 func intermediate_queue_end() {
 	start_intermediate_thread.Unlock()
 	var e = "END"
@@ -58,12 +61,14 @@ func intermediate_queue_end() {
 	intermediate_queue_ended = true
 }
 
+// intermediate_queue_incomplete increments iterations and re-pushes the filename to intermediate_queue (retry).
 func intermediate_queue_incomplete(iflnm *intermediate_filename) {
 	iflnm.iterations++
 	log.Debugf("intermediate_queue <- %s (%d) incomplete", iflnm.filename, iflnm.iterations)
 	G_async_queue_push(intermediate_queue, iflnm)
 }
 
+// process_filename determines file_type, runs the matching process_* (e.g. process_metadata_global, process_table_filename), and returns the file_type or DO_NOT_ENQUEUE.
 func process_filename(filename string) file_type {
 	var ft = get_file_type(filename)
 	switch ft {
@@ -143,6 +148,7 @@ func process_filename(filename string) file_type {
 	return ft
 }
 
+// remove_fifo_file looks up the filename for the fifo in exec_process_id and removes it from the directory.
 func remove_fifo_file(fifo_name string) {
 	exec_process_id_mutex.Lock()
 	filename, _ := exec_process_id[fifo_name]
@@ -153,6 +159,7 @@ func remove_fifo_file(fifo_name string) {
 
 }
 
+// intermediate_thread pops filenames from intermediate_queue, calls process_filename, and enroutes to the right queue; exits on END.
 func intermediate_thread(c any) {
 	_ = c
 	var iflnm *intermediate_filename

@@ -2,7 +2,6 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
@@ -69,6 +68,7 @@ type view_job struct {
 	checksum_filename  bool
 }
 
+// initialize_jobs calls initialize_database and logs a warning if IgnoreGeneratedFields is set.
 func initialize_jobs() {
 	initialize_database()
 	if IgnoreGeneratedFields {
@@ -76,6 +76,7 @@ func initialize_jobs() {
 	}
 }
 
+// write_checksum_into_file runs the checksum function for the table and returns the checksum string (or "0" if empty).
 func write_checksum_into_file(conn *DBConnection, database *database, table string, fun checksum_fun) string {
 	checksum := fun(conn, database.name, table)
 	if checksum == "" {
@@ -84,6 +85,7 @@ func write_checksum_into_file(conn *DBConnection, database *database, table stri
 	return checksum
 }
 
+// get_tablespace_query returns the SQL to list tablespaces for the current server version, or empty string if unsupported.
 func get_tablespace_query() string {
 	if Server_support_tablespaces() {
 		if Get_major() == 5 && Get_secondary() == 7 {
@@ -96,11 +98,12 @@ func get_tablespace_query() string {
 	return ""
 }
 
+// write_tablespace_definition_into_file dumps CREATE TABLESPACE statements to the given filename.
 func write_tablespace_definition_into_file(conn *DBConnection, filename string) {
 	var query string
 	var outfile *file_write
 	var err error
-	var row []mysql.FieldValue
+	var row []FieldValue
 	outfile, err = m_open(&filename, "w")
 	if err != nil {
 		log.Criticalf("Error: Could not create output file %s (%v)", filename, err)
@@ -131,6 +134,7 @@ func write_tablespace_definition_into_file(conn *DBConnection, filename string) 
 	}
 }
 
+// write_schema_definition_into_file writes SHOW CREATE DATABASE to the given file.
 func write_schema_definition_into_file(conn *DBConnection, database *database, filename string) {
 	var outfile *file_write
 	var query string
@@ -168,6 +172,7 @@ func write_schema_definition_into_file(conn *DBConnection, database *database, f
 	return
 }
 
+// write_table_definition_into_file dumps SHOW CREATE TABLE (and optional checksums) to the given file.
 func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool, checksum_index_filename bool) {
 	var outfile *file_write
 	var query string
@@ -246,8 +251,9 @@ func write_table_definition_into_file(conn *DBConnection, dbt *db_table, filenam
 
 }
 
+// write_triggers_definition_into_file writes trigger CREATE statements from the result set to outfile.
 func write_triggers_definition_into_file(conn *DBConnection, result *MYSQL_RES, database *database, message string, outfile *file_write) {
-	var row []mysql.FieldValue
+	var row []FieldValue
 	var query string
 	var statement = G_string_sized_new(StatementSize)
 	var create_trigger = G_string_sized_new(StatementSize)
@@ -293,6 +299,7 @@ func write_triggers_definition_into_file(conn *DBConnection, result *MYSQL_RES, 
 	return
 }
 
+// write_triggers_definition_into_file_from_dbt dumps triggers for the table to filename (with optional checksum).
 func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
@@ -321,6 +328,7 @@ func write_triggers_definition_into_file_from_dbt(conn *DBConnection, dbt *db_ta
 	return
 }
 
+// write_triggers_definition_into_file_from_database dumps all triggers for the database to filename.
 func write_triggers_definition_into_file_from_database(conn *DBConnection, database *database, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
@@ -345,12 +353,13 @@ func write_triggers_definition_into_file_from_database(conn *DBConnection, datab
 	return
 }
 
+// write_view_definition_into_file dumps the view's temporary table and view CREATE to the given files.
 func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_table_filename string, view_filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
 	var statement = G_string_sized_new(StatementSize)
 	var result *MYSQL_RES
-	var row []mysql.FieldValue
+	var row []FieldValue
 	var err error
 	initialize_sql_statement(statement)
 	if !conn.UseDB(dbt.database.name) {
@@ -442,6 +451,7 @@ func write_view_definition_into_file(conn *DBConnection, dbt *db_table, tmp_tabl
 	return
 }
 
+// write_sequence_definition_into_file dumps the sequence definition (e.g. CREATE TABLE for sequence) to filename.
 func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
@@ -501,6 +511,7 @@ func write_sequence_definition_into_file(conn *DBConnection, dbt *db_table, file
 	return
 }
 
+// write_routines_definition_into_file dumps stored procedures and functions for the database to filename.
 func write_routines_definition_into_file(conn *DBConnection, database *database, filename string, checksum_filename bool) {
 	var outfile *file_write
 	var query string
@@ -619,29 +630,35 @@ clean:
 	return
 }
 
+// free_schema_job releases the schema job (no-op in Go; job structs are GC'd).
 func free_schema_job(sj *schema_job) {
 	sj = nil
 }
 
+// free_view_job releases the view job (no-op in Go).
 func free_view_job(vj *view_job) {
 	vj.tmp_table_filename = ""
 	vj.view_filename = ""
 }
 
+// free_create_tablespace_job releases the tablespace job (no-op in Go).
 func free_create_tablespace_job(ctj *create_tablespace_job) {
 	ctj.filename = ""
 }
 
+// free_database_job releases the database job (no-op in Go).
 func free_database_job(dj *database_job) {
 	dj.filename = ""
 	dj = nil
 }
 
+// free_table_checksum_job releases the table checksum job (no-op in Go).
 func free_table_checksum_job(tcj *table_checksum_job) {
 	tcj.filename = ""
 	tcj = nil
 }
 
+// do_JOB_CREATE_DATABASE runs write_schema_definition_into_file for the job's database.
 func do_JOB_CREATE_DATABASE(td *thread_data, job *job) {
 	var dj = job.job_data.(*database_job)
 	if masquerade_filename {
@@ -655,6 +672,7 @@ func do_JOB_CREATE_DATABASE(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_CREATE_TABLESPACE runs write_tablespace_definition_into_file for the job's filename.
 func do_JOB_CREATE_TABLESPACE(td *thread_data, job *job) {
 	var ctj = job.job_data.(*create_tablespace_job)
 	log.Infof("Thread %d: dumping create tablespace if any", td.thread_id)
@@ -663,6 +681,7 @@ func do_JOB_CREATE_TABLESPACE(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_SCHEMA_POST runs write_schema_definition_into_file for the database schema-post file.
 func do_JOB_SCHEMA_POST(td *thread_data, job *job) {
 	var sp = job.job_data.(*database_job)
 	if masquerade_filename {
@@ -675,6 +694,7 @@ func do_JOB_SCHEMA_POST(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_SCHEMA_TRIGGERS runs write_triggers_definition_into_file_from_database for the job's database.
 func do_JOB_SCHEMA_TRIGGERS(td *thread_data, job *job) {
 	var sj = job.job_data.(*database_job)
 	if masquerade_filename {
@@ -687,6 +707,7 @@ func do_JOB_SCHEMA_TRIGGERS(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_VIEW runs write_view_definition_into_file for the job's view.
 func do_JOB_VIEW(td *thread_data, job *job) {
 	var vj = job.job_data.(*view_job)
 	if masquerade_filename {
@@ -698,6 +719,7 @@ func do_JOB_VIEW(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_SEQUENCE runs write_sequence_definition_into_file for the job's sequence.
 func do_JOB_SEQUENCE(td *thread_data, job *job) {
 	var sj = job.job_data.(*sequence_job)
 	if masquerade_filename {
@@ -709,6 +731,7 @@ func do_JOB_SEQUENCE(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_SCHEMA runs write_table_definition_into_file for the job's table schema.
 func do_JOB_SCHEMA(td *thread_data, job *job) {
 	var sj = job.job_data.(*schema_job)
 	if masquerade_filename {
@@ -721,6 +744,7 @@ func do_JOB_SCHEMA(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_TRIGGERS runs write_triggers_definition_into_file_from_dbt for the job's table.
 func do_JOB_TRIGGERS(td *thread_data, job *job) {
 	var sj = job.job_data.(*schema_job)
 	if masquerade_filename {
@@ -733,6 +757,7 @@ func do_JOB_TRIGGERS(td *thread_data, job *job) {
 	job = nil
 }
 
+// do_JOB_CHECKSUM runs write_checksum_into_file for the job's table and writes the checksum to the metadata file.
 func do_JOB_CHECKSUM(td *thread_data, job *job) {
 	var tcj = job.job_data.(*table_checksum_job)
 	if masquerade_filename {

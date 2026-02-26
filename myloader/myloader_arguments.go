@@ -69,6 +69,7 @@ var (
 	ignore_set_list             []string
 )
 
+// arguments_callback applies post-parse options: optimize-keys, quote-character, checksum, ignore-set, purge/drop-table, then returns Common_arguments_callback().
 func arguments_callback() bool {
 	if InnodbOptimizeKeys != "" {
 		log.Criticalf("Option --innodb-optimize-keys is deprecated use --optimize-keys instead")
@@ -151,6 +152,7 @@ func arguments_callback() bool {
 	return Common_arguments_callback()
 }
 
+// entries registers main myloader flags: help, directory, database, resume, logfile, etc.
 func entries() {
 	pflag.BoolVarP(&Help, "help", "?", false, "Show help options")
 	pflag.UintVarP(&BufferSize, "buffer-size", "b", 1000, "Queue buffer size")
@@ -165,6 +167,7 @@ func entries() {
 
 }
 
+// load_from_metadata_entries registers quote-character and local-infile flags.
 func load_from_metadata_entries() {
 	pflag.StringVarP(&QuoteCharacter, "quote-character", "Q", "", "Identifier quote character used in INSERT statements. "+
 		"Posible values are: BACKTICK, bt, ` for backtick and DOUBLE_QUOTE, dt, \" for double quote. "+
@@ -172,6 +175,7 @@ func load_from_metadata_entries() {
 	pflag.BoolVar(&LocalInFile, "local-infile", false, "Enables the ability to use the 'LOAD DATA LOCAL INFILE' statement Default: detect from metadata file if possible, otherwise is disabled")
 }
 
+// threads_entries registers max-threads-per-table, max-threads-for-index-creation, exec-per-thread, etc.
 func threads_entries() {
 	pflag.UintVar(&MaxThreadsPerTable, "max-threads-per-table", 4, "Maximum number of threads per table to use, defaults to --threads")
 	pflag.UintVar(&MaxThreadsForIndexCreation, "max-threads-for-index-creation", 4, "Maximum number of threads for index creation, default 4")
@@ -182,6 +186,7 @@ func threads_entries() {
 
 }
 
+// execution_entries registers enable-binlog, optimize-keys, no-schema, stream, drop-table, checksum, etc.
 func execution_entries() {
 	// Execution
 	pflag.BoolVarP(&EnableBinlog, "enable-binlog", "e", false, "Enable binary logging of the restore data")
@@ -203,6 +208,7 @@ func execution_entries() {
 	pflag.BoolVar(&SetGtidPurge, "set-gtid-purged", false, "After import, it will execute the SET GLOBAL gtid_purged with the value found on source section of the metadata file")
 }
 
+// filter_entries registers source-db, skip-triggers, skip-post, no-data, etc.
 func filter_entries() {
 	// Filter
 	pflag.StringVarP(&SourceDb, "source-db", "s", "", "Database to restore")
@@ -214,6 +220,7 @@ func filter_entries() {
 
 }
 
+// statement_entries registers Rows, queries-per-transaction, max-statement-size, set-names, ignore-set, etc.
 func statement_entries() {
 	// Statement
 	pflag.IntVarP(&Rows, "Rows", "r", 0, "Split the INSERT statement into this many Rows.")
@@ -226,6 +233,7 @@ func statement_entries() {
 	pflag.StringVar(&IgnoreSet, "ignore-set", "", "List of variables that will be ignored from the header of SET")
 }
 
+// load_contex_entries registers all myloader flag groups, parses flags, and runs connection/arguments callbacks.
 func load_contex_entries() {
 	entries()
 	Common_entries()

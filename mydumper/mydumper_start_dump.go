@@ -2,11 +2,8 @@ package mydumper
 
 import (
 	"container/list"
+	"database/sql"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
-	"github.com/shirou/gopsutil/disk"
 	"maps"
 	"os"
 	"os/signal"
@@ -17,6 +14,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"github.com/shirou/gopsutil/disk"
 )
 
 var (
@@ -36,7 +37,7 @@ var (
 	UpdatedSince                       int
 	DumpTablespaces                    bool
 	threads                            []*GThread
-	td                                 []*thread_data
+	thd                                []*thread_data
 	all_dbts                           map[string]*db_table
 	conf_per_table                     *Configuration_per_table = new(Configuration_per_table)
 	it_is_a_consistent_backup          bool
@@ -134,6 +135,7 @@ type MList struct {
 	mutex *sync.Mutex
 }
 
+// NewMList creates a new MList (thread-safe list wrapper).
 func NewMList() *MList {
 	return &MList{list: list.New(), mutex: new(sync.Mutex)}
 }
@@ -159,6 +161,7 @@ type int_types struct {
 	sign   *signed_int
 }
 
+// new_int_types allocates int_types with empty unsigned_int and signed_int.
 func new_int_types() *int_types {
 	i := new(int_types)
 	i.unsign = new(unsigned_int)
@@ -358,6 +361,7 @@ const (
 
 type lock_function func(conn *DBConnection)
 
+// initialize_start_dump sets up all_dbts, table/working-thread state, and conf_per_table; applies lock mode and DB filter.
 func initialize_start_dump() {
 	all_dbts = make(map[string]*db_table)
 	initialize_table()
@@ -388,6 +392,7 @@ func set_disk_limits(p_at, r_at uint) {
 	resume_at = r_at
 }
 
+// is_disk_space_ok returns true if free space on the dump_directory mount (in MB) is greater than val.
 func is_disk_space_ok(val uint) bool {
 	if !path.IsAbs(dump_directory) {
 		pwd, _ := os.Getwd()
@@ -397,7 +402,7 @@ func is_disk_space_ok(val uint) bool {
 	if err != nil {
 		log.Errorf("Error getting partitions: %s", err.Error())
 	}
-	// 找到指定路径的挂载分区
+	// Find the mount partition for the given path
 	var mountPoint string
 	for _, partition := range partitions {
 		if dump_directory == partition.Mountpoint || (len(dump_directory) > len(partition.Mountpoint) && dump_directory[:len(partition.Mountpoint)] == partition.Mountpoint) {
@@ -409,7 +414,7 @@ func is_disk_space_ok(val uint) bool {
 	if mountPoint == "" {
 		log.Fatalf("No partition found for path: %s", dump_directory)
 	}
-	// 获取分区使用情况
+	// Get partition usage
 	usage, err := disk.Usage(mountPoint)
 	if err != nil {
 		log.Criticalf("Error getting disk usage: %v", err)
@@ -417,6 +422,7 @@ func is_disk_space_ok(val uint) bool {
 	return usage.Free/1024/1024 > uint64(val)
 }
 
+// monitor_disk_space_thread periodically checks disk space and pauses/resumes worker threads via pause_mutex_per_thread.
 func monitor_disk_space_thread(c any) {
 	queue := c.(*GAsyncQueue)
 	var i uint
@@ -451,18 +457,19 @@ func monitor_disk_space_thread(c any) {
 	// return
 }
 
-func determine_columns_on_show_processlist(fields []*mysql.Field, num_fields uint, id_col *int, user_col *int, command_col *int, time_col *int, info_col *int) {
+// determine_columns_on_show_processlist sets column indices for Id, User, Command, Time, Info from SHOW PROCESSLIST result.
+func determine_columns_on_show_processlist(fields []*sql.ColumnType, num_fields uint, id_col *int, user_col *int, command_col *int, time_col *int, info_col *int) {
 	var i int
 	for i = 0; i < int(num_fields); i++ {
-		if id_col != nil && strings.EqualFold(string(fields[i].Name), "Id") {
+		if id_col != nil && strings.EqualFold(fields[i].Name(), "Id") {
 			*id_col = i
-		} else if user_col != nil && strings.EqualFold(string(fields[i].Name), "User") {
+		} else if user_col != nil && strings.EqualFold(fields[i].Name(), "User") {
 			*user_col = i
-		} else if command_col != nil && strings.EqualFold(string(fields[i].Name), "Command") {
+		} else if command_col != nil && strings.EqualFold(fields[i].Name(), "Command") {
 			*command_col = i
-		} else if time_col != nil && strings.EqualFold(string(fields[i].Name), "Time") {
+		} else if time_col != nil && strings.EqualFold(fields[i].Name(), "Time") {
 			*time_col = i
-		} else if info_col != nil && strings.EqualFold(string(fields[i].Name), "Info") {
+		} else if info_col != nil && strings.EqualFold(fields[i].Name(), "Info") {
 			*info_col = i
 		}
 	}
@@ -471,6 +478,7 @@ func determine_columns_on_show_processlist(fields []*mysql.Field, num_fields uin
 	}
 }
 
+// monitor_ftwrl_thread polls SHOW PROCESSLIST and kills the FTWRL/FLUSH NO WRITE query for the given thread_id if it blocks too long.
 func monitor_ftwrl_thread(c any) {
 	thread_id := c.(uint32)
 	var conn *DBConnection
@@ -484,13 +492,13 @@ func monitor_ftwrl_thread(c any) {
 		if res == nil {
 			break
 		} else {
-			var row []mysql.FieldValue
+			var row []FieldValue
 			var id_col int = -1
 			var info_col int = -1
 			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &id_col, nil, nil, nil, &info_col)
 			for row = Mysql_fetch_row(res); row != nil; row = Mysql_fetch_row(res) {
 				if row[id_col].AsInt64() == int64(thread_id) {
-					if strings.EqualFold(string(row[info_col].AsString()), FLUSH_TABLES_WITH_READ_LOCK) || strings.EqualFold(string(row[info_col].AsString()), FLUSH_NO_WRITE_TO_BINLOG_TABLES) {
+					if strings.EqualFold(row[info_col].String(), FLUSH_TABLES_WITH_READ_LOCK) || strings.EqualFold(row[info_col].String(), FLUSH_NO_WRITE_TO_BINLOG_TABLES) {
 						query = fmt.Sprintf("KILL QUERY %d", row[id_col].AsInt64())
 						M_query_warning(conn, query, "Could not KILL slow query")
 					}
@@ -502,6 +510,7 @@ func monitor_ftwrl_thread(c any) {
 	conn.Close()
 }
 
+// sig_triggered handles SIGTERM (sets shutdown_triggered) or SIGINT (prompts Y/N to cancel and optionally pauses workers); returns true to resume, false to exit.
 func sig_triggered(user_data any, signal os.Signal) bool {
 	if signal == syscall.SIGTERM {
 		shutdown_triggered = true
@@ -514,7 +523,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 			}
 		}
 		if user_data.(*Configuration).pause_resume == nil {
-			user_data.(*Configuration).pause_resume = G_async_queue_new()
+			user_data.(*Configuration).pause_resume = G_async_queue_new("pause_resume")
 		}
 		var queue = user_data.(*Configuration).pause_resume
 		if !DaemonMode {
@@ -549,6 +558,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	return false
 }
 
+// signal_thread runs the signal handler; waits for SIGINT/SIGTERM then calls sig_triggered.
 func signal_thread(c any) {
 	conf := c.(*Configuration)
 	signalChan := make(chan os.Signal, 1)
@@ -559,6 +569,7 @@ func signal_thread(c any) {
 	return
 }
 
+// initialize_sql_mode normalizes Sql_mode (removes ORACLE) and stores it in set_session_hash["SQL_MODE"].
 func initialize_sql_mode(set_session_hash map[string]string) {
 	var str = Sql_mode
 	str = strings.ReplaceAll(str, "ORACLE", "")
@@ -566,12 +577,14 @@ func initialize_sql_mode(set_session_hash map[string]string) {
 	set_session_hash["SQL_MODE"] = str
 }
 
+// mydumper_initialize_hash_of_session_variables returns the session variables hash with information_schema_stats_expiry and SQL_MODE for mydumper.
 func mydumper_initialize_hash_of_session_variables() map[string]string {
 	var set_session_hash = Initialize_hash_of_session_variables()
 	set_session_hash["information_schema_stats_expiry"] = "0 /*!80003"
 	return set_session_hash
 }
 
+// create_connection creates a DB connection, runs Set_session, and returns it.
 func create_connection() *DBConnection {
 	var conn *DBConnection = Mysql_init()
 	M_connect(conn)
@@ -579,11 +592,10 @@ func create_connection() *DBConnection {
 	return conn
 }
 
+// detect_quote_character sets Identifier_quote_character, fields_enclosed_by, and identifier_quote_character_protect from ANSI_QUOTES.
 func detect_quote_character(conn *DBConnection) {
-	var res *mysql.Result
-	var row []mysql.FieldValue
 	var query = "SELECT FIND_IN_SET('ANSI', @@SQL_MODE) OR FIND_IN_SET('ANSI_QUOTES', @@SQL_MODE)"
-	res = conn.Execute(query)
+	res := M_store_result(conn, query, M_warning, "We were not able to determine ANSI mode")
 	if conn.Err != nil {
 		Identifier_quote_character = BACKTICK
 		Identifier_quote_character_str = "`"
@@ -591,21 +603,21 @@ func detect_quote_character(conn *DBConnection) {
 		identifier_quote_character_protect = Backtick_protect
 		return
 	}
-	for _, row = range res.Values {
-		if row[0].AsInt64() == 0 {
-			Identifier_quote_character = BACKTICK
-			Identifier_quote_character_str = "`"
-			fields_enclosed_by = "\""
-			identifier_quote_character_protect = Backtick_protect
-		} else {
-			Identifier_quote_character = DOUBLE_QUOTE
-			Identifier_quote_character_str = "\""
-			fields_enclosed_by = "'"
-			identifier_quote_character_protect = Double_quoute_protect
-		}
+	row := Mysql_fetch_row(res)
+	if row != nil && row[0].AsInt64() == 0 {
+		Identifier_quote_character = BACKTICK
+		Identifier_quote_character_str = "`"
+		fields_enclosed_by = "\""
+		identifier_quote_character_protect = Backtick_protect
+	} else {
+		Identifier_quote_character = DOUBLE_QUOTE
+		Identifier_quote_character_str = "\""
+		fields_enclosed_by = "'"
+		identifier_quote_character_protect = Double_quoute_protect
 	}
 }
 
+// detect_sql_mode reads @@SQL_MODE, normalizes it for dump (NO_AUTO_VALUE_ON_ZERO, removes several options), and sets global Sql_mode.
 func detect_sql_mode(conn *DBConnection) {
 	var query = "SELECT @@SQL_MODE"
 	var mr *M_ROW = M_store_result_single_row(conn, query, "Error getting SQL_MODE")
@@ -645,6 +657,7 @@ func detect_sql_mode(conn *DBConnection) {
 	M_store_result_row_free(mr)
 }
 
+// create_main_connection creates the main DB connection, detects server, loads session/global vars, sets headers/write, and returns the connection.
 func create_main_connection() (conn *DBConnection) {
 	conn = Mysql_init()
 	M_connect(conn)
@@ -704,9 +717,10 @@ func create_main_connection() (conn *DBConnection) {
 	return conn
 }
 
+// get_not_updated fills no_updated_tables with tables not updated in UpdatedSince days and writes them to file.
 func get_not_updated(conn *DBConnection, file *os.File) {
 	var query string
-	var row []mysql.FieldValue
+	var row []FieldValue
 	query = fmt.Sprintf("SELECT CONCAT(TABLE_SCHEMA,'.',TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_TYPE = 'BASE TABLE' AND UPDATE_TIME < NOW() - INTERVAL '%d' DAY", UpdatedSince)
 	var res = M_store_result(conn, query, M_warning, "Updated since query failed")
 	if res == nil {
@@ -725,6 +739,7 @@ func get_not_updated(conn *DBConnection, file *os.File) {
 	return
 }
 
+// long_query_wait waits until no queries in SHOW PROCESSLIST exceed Longquery seconds; optionally kills them (Killqueries) or retries.
 func long_query_wait(conn *DBConnection) {
 	var p3 string
 	for {
@@ -733,7 +748,7 @@ func long_query_wait(conn *DBConnection) {
 		if res == nil {
 			break
 		} else {
-			var row []mysql.FieldValue
+			var row []FieldValue
 			/* Just in case PROCESSLIST output column order changes */
 			var tcol = -1
 			var ccol = -1
@@ -741,10 +756,10 @@ func long_query_wait(conn *DBConnection) {
 			var ucol = -1
 			determine_columns_on_show_processlist(Mysql_fetch_fields(res), Mysql_num_fields(res), &icol, &ucol, &ccol, &tcol, nil)
 			for row = Mysql_fetch_row(res); row != nil; row = Mysql_fetch_row(res) {
-				if row[ccol].Value() != nil && string(row[ccol].AsString()) != "Query" {
+				if row[ccol].Value() != nil && row[ccol].String() != "Query" {
 					continue
 				}
-				if row[ucol].Value() != nil && (string(row[ucol].AsString()) == "system user" || string(row[ucol].AsString()) == "event_scheduler") {
+				if row[ucol].Value() != nil && (row[ucol].String() == "system user" || row[ucol].String() == "event_scheduler") {
 					continue
 				}
 				if row[tcol].Value() != nil && row[tcol].AsUint64() > Longquery {
@@ -775,53 +790,62 @@ func long_query_wait(conn *DBConnection) {
 	}
 }
 
+// send_backup_stage_on_block_commit sends BACKUP STAGE BLOCK_COMMIT on the connection.
 func send_backup_stage_on_block_commit(conn *DBConnection) {
 	M_query_verbose(conn, "BACKUP STAGE BLOCK_COMMIT", M_critical, "Could not send BACKUP STAGE BLOCK_COMMIT")
 }
 
+// send_mariadb_backup_locks sends BACKUP STAGE START and BLOCK_DDL (MariaDB backup locks).
 func send_mariadb_backup_locks(conn *DBConnection) {
 	M_query_verbose(conn, "BACKUP STAGE START", M_critical, "Couldn't acquire BACKUP STAGE START")
 	M_query_verbose(conn, "BACKUP STAGE BLOCK_DDL", M_critical, "Couldn't acquire BACKUP STAGE BLOCK_DDL")
 }
 
+// send_percona57_backup_locks sends LOCK TABLES FOR BACKUP and LOCK BINLOG FOR BACKUP (Percona 5.7).
 func send_percona57_backup_locks(conn *DBConnection) {
 	M_query_verbose(conn, "LOCK TABLES FOR BACKUP", M_critical, "Couldn't acquire LOCK TABLES FOR BACKUP, snapshots will not be consistent")
 	M_query_verbose(conn, "LOCK BINLOG FOR BACKUP", M_critical, "Couldn't acquire LOCK BINLOG FOR BACKUP, snapshots will not be consistent")
 }
 
+// send_ddl_lock_instance_backup sends LOCK INSTANCE FOR BACKUP (MySQL 8 / Percona 8).
 func send_ddl_lock_instance_backup(conn *DBConnection) {
 	M_query_verbose(conn, "LOCK INSTANCE FOR BACKUP", M_critical, "Couldn't acquire LOCK INSTANCE FOR BACKUP")
 }
 
+// send_unlock_tables sends UNLOCK TABLES on the connection.
 func send_unlock_tables(conn *DBConnection) {
 	M_query_verbose(conn, "UNLOCK TABLES", M_warning, "Failed to UNLOCK TABLES")
 }
 
+// send_unlock_binlogs sends UNLOCK BINLOG on the connection.
 func send_unlock_binlogs(conn *DBConnection) {
 	M_query_verbose(conn, "UNLOCK BINLOG", M_warning, "Failed to UNLOCK BINLOG")
 }
 
+// send_ddl_unlock_instance_backup sends UNLOCK INSTANCE on the connection.
 func send_ddl_unlock_instance_backup(conn *DBConnection) {
 	M_query_verbose(conn, "UNLOCK INSTANCE", M_warning, "Failed to UNLOCK INSTANCE")
 }
 
+// send_backup_stage_end sends BACKUP STAGE END on the connection.
 func send_backup_stage_end(conn *DBConnection) {
 	M_query_verbose(conn, "BACKUP STAGE END", M_warning, "Failed to BACKUP STAGE END")
 
 }
 
+// send_flush_table_with_read_lock runs FLUSH TABLES WITH READ LOCK (and FLUSH NO WRITE TO BINLOG) with retries and starts the FTWRL monitor thread.
 func send_flush_table_with_read_lock(conn *DBConnection) {
-	var id = conn.Conn.GetConnectionID()
+	var id = conn.GetConnectionID()
 	M_thread_new("mon_ftwrl", monitor_ftwrl_thread, id, "FTWRL monitor thread could not be created")
 	var i = 0
 try_FLUSH_NO_WRITE_TO_BINLOG_TABLES:
 	i++
-	if !M_query_verbose(conn, FLUSH_NO_WRITE_TO_BINLOG_TABLES, M_warning, "Flush tables failed, we are continuing anyways") &&
+	if M_query_verbose(conn, FLUSH_NO_WRITE_TO_BINLOG_TABLES, M_warning, "Flush tables failed, we are continuing anyways") &&
 		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
 		goto try_FLUSH_NO_WRITE_TO_BINLOG_TABLES
 	}
 try_FLUSH_TABLES_WITH_READ_LOCK:
-	if !M_query_verbose(conn, FLUSH_TABLES_WITH_READ_LOCK, M_critical, "Couldn't acquire global lock, snapshots will not be consistent") &&
+	if M_query_verbose(conn, FLUSH_TABLES_WITH_READ_LOCK, M_critical, "Couldn't acquire global lock, snapshots will not be consistent") &&
 		(ftwrl_timeout_retries == 0 || (i < ftwrl_timeout_retries)) {
 		goto try_FLUSH_TABLES_WITH_READ_LOCK
 	}
@@ -829,6 +853,7 @@ try_FLUSH_TABLES_WITH_READ_LOCK:
 
 }
 
+// initialize_tidb_snapshot sets TidbSnapshot from binary log status if not set, then sets @@tidb_snapshot on the connection.
 func initialize_tidb_snapshot(conn *DBConnection) {
 	if TidbSnapshot != "" {
 		// Generate a @@tidb_snapshot to use for the worker threads since
@@ -842,6 +867,7 @@ func initialize_tidb_snapshot(conn *DBConnection) {
 	log.Infof("Set to tidb_snapshot '%s'", TidbSnapshot)
 }
 
+// default_locking returns the default lock functions: FTWRL for acquire, UNLOCK TABLES for release, no DDL/binlog lock.
 func default_locking() (acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function *lock_function) {
 	*acquire_ddl_lock_function = nil
 	*release_ddl_lock_function = nil
@@ -851,6 +877,7 @@ func default_locking() (acquire_global_lock_function, release_global_lock_functi
 	return
 }
 
+// determine_ddl_lock_function sets lock functions based on server type and version (Percona, MySQL, MariaDB, TiDB, etc.).
 func determine_ddl_lock_function(conn **DBConnection, acquire_global_lock_function, release_global_lock_function, acquire_ddl_lock_function, release_ddl_lock_function, release_binlog_function *lock_function) {
 	switch Get_product() {
 	case SERVER_TYPE_PERCONA:
@@ -914,6 +941,7 @@ func determine_ddl_lock_function(conn **DBConnection, acquire_global_lock_functi
 	return
 }
 
+// print_dbt_on_metadata_gstring appends [key], rows, checksums, and is_sequence to data for the table metadata.
 func print_dbt_on_metadata_gstring(dbt *db_table, data *GString) {
 	var name string = Newline_protect(dbt.database.name)
 	var table_filename = Newline_protect(dbt.table_filename)
@@ -941,6 +969,7 @@ func print_dbt_on_metadata_gstring(dbt *db_table, data *GString) {
 	dbt.chunks_mutex.Unlock()
 }
 
+// print_dbt_on_metadata writes table metadata (key, rows, checksums) to mdfile and optionally checks row count.
 func print_dbt_on_metadata(mdfile *os.File, dbt *db_table) {
 	var data *GString = G_string_sized_new(100)
 	print_dbt_on_metadata_gstring(dbt, data)
@@ -952,12 +981,13 @@ func print_dbt_on_metadata(mdfile *os.File, dbt *db_table) {
 
 }
 
+// send_lock_all_tables builds the list of tables (from Tables or information_schema), then executes LOCK TABLE ... READ with retries.
 func send_lock_all_tables(conn *DBConnection) {
 	// LOCK ALL TABLES
 	var query string
 	var dbtb string
 	var dt []string
-	var row []mysql.FieldValue
+	var row []FieldValue
 	var res *MYSQL_RES
 	var tables_lock []string
 	var success bool
@@ -1064,6 +1094,7 @@ func send_lock_all_tables(conn *DBConnection) {
 	Mysql_free_result(res)
 }
 
+// m_stop_replica stops the replica SQL thread (or all replicas if multisource) and sets replica_stopped.
 func m_stop_replica(conn *DBConnection) {
 	var slave *MYSQL_RES
 	var rest *MYSQL_RES
@@ -1098,6 +1129,7 @@ cleanup:
 	}
 }
 
+// StartDump runs the full dump: creates directories, connections, acquires locks, builds job queues, and processes jobs until completion.
 func StartDump(conf *Configuration) error {
 	var conn, second_conn *DBConnection
 	var metadata_partial_filename, metadata_filename string
@@ -1139,7 +1171,7 @@ func StartDump(conf *Configuration) error {
 	conf.use_any_index = "1"
 
 	if DiskLimits != "" {
-		conf.pause_resume = G_async_queue_new()
+		conf.pause_resume = G_async_queue_new("conf.pause_resume")
 		disk_check_thread = M_thread_new("mon_disk", monitor_disk_space_thread, conf.pause_resume, "Monitor thread could not be created")
 	}
 	if Throttle_variable != "" {
@@ -1294,33 +1326,33 @@ func StartDump(conf *Configuration) error {
 	}
 	log.Tracef("Initilizing the Configuration")
 
-	conf.initial_queue = G_async_queue_new()
-	conf.initial_completed_queue = G_async_queue_new()
-	conf.schema_queue = G_async_queue_new()
-	conf.post_data_queue = G_async_queue_new()
+	conf.initial_queue = G_async_queue_new("conf.initial_queue")
+	conf.initial_completed_queue = G_async_queue_new("conf.initial_completed_queue")
+	conf.schema_queue = G_async_queue_new("conf.schema_queue")
+	conf.post_data_queue = G_async_queue_new("conf.post_data_queue")
 	if conf.transactional == nil {
 		conf.transactional = new(table_queuing)
 		conf.non_transactional = new(table_queuing)
 	}
-	conf.transactional.queue = G_async_queue_new()
-	conf.transactional.deferQueue = G_async_queue_new()
+	conf.transactional.queue = G_async_queue_new("conf.transactional.queue")
+	conf.transactional.deferQueue = G_async_queue_new("conf.transactional.deferQueue")
 	// These are initialized in the guts of initialize_start_dump() above
 	G_assert(give_me_another_transactional_chunk_step_queue != nil && give_me_another_non_transactional_chunk_step_queue != nil && transactional_table != nil && non_transactional_table != nil)
 	conf.transactional.request_chunk = give_me_another_transactional_chunk_step_queue
 	conf.transactional.table_list = transactional_table
 	conf.transactional.descr = "transactional"
-	conf.ready = G_async_queue_new()
-	conf.non_transactional.queue = G_async_queue_new()
-	conf.non_transactional.deferQueue = G_async_queue_new()
+	conf.ready = G_async_queue_new("conf.ready")
+	conf.non_transactional.queue = G_async_queue_new("conf.non_transactional.queue")
+	conf.non_transactional.deferQueue = G_async_queue_new("conf.non_transactional.deferQueue")
 	conf.non_transactional.request_chunk = give_me_another_non_transactional_chunk_step_queue
 	conf.non_transactional.table_list = non_transactional_table
 	conf.non_transactional.descr = "non-transactional"
-	conf.ready_non_transactional_queue = G_async_queue_new()
-	conf.unlock_tables = G_async_queue_new()
-	conf.gtid_pos_checked = G_async_queue_new()
-	conf.are_all_threads_in_same_pos = G_async_queue_new()
-	conf.db_ready = G_async_queue_new()
-	conf.source_and_replica_status_queue = G_async_queue_new()
+	conf.ready_non_transactional_queue = G_async_queue_new("conf.ready_non_transactional_queue")
+	conf.unlock_tables = G_async_queue_new("conf.unlock_tables")
+	conf.gtid_pos_checked = G_async_queue_new("conf.gtid_pos_checked")
+	conf.are_all_threads_in_same_pos = G_async_queue_new("conf.are_all_threads_in_same_pos")
+	conf.db_ready = G_async_queue_new("conf.db_ready")
+	conf.source_and_replica_status_queue = G_async_queue_new("conf.source_and_replica_status_queue")
 	//  ready_database_dump_mutex = g_rec_mutex_new();
 	//  g_rec_mutex_lock(ready_database_dump_mutex);
 	ready_table_dump_mutex = G_rec_mutex_new()

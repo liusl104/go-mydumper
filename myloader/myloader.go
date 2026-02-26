@@ -3,16 +3,16 @@ package myloader
 import (
 	"container/list"
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/client"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
-	"github.com/spf13/pflag"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -91,12 +91,7 @@ type io_restore_result struct {
 	restore *GAsyncQueue
 	result  *GAsyncQueue
 }
-type db_connection struct {
-	conn    *client.Conn
-	err     error
-	code    uint16
-	warning uint16
-}
+
 type restore_errors struct {
 	data_errors        uint64
 	data_warnings      uint64
@@ -164,6 +159,7 @@ type function_pointer struct {
 	function func(string)
 }
 
+// ft2str returns the string name of the file_type for logging.
 func ft2str(ft file_type) string {
 	switch ft {
 	case INIT:
@@ -237,6 +233,7 @@ type db_table struct {
 	is_sequence             bool
 }
 
+// myloader_initialize_hash_of_session_variables builds the session variables hash (AUTOCOMMIT, SQL_LOG_BIN) for the restore.
 func myloader_initialize_hash_of_session_variables() map[string]string {
 	var _set_session_hash = Initialize_hash_of_session_variables()
 
@@ -249,6 +246,7 @@ func myloader_initialize_hash_of_session_variables() map[string]string {
 	return _set_session_hash
 }
 
+// detect_group_replication_transaction_size_limit queries group_replication_transaction_size_limit and sets MaxTransactionSize if higher.
 func detect_group_replication_transaction_size_limit(conn *DBConnection) {
 	var _max_transaction_size uint64
 	var mr *M_ROW = M_store_result_row(conn, "SELECT @@group_replication_transaction_size_limit / 1024 / 1024", M_message, M_message, "Using default transaction limit")
@@ -260,6 +258,8 @@ func detect_group_replication_transaction_size_limit(conn *DBConnection) {
 	}
 	M_store_result_row_free(mr)
 }
+
+// print_time returns a formatted duration string (days:hours:minutes:seconds) since timespan.
 func print_time(timespan time.Time) string {
 	var now_time = time.Now().UnixMicro()
 	var days = (now_time - timespan.UnixMicro()) / G_TIME_SPAN_DAY
@@ -269,9 +269,12 @@ func print_time(timespan time.Time) string {
 	return fmt.Sprintf("%02d:%02d:%02d:%02d", days, hours, minutes, seconds)
 }
 
+// compare_by_time returns true if a's elapsed time (finish_time - start_data_time) is greater than b's (for sorting).
 func compare_by_time(a *db_table, b *db_table) bool {
 	return a.finish_time.Sub(a.start_data_time).Microseconds() > b.finish_time.Sub(b.start_data_time).Microseconds()
 }
+
+// initialize_directories sets directory and FifoDirectory from InputDirectory/Stream/current dir; validates backup dir and metadata file.
 func initialize_directories() {
 	var current_dir string
 	current_dir, _ = os.Getwd()
@@ -316,6 +319,7 @@ func initialize_directories() {
 	}
 }
 
+// show_dbt logs the table key (callback for iteration).
 func show_dbt(key any, dbt any, total any) {
 	_ = key
 	_ = dbt
@@ -323,21 +327,24 @@ func show_dbt(key any, dbt any, total any) {
 	log.Infof("Table %s", key.(string))
 }
 
+// create_database runs restore_data_from_file for the schema-create file or executes CREATE DATABASE IF NOT EXISTS via restore_data_in_gstring_extended.
 func create_database(td *thread_data, database string) {
 	var filename = fmt.Sprintf("%s-schema-create.sql%s", database, ExecPerThreadExtension)
 	var filepath = fmt.Sprintf("%s/%s-schema-create.sql%s", directory, database, ExecPerThreadExtension)
 	if G_file_test(filepath) {
 		atomic.AddUint64(&detailed_errors.schema_errors, uint64(restore_data_from_file(td, filename, true, nil)))
 	} else {
-		// var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS %s%s%s", Identifier_quote_character, database, Identifier_quote_character)
-		//if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) != 0 {
-		//	atomic.AddUint64(&detailed_errors.schema_errors, 1)
-		//}
-		// data = nil
+		var data *GString = G_string_new("CREATE DATABASE IF NOT EXISTS ")
+		G_string_append_printf(data, "%s%s%s", Identifier_quote_character, database, Identifier_quote_character)
+		if restore_data_in_gstring_extended(td, data, true, nil, M_critical, "Failed to create database: %s", database) {
+			atomic.AddUint64(&detailed_errors.schema_errors, 1)
+		}
+		data = nil
 	}
 	return
 }
 
+// print_errors logs a summary of detailed_errors (tablespace, schema, data, view, sequence, index, trigger, constraint, post, warnings, retries).
 func print_errors() {
 	log.Infof("Errors found:")
 	log.Infof("- Tablespace: %d", detailed_errors.tablespace_errors)
@@ -350,10 +357,11 @@ func print_errors() {
 	log.Infof("- Constraint: %d", detailed_errors.constraints_errors)
 	log.Infof("- Post:       %d", detailed_errors.post_errors)
 	log.Infof("Warnings found:")
-	log.Infof("- Data:\t%d", detailed_errors.data_warnings)
-	log.Infof("Retries: %d", detailed_errors.retries)
+	log.Infof("- Data:       %d", detailed_errors.data_warnings)
+	log.Infof("Retries:      %d", detailed_errors.retries)
 }
 
+// StartLoad is the main entry point: parses flags, initializes directories/queues/workers, runs schema/data/post/index/checksum, then cleans up.
 func StartLoad() {
 	var err error
 	load_contex_entries()
@@ -393,7 +401,7 @@ func StartLoad() {
 	if Stream != "" && !No_stream {
 		Create_dir(directory)
 	}
-	Create_dir(FifoDirectory)
+	// Create_dir(FifoDirectory)
 	log.Infof("Using %s as FIFO directory, please remove it if restoration fails", FifoDirectory)
 	Start_pmm_thread(conf)
 	err = os.Chdir(directory)
@@ -429,18 +437,18 @@ func StartLoad() {
 	if MaxTransactionSize == DEFAULT_MAX_TRANSACTION_SIZE {
 		detect_group_replication_transaction_size_limit(conn)
 	}
-	conf.database_queue = G_async_queue_new()
-	conf.table_queue = G_async_queue_new()
-	conf.retry_queue = G_async_queue_new()
-	conf.data_queue = G_async_queue_new()
-	conf.post_table_queue = G_async_queue_new()
-	conf.post_queue = G_async_queue_new()
-	conf.index_queue = G_async_queue_new()
-	conf.view_queue = G_async_queue_new()
-	conf.ready = G_async_queue_new()
-	conf.pause_resume = G_async_queue_new()
+	conf.database_queue = G_async_queue_new("conf.database_queue")
+	conf.table_queue = G_async_queue_new("conf.table_queue")
+	conf.retry_queue = G_async_queue_new("conf.retry_queue")
+	conf.data_queue = G_async_queue_new("conf.data_queue")
+	conf.post_table_queue = G_async_queue_new("conf.post_table_queue")
+	conf.post_queue = G_async_queue_new("conf.post_queue")
+	conf.index_queue = G_async_queue_new("conf.index_queue")
+	conf.view_queue = G_async_queue_new("conf.view_queue")
+	conf.ready = G_async_queue_new("conf.ready")
+	conf.pause_resume = G_async_queue_new("conf.pause_resume")
 	conf.table_list_mutex = G_mutex_new()
-	// conf.stream_queue = G_async_queue_new()
+	// conf.stream_queue = G_async_queue_new("conf.stream_queue")
 	conf.table_hash = make(map[string]*db_table)
 	conf.table_hash_mutex = G_mutex_new()
 	if G_file_test("resume") {
@@ -475,9 +483,9 @@ func StartLoad() {
 		M_thread_new("myloader_directory", process_directory, conf, "Directory thread could not be created")
 	}
 	if Stream != "" {
-		wait_directory_to_process_metadata()
-	} else {
 		wait_stream_to_process_metadata_header()
+	} else {
+		wait_directory_to_process_metadata()
 	}
 	remove_ignore_set_session_from_hash()
 	Refresh_set_session_from_hash(Set_session, set_session_hash)
@@ -610,6 +618,7 @@ func StartLoad() {
 	}
 }
 
+// print_help prints myloader usage and option defaults to stdout.
 func print_help() {
 	fmt.Printf("Usage:\n")
 	fmt.Printf("  %s [OPTION…] multi-threaded MySQL dumping\n", MYLOADER)

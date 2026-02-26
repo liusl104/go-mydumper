@@ -1,11 +1,12 @@
 package mydumper
 
 import (
-	"github.com/go-ini/ini"
-	"github.com/spf13/pflag"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/go-ini/ini"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -48,6 +49,7 @@ var (
 	PmmResolution                  string
 )
 
+// Common options (defaults and flags).
 var (
 	SourceControlCommand string     // Instruct the proper commands to execute depending where are configuring the replication. Options: TRADITIONAL, AWS
 	Verbose              uint   = 2 // Verbosity of output, 0 = silent, 1 = errors, 2 = warnings, 3 = info,default 2
@@ -82,6 +84,7 @@ type Replication_settings struct {
 	Exec_start_replica_until bool
 }
 
+// Common_entries registers common command-line flags (threads, version, verbose, debug, defaults-file, etc.).
 func Common_entries() {
 	pflag.StringVar(&SourceDataStr, "source-data", "", "It will include the options in the metadata file, to allow myloader to establish replication")
 	pflag.UintVarP(&NumThreads, "threads", "t", 4, "Number of threads to use, 0 means to use number of CPUs")
@@ -98,16 +101,19 @@ func Common_entries() {
 	pflag.StringVar(&ThrottleStr, "throttle", "", "xpects a string like Threads_running=10. It will check the SHOW GLOBAL STATUS and if it is higher, it will increase the sleep time between SELECT. \nIf option is used without parameters it will use Threads_running and the amount of threads")
 }
 
+// Common_filter_entries registers filter-related flags (omit-from-file, tables-list).
 func Common_filter_entries() {
 	pflag.StringVarP(&TablesSkiplistFile, "omit-from-file", "O", "", "File containing a list of database.table entries to skip, one per line (skips before applying regex option)")
 	pflag.StringVarP(&TablesList, "tables-list", "T", "", "Comma delimited table list to dump (does not exclude regex option). Table name must include database name. For instance: test.t1,test.t2")
 }
+
+// Pmm_entries registers PMM-related flags (pmm-path, pmm-resolution).
 func Pmm_entries() {
-	// pmm
 	pflag.StringVar(&PmmPath, "pmm-path", "", "which default value will be /usr/local/percona/pmm2/collectors/textfile-collector/high-resolution")
 	pflag.StringVar(&PmmResolution, "pmm-resolution", "", "which default will be high")
-
 }
+
+// parse_source_replica_options parses a comma-separated or bitmask value and fills rep_set (replication options for metadata).
 func parse_source_replica_options(value string, rep_set *Replication_settings) {
 	rep_set.Enabled = true
 	if value != "" {
@@ -134,6 +140,8 @@ func parse_source_replica_options(value string, rep_set *Replication_settings) {
 		rep_set.Exec_start_replica_until = slices.Contains(lp, "exec_start_replica_until")
 	}
 }
+
+// Common_arguments_callback parses throttle and other common options after flags; returns true if any callback was applied.
 func Common_arguments_callback() bool {
 	if ThrottleStr != "" {
 		var tp []string
@@ -165,7 +173,7 @@ func Common_arguments_callback() bool {
 		var tmp_ignore_errors_list = strings.Split(IgnoreErrors, ",")
 		for _, errCode := range tmp_ignore_errors_list {
 			code, _ := strconv.Atoi(strings.TrimSpace(errCode))
-			IgnoreErrorsList = append(IgnoreErrorsList, int16(code))
+			IgnoreErrorsList = append(IgnoreErrorsList, uint16(code))
 		}
 	}
 	if SourceDataStr != "" {

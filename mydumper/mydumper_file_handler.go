@@ -2,13 +2,14 @@ package mydumper
 
 import (
 	"fmt"
+	"os"
+	"strings"
+	"sync"
+
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 	. "github.com/liusl104/go-mydumper/src"
 	log "github.com/liusl104/go-mydumper/src/logrus"
-	"os"
-	"strings"
-	"sync"
 )
 
 var (
@@ -22,12 +23,14 @@ var (
 	fifo_hash        map[string]string
 )
 
+// filename_queue_element holds a table, output filename, and a done queue for stream mode.
 type filename_queue_element struct {
 	dbt      *db_table
 	filename string
 	done     *GAsyncQueue
 }
 
+// m_open_file opens a file for reading or writing. Mode "w" creates/truncates for write, otherwise opens read-only.
 func m_open_file(filename *string, t string) (f *file_write, err error) {
 
 	f = new(file_write)
@@ -54,7 +57,7 @@ func m_open_file(filename *string, t string) (f *file_write, err error) {
 	return
 }
 
-// , thread_id uint, file *os.File, filename string, size uint, dbt *db_table
+// m_close_file closes the file handle, optionally removes empty files, and on stream mode pushes filename to stream queue.
 func m_close_file(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	var err error
 	if file != nil {
@@ -80,6 +83,7 @@ func m_close_file(thread_id uint, file *file_write, filename string, size float6
 	return err
 }
 
+// close_file_queue_push pushes a fifo to the close queue and waits for child pid if present.
 func close_file_queue_push(f *fifo) {
 	G_async_queue_push(close_file_queue, f)
 	if f.child_pid > 0 {
@@ -105,60 +109,63 @@ func close_file_queue_push(f *fifo) {
 	return
 }
 
+// release_pid returns a PID slot to the available pool.
 func release_pid() {
 	G_async_queue_push(available_pids, 1)
 }
 
+// execute_file_per_thread runs per-thread file execution (e.g. compression). Currently a stub returning 0.
 func execute_file_per_thread(sql_fn string, sql_fn3 string) int {
 	// TODO
 	/*
-	 // 创建一个文件用于保存压缩后的数据
-	    outFile, err := os.Create("list.gz")
-	    if err != nil {
-	        panic(err)
-	    }
-	    defer outFile.Close()
+		// Create a file to save compressed data
+		outFile, err := os.Create("list.gz")
+		if err != nil {
+			panic(err)
+		}
+		defer outFile.Close()
 
-	    // 创建ls命令
-	    lsCmd := exec.Command("ls")
+		// Create ls command
+		lsCmd := exec.Command("ls")
 
-	    // 创建gzip命令
-	    gzipCmd := exec.Command("gzip", "-c")
+		// Create gzip command
+		gzipCmd := exec.Command("gzip", "-c")
 
-	    // 设置gzip命令的标准输出到文件
-	    gzipCmd.Stdout = outFile
+		// Set gzip command stdout to file
+		gzipCmd.Stdout = outFile
 
-	    // 创建管道
-	    pipeReader, pipeWriter := io.Pipe()
+		// Create pipe
+		pipeReader, pipeWriter := io.Pipe()
 
-	    // 设置ls命令的标准输出到管道的写入端
-	    lsCmd.Stdout = pipeWriter
-	    // 设置gzip命令的标准输入为管道的读取端
-	    gzipCmd.Stdin = pipeReader
+		// Set ls command stdout to pipe write end
+		lsCmd.Stdout = pipeWriter
+		// Set gzip command stdin to pipe read end
+		gzipCmd.Stdin = pipeReader
 
-	    // 开始执行ls命令
-	    if err := lsCmd.Start(); err != nil {
-	        panic(err)
-	    }
+		// Start ls command
+		if err := lsCmd.Start(); err != nil {
+			panic(err)
+		}
 
-	    // 开始执行gzip命令
-	    if err := gzipCmd.Start(); err != nil {
-	        panic(err)
-	    }
+		// Start gzip command
+		if err := gzipCmd.Start(); err != nil {
+			panic(err)
+		}
 
-	    // 等待ls命令完成，并关闭管道的写入端
-	    if err := lsCmd.Wait(); err != nil {
-	        panic(err)
-	    }
-	    pipeWriter.Close()
+		// Wait for ls command to finish and close pipe write end
+		if err := lsCmd.Wait(); err != nil {
+			panic(err)
+		}
+		pipeWriter.Close()
 
-	    // 等待gzip命令完成
-	    if err := gzipCmd.Wait(); err != nil {
-	        panic(err)
-	    }*/
+		// Wait for gzip command to finish
+		if err := gzipCmd.Wait(); err != nil {
+			panic(err)
+		}*/
 	return 0
 }
 
+// m_open_pipe opens a pipe for writing (e.g. to gzip/zstd) and returns a file_write that writes to the pipe stdin.
 func m_open_pipe(filename *string, mode string) (*file_write, error) {
 	*filename = fmt.Sprintf("%s%s", *filename, ExecPerThreadExtension)
 	var flag int
@@ -203,12 +210,14 @@ func m_open_pipe(filename *string, mode string) (*file_write, error) {
 
 		f.flush = file.Sync
 		f.write = file.Write
+		f.writeStr = file.WriteString
 		f.close = file.Close
 		return f, err
 	}
 
 }
 
+// m_close_pipe closes the pipe file, releases a PID, and optionally removes empty file or pushes to stream queue.
 func m_close_pipe(thread_id uint, file *file_write, filename string, size float64, dbt *db_table) error {
 	release_pid()
 	var err error
@@ -230,6 +239,7 @@ func m_close_pipe(thread_id uint, file *file_write, filename string, size float6
 	return err
 }
 
+// final_step_close_file handles post-close for pipe: pushes to stream queue if size > 0, or removes empty file.
 func final_step_close_file(thread_id uint, filename string, f *fifo, size float64, dbt *db_table) error {
 	if size > 0 {
 		if Stream != "" {
@@ -245,6 +255,7 @@ func final_step_close_file(thread_id uint, filename string, f *fifo, size float6
 	return nil
 }
 
+// close_file_thread is the worker that pops from close_file_queue, closes pipe/file handles, and calls final_step_close_file.
 func close_file_thread(c any) {
 	_ = c
 	var f *fifo
@@ -275,6 +286,8 @@ func close_file_thread(c any) {
 	}
 	return
 }
+
+// wait_close_files sends a shutdown sentinel to the close queue and waits for the close file thread to finish.
 func wait_close_files() {
 	var f *fifo = new(fifo)
 	f.gpid = -10
@@ -283,9 +296,13 @@ func wait_close_files() {
 	close_file_queue_push(f)
 	cft.Thread.Wait()
 }
+
+// set_pipe_backup sets is_pipe to true so that m_open/m_close use pipe-based backup.
 func set_pipe_backup() {
 	is_pipe = true
 }
+
+// initialize_file_handler sets m_open/m_close to file or pipe variants, creates PID pool and close_file_queue, and starts close_file_thread.
 func initialize_file_handler() {
 	if is_pipe {
 		m_open = m_open_pipe
@@ -294,8 +311,8 @@ func initialize_file_handler() {
 		m_open = m_open_file
 		m_close = m_close_file
 	}
-	available_pids = G_async_queue_new()
-	close_file_queue = G_async_queue_new()
+	available_pids = G_async_queue_new("available_pids")
+	close_file_queue = G_async_queue_new("close_file_queue")
 	var i uint = 0
 	for i = 0; i < NumThreads*2; i++ {
 		release_pid()
@@ -306,6 +323,7 @@ func initialize_file_handler() {
 	cft = M_thread_new("close_file_thread", close_file_thread, nil, "Close file thread could not be created")
 }
 
+// new_filename_queue_element allocates a filename_queue_element for stream queue (dbt, filename, done queue).
 func new_filename_queue_element(dbt *db_table, filename string, done *GAsyncQueue) *filename_queue_element {
 	var sf = new(filename_queue_element)
 	sf.dbt = dbt

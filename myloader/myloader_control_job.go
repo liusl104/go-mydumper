@@ -38,6 +38,7 @@ var (
 	last_wait             int64
 )
 
+// jtype2str returns the string name of the control_job_type (JOB_RESTORE, JOB_SHUTDOWN).
 func jtype2str(jtype control_job_type) string {
 	switch jtype {
 	case JOB_RESTORE:
@@ -47,6 +48,8 @@ func jtype2str(jtype control_job_type) string {
 	}
 	return ""
 }
+
+// cjt_resume sets cjt_paused to false and signals the control job thread to continue.
 func cjt_resume() {
 	cjt_mutex.Lock()
 	cjt_paused = false
@@ -54,16 +57,19 @@ func cjt_resume() {
 	cjt_mutex.Unlock()
 }
 
+// initialize_control_job creates control_job_queue, data_job_queue, data_queue, cjt mutex/cond, and starts control_job_thread.
 func initialize_control_job(conf *configuration) {
-	control_job_queue = G_async_queue_new()
-	data_job_queue = G_async_queue_new()
+	control_job_queue = G_async_queue_new("control_job_queue")
+	data_job_queue = G_async_queue_new("data_job_queue")
 	last_wait = int64(NumThreads)
-	data_queue = G_async_queue_new()
+	data_queue = G_async_queue_new("data_queue")
 	cjt_mutex = G_mutex_new()
 	cjt_cond = sync.NewCond(cjt_mutex)
 	control_job_t = M_thread_new("myloader_ctr", control_job_thread, conf, "Control job thread could not be created")
 
 }
+
+// wait_control_job joins the control job thread and clears cjt_mutex/cond.
 func wait_control_job() {
 	log.Debugf("Waiting control job to finish")
 	G_thread_join(control_job_t)
@@ -72,6 +78,7 @@ func wait_control_job() {
 	log.Debugf("Control job to finished")
 }
 
+// new_control_job allocates a control_job with the given type, job_data (restore_job for JOB_RESTORE), and use_database.
 func new_control_job(job_type control_job_type, job_data any, use_database *database) *control_job {
 	var j = new(control_job)
 	j.job_type = job_type
@@ -86,17 +93,21 @@ func new_control_job(job_type control_job_type, job_data any, use_database *data
 	return j
 }
 
+// control_job_queue_push pushes the file_type onto control_job_queue (for control_job_thread).
 func control_job_queue_push(current_ft file_type) {
 	log.Debugf("control_job_queue <- %s", ft2str(current_ft))
 	G_async_queue_push(control_job_queue, current_ft)
 }
 
+// request_restore_data_job pushes REQUEST_DATA_JOB and blocks until a file_type is returned on data_job_queue (DATA or SHUTDOWN).
 func request_restore_data_job() file_type {
 	control_job_queue_push(REQUEST_DATA_JOB)
 	var ft file_type = G_async_queue_pop(data_job_queue).(file_type)
 	log.Debugf("data_job_queue -> %s", ft2str(ft))
 	return ft
 }
+
+// rjtype2str returns the string name of the restore_job_type.
 func rjtype2str(rjtype restore_job_type) string {
 	switch rjtype {
 	case JOB_RESTORE_SCHEMA_FILENAME:
@@ -111,12 +122,15 @@ func rjtype2str(rjtype restore_job_type) string {
 
 	return "0"
 }
+
+// request_next_data_job pops and returns the next restore_job from data_queue.
 func request_next_data_job() *restore_job {
 	var rj *restore_job = G_async_queue_pop(data_queue).(*restore_job)
 	log.Debugf("data_queue -> %s: %s.%s, threads %d", rjtype2str(rj.job_type), rj.dbt.database.real_database, rj.dbt.real_table, rj.dbt.current_threads)
 	return rj
 }
 
+// give_me_next_data_job_conf finds the next available data restore job from conf.table_list and assigns it to *rj; returns true (giveup) when no more work.
 func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 	var giveup = true
 	conf.table_list_mutex.Lock()
@@ -177,6 +191,7 @@ func give_me_next_data_job_conf(conf *configuration, rj **restore_job) bool {
 	return giveup
 }
 
+// enroute_into_the_right_queue_based_on_file_type pushes the file_type to the appropriate queue (schema_queue_push or control_job_queue_push).
 func enroute_into_the_right_queue_based_on_file_type(current_ft file_type) {
 	switch current_ft {
 	case SCHEMA_CREATE, SCHEMA_TABLE, SCHEMA_SEQUENCE:
@@ -193,18 +208,23 @@ func enroute_into_the_right_queue_based_on_file_type(current_ft file_type) {
 	}
 }
 
+// maybe_shutdown_control_job decrements last_wait; when it reaches zero, pushes SHUTDOWN to unblock loader threads.
 func maybe_shutdown_control_job() {
 	if G_atomic_int_dec_and_test(&last_wait) {
 		log.Debugf("SHUTDOWN maybe_shutdown_control_job")
 		enroute_into_the_right_queue_based_on_file_type(SHUTDOWN)
 	}
 }
+
+// wake_threads_waiting pushes REQUEST_DATA_JOB for each waiting thread and zeros threads_waiting.
 func wake_threads_waiting(threads_waiting *uint) {
 	for *threads_waiting > 0 {
 		control_job_queue_push(REQUEST_DATA_JOB)
 		*threads_waiting = *threads_waiting - 1
 	}
 }
+
+// control_job_thread is the main loop: pops file_types from control_job_queue, handles REQUEST_DATA_JOB (give_me_next_data_job_conf), DATA, INTERMEDIATE_ENDED, SHUTDOWN; then starts optimize keys.
 func control_job_thread(c any) {
 	cnf := c.(*configuration)
 	var ft file_type
@@ -254,7 +274,8 @@ func control_job_thread(c any) {
 					}
 				} else {
 					log.Debugf("Thread will be waiting | all_jobs_are_enqueued: %v | giveup: %v", all_jobs_are_enqueued, giveup)
-					for threads_waiting < _num_threads {
+					// Consistent with C: increment only once, not loop up to _num_threads
+					if threads_waiting < _num_threads {
 						threads_waiting++
 					}
 				}
@@ -278,6 +299,7 @@ func control_job_thread(c any) {
 	return
 }
 
+// process_job dispatches the control job: JOB_RESTORE runs process_restore_job (sets retry if needed), JOB_SHUTDOWN returns false to stop.
 func process_job(td *thread_data, job *control_job, retry *bool) bool {
 	switch job.job_type {
 	case JOB_RESTORE:
@@ -312,6 +334,7 @@ func schema_file_missed_lets_continue(td *thread_data) {
 	td.conf.table_list_mutex.Unlock()
 }
 
+// are_we_waiting_for_schema_jobs_to_complete returns true if database/table/retry queues have jobs or any table is in CREATING state.
 func are_we_waiting_for_schema_jobs_to_complete(td *thread_data) bool {
 	if G_async_queue_length(td.conf.database_queue) > 0 ||
 		G_async_queue_length(td.conf.table_queue) > 0 ||
@@ -333,6 +356,7 @@ func are_we_waiting_for_schema_jobs_to_complete(td *thread_data) bool {
 	return false
 }
 
+// are_we_waiting_for_create_schema_jobs_to_complete returns true if database_queue has jobs or any table is in CREATING state.
 func are_we_waiting_for_create_schema_jobs_to_complete(td *thread_data) bool {
 	if G_async_queue_length(td.conf.database_queue) > 0 {
 		return true
@@ -352,6 +376,7 @@ func are_we_waiting_for_create_schema_jobs_to_complete(td *thread_data) bool {
 	return false
 }
 
+// are_available_jobs returns true if any table is not CREATED or has pending restore jobs in its list.
 func are_available_jobs(td *thread_data) bool {
 	td.conf.table_list_mutex.Lock()
 	var dbt *db_table
@@ -368,6 +393,7 @@ func are_available_jobs(td *thread_data) bool {
 	return false
 }
 
+// refresh_db_and_jobs pushes the file_type to the appropriate queue (schema_queue or refresh_db_queue) for the given type.
 func refresh_db_and_jobs(current_ft file_type) {
 	switch current_ft {
 	case SCHEMA_CREATE, SCHEMA_TABLE, SCHEMA_SEQUENCE:

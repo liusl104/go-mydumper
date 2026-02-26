@@ -497,7 +497,7 @@ func process_integer_chunk_step(tj *table_job, csi *chunk_step_item) uint {
 
 	csi.mutex.Lock()
 	//  if (tj.status == COMPLETED)
-	//    m_critical("Thread %d: Trying to process COMPLETED chunk",td.thread_id);
+	//    m_critical("Thread %d: Trying to process COMPLETED chunk",thd.thread_id);
 	csi.status = DUMPING_CHUNK
 
 	var c_min bool = true
@@ -780,7 +780,7 @@ update_min:
 		cs.integer_step.step = tmpstep
 	}
 
-	//  g_message("Thread %d: I-Chunk 5: integer_step.types.sign.cursor: %"G_GINT64_FORMAT"  | integer_step.types.sign.min %"G_GINT64_FORMAT"  | cs.integer_step.types.sign.max : %"G_GINT64_FORMAT" | cs.integer_step.step %ld", td.thread_id, cs.integer_step.types.sign.cursor, cs.integer_step.types.sign.min, cs.integer_step.types.sign.max, cs.integer_step.step);
+	//  g_message("Thread %d: I-Chunk 5: integer_step.types.sign.cursor: %"G_GINT64_FORMAT"  | integer_step.types.sign.min %"G_GINT64_FORMAT"  | cs.integer_step.types.sign.max : %"G_GINT64_FORMAT" | cs.integer_step.step %ld", thd.thread_id, cs.integer_step.types.sign.cursor, cs.integer_step.types.sign.min, cs.integer_step.types.sign.max, cs.integer_step.step);
 
 	//end_process:
 

@@ -2,9 +2,9 @@ package mydumper
 
 import (
 	"fmt"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	. "github.com/liusl104/go-mydumper/src"
 	"math"
+
+	. "github.com/liusl104/go-mydumper/src"
 )
 
 var (
@@ -12,6 +12,7 @@ var (
 	PartitionRegex  string
 )
 
+// process_partition_chunk iterates over the partition list in csi, sets tj.partition for each, and calls write_table_job_into_file.
 func process_partition_chunk(tj *table_job, csi *chunk_step_item) {
 	var cs = csi.chunk_step
 	var partition string
@@ -27,6 +28,7 @@ func process_partition_chunk(tj *table_job, csi *chunk_step_item) {
 	}
 }
 
+// new_real_partition_step allocates a chunk_step with partition_step containing the given partition list.
 func new_real_partition_step(partition []string) *chunk_step {
 	var cs = new(chunk_step)
 	cs.partition_step = new(partition_step)
@@ -34,6 +36,7 @@ func new_real_partition_step(partition []string) *chunk_step {
 	return cs
 }
 
+// new_real_partition_step_item allocates a chunk_step_item of type PARTITION with the given partition list and depth/part.
 func new_real_partition_step_item(partition []string, deep uint, part uint64) *chunk_step_item {
 	var csi = new(chunk_step_item)
 	csi.chunk_type = PARTITION
@@ -48,6 +51,7 @@ func new_real_partition_step_item(partition []string, deep uint, part uint64) *c
 	return csi
 }
 
+// get_next_partition_chunk returns the next unassigned partition chunk from dbt.chunks, or splits a list and returns a new chunk; returns nil when none left.
 func get_next_partition_chunk(dbt *db_table) *chunk_step_item {
 	var l = dbt.chunks.Front()
 	var csi *chunk_step_item
@@ -75,6 +79,7 @@ func get_next_partition_chunk(dbt *db_table) *chunk_step_item {
 	return nil
 }
 
+// get_partitions_for_table queries information_schema.PARTITIONS for the table and returns partition names (filtered by partition_regex).
 func get_partitions_for_table(conn *DBConnection, dbt *db_table) []string {
 	var partition_list []string
 	var query = fmt.Sprintf("select PARTITION_NAME from information_schema.PARTITIONS where PARTITION_NAME is not null and TABLE_SCHEMA='%s' and TABLE_NAME='%s'", dbt.database.name, dbt.table)
@@ -82,7 +87,7 @@ func get_partitions_for_table(conn *DBConnection, dbt *db_table) []string {
 	if res == nil {
 		return nil
 	}
-	var row []mysql.FieldValue
+	var row []FieldValue
 	for {
 		row = Mysql_fetch_row(res)
 		if row == nil {

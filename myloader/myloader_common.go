@@ -2,11 +2,6 @@ package myloader
 
 import (
 	"fmt"
-	"github.com/go-ini/ini"
-	"github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"os/exec"
 	"path"
@@ -16,6 +11,12 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/go-ini/ini"
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
@@ -40,6 +41,7 @@ type replication_statements struct {
 
 type check_sum func(conn *DBConnection, database, table string) string
 
+// initialize_common sets up refresh_table_list_counter, db_hash, tbl_hash, database_db, and decompress commands (gzip/zstd, exec-per-thread).
 func initialize_common() {
 	refresh_table_list_counter = RefreshTableListInterval
 	db_hash_mutex = G_mutex_new()
@@ -72,14 +74,17 @@ func initialize_common() {
 	}
 }
 
+// is_in_list returns true if haystack is in the list.
 func is_in_list(haystack string, list []string) bool {
 	return slices.Contains(list, haystack)
 }
 
+// is_in_ignore_set_list returns true if haystack is in ignore_set_list.
 func is_in_ignore_set_list(haystack string) bool {
 	return is_in_list(haystack, ignore_set_list)
 }
 
+// remove_ignore_set_session_from_hash removes all keys in ignore_set_list from set_session_hash.
 func remove_ignore_set_session_from_hash() {
 	var l = ignore_set_list
 	for _, data := range l {
@@ -87,6 +92,7 @@ func remove_ignore_set_session_from_hash() {
 	}
 }
 
+// get_value returns the value for the given group and key from the INI file, or empty string if missing.
 func get_value(kf *ini.File, group string, key string) string {
 	section := kf.Section(group)
 	if !section.HasKey(key) {
@@ -96,6 +102,7 @@ func get_value(kf *ini.File, group string, key string) string {
 	return value.Value()
 }
 
+// execute_replication_commands runs COMMIT, then each line of the statement (split by \n;), then START TRANSACTION.
 func execute_replication_commands(conn *DBConnection, statement string) {
 	M_query_warning(conn, "COMMIT", "COMMIT failed")
 	var line []string = strings.Split(statement, "\n;")
@@ -107,6 +114,7 @@ func execute_replication_commands(conn *DBConnection, statement string) {
 	M_query_warning(conn, "START TRANSACTION", "START TRANSACTION failed")
 }
 
+// change_master builds replication statements (gtid_purge, reset_replica, change_replication_source, start_replica) from the INI group and rep_set.
 func change_master(kf *ini.File, group string, rs *replication_statements, rep_set *Replication_settings) {
 	var val string
 	var i uint
@@ -279,6 +287,7 @@ func change_master(kf *ini.File, group string, rs *replication_statements, rep_s
 	}
 }
 
+// m_filename_has_suffix returns true if the filename (after stripping exec-per-thread or compression extension) has the given suffix.
 func m_filename_has_suffix(str string, suffix string) bool {
 	if has_exec_per_thread_extension(str) {
 		return strings.ToLower(path.Ext(str)) == ExecPerThreadExtension
@@ -290,6 +299,7 @@ func m_filename_has_suffix(str string, suffix string) bool {
 	return strings.HasSuffix(str, suffix)
 }
 
+// new_database allocates a database with name, real_database (or DB), filename, queues, and schema_state NOT_FOUND.
 func new_database(db_name string, filename string) *database {
 	var d = new(database)
 	d.name = db_name
@@ -300,8 +310,8 @@ func new_database(db_name string, filename string) *database {
 	}
 	d.filename = filename
 	d.mutex = G_mutex_new()
-	d.sequence_queue = G_async_queue_new()
-	d.queue = G_async_queue_new()
+	d.sequence_queue = G_async_queue_new("database.sequence_queue")
+	d.queue = G_async_queue_new("database.queue")
 	d.schema_state = NOT_FOUND
 	d.schema_checksum = ""
 	d.post_checksum = ""
@@ -309,6 +319,7 @@ func new_database(db_name string, filename string) *database {
 	return d
 }
 
+// get_db_hash returns the database from db_hash for filename/name, creating it via new_database if missing.
 func get_db_hash(filename, name string) *database {
 	db_hash_mutex.Lock()
 	d, _ := db_hash[filename]
@@ -333,6 +344,7 @@ func get_db_hash(filename, name string) *database {
 	return d
 }
 
+// eval_table returns true if the table passes the Tables filter, skiplist, and regex; mutex protects shared state.
 func eval_table(db_name string, table_name string, mutex *sync.Mutex) bool {
 	if table_name == "" {
 		log.Errorf("Table name is null on eval_table()")
@@ -352,9 +364,12 @@ func eval_table(db_name string, table_name string, mutex *sync.Mutex) bool {
 	return Eval_regex(db_name, table_name)
 }
 
+// execute_use runs USE `current_database` on the connection; returns true on failure (C convention).
 func execute_use(cd *connection_data) bool {
 	if cd.current_database != nil {
 		var query = fmt.Sprintf("USE `%s`", cd.current_database.real_database)
+		// Go M_query_warning returns true on success, false on failure (opposite of C)
+		// Invert here to match C: success returns false, failure returns true
 		if M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
 			return true
 		}
@@ -365,11 +380,13 @@ func execute_use(cd *connection_data) bool {
 	return false
 }
 
+// execute_use_if_needs_to switches to the given database if current_database is nil or different (respects -B); msg is used in error logging.
 func execute_use_if_needs_to(cd *connection_data, database *database, msg string) {
+	// Consistent with C: if -B is set, only execute USE when current_database is nil
 	if database != nil && (DB == "" || cd.current_database == nil) {
 		if cd.current_database == nil || strings.Compare(database.real_database, cd.current_database.real_database) != 0 {
 			cd.current_database = database
-			if !execute_use(cd) {
+			if execute_use(cd) {
 				log.Criticalf("Thread %d with connection %d: Error switching to database `%s` %s: %s", cd.thread_id, cd.connection_id, cd.current_database.real_database, msg, Mysql_error(cd.thrconn))
 			}
 		}
@@ -377,14 +394,15 @@ func execute_use_if_needs_to(cd *connection_data, database *database, msg string
 	return
 }
 
+// get_file_type maps a dump filename to its file_type (METADATA_GLOBAL, SCHEMA_TABLE, DATA, LOAD_DATA, etc.).
 func get_file_type(filename string) file_type {
 	if (strings.Compare(filename, "metadata") == 0 || strings.Contains(filename, "metadata.header") ||
 		strings.Contains(filename, "metadata.partial")) && !(strings.HasSuffix(filename, ".sql") ||
 		has_exec_per_thread_extension(filename)) {
 		return METADATA_GLOBAL
 	}
-	if SourceDb != "" && !(strings.HasPrefix(filename, SourceDb) && len(filename) > len(SourceDb) && (strings.Contains(filename[:len(SourceDb)], ".")) ||
-		strings.Contains(filename[:len(SourceDb)], "-")) && !strings.HasPrefix(filename, "mydumper_") {
+	// Consistent with C: check filename starts with source_db and first char after source_db is '.' or '-'
+	if SourceDb != "" && !(strings.HasPrefix(filename, SourceDb) && len(filename) > len(SourceDb) && (filename[len(SourceDb)] == '.' || filename[len(SourceDb)] == '-')) && !strings.HasPrefix(filename, "mydumper_") {
 		return IGNORED
 	}
 	if m_filename_has_suffix(filename, "-schema.sql") {
@@ -433,6 +451,7 @@ func get_file_type(filename string) file_type {
 	return IGNORED
 }
 
+// get_database_table_from_file parses database and table name from filename by splitting on sufix and then on '.'; requires exactly two parts.
 func get_database_table_from_file(filename string, sufix string, database *string, table *string) {
 	split_filename := strings.Split(filename, sufix)
 	split := strings.Split(split_filename[0], ".")
@@ -446,10 +465,12 @@ func get_database_table_from_file(filename string, sufix string, database *strin
 	return
 }
 
+// process_create_table_statement delegates to Global_process_create_table_statement for the table's real_table and split_indexes.
 func process_create_table_statement(statement *GString, create_table_statement *GString, alter_table_statement *GString, alter_table_constraint_statement *GString, dbt *db_table, split_indexes bool) int {
 	return Global_process_create_table_statement(statement, create_table_statement, alter_table_statement, alter_table_constraint_statement, dbt.real_table, split_indexes)
 }
 
+// compare_dbt returns true if a's row count (from table_hash) is less than b's; used for sorting.
 func compare_dbt(a *db_table, b *db_table, table_hash map[string]*db_table) bool {
 	var a_key = Build_dbt_key(a.database.real_database, a.table)
 	var b_key = Build_dbt_key(b.database.real_database, b.table)
@@ -458,10 +479,12 @@ func compare_dbt(a *db_table, b *db_table, table_hash map[string]*db_table) bool
 	return a_val.rows < b_val.rows
 }
 
+// compare_dbt_short returns true if a.rows < b.rows; used for sorting.
 func compare_dbt_short(a *db_table, b *db_table) bool {
 	return a.rows < b.rows
 }
 
+// refresh_table_list_without_table_hash_lock rebuilds conf.table_list from conf.table_hash (optionally sorted by rows); uses refresh_table_list_counter unless force.
 func refresh_table_list_without_table_hash_lock(conf *configuration, force bool) {
 	if force || G_atomic_int_dec_and_test(&refresh_table_list_counter) {
 		var table_list []*db_table
@@ -484,12 +507,14 @@ func refresh_table_list_without_table_hash_lock(conf *configuration, force bool)
 	}
 }
 
+// refresh_table_list locks table_hash_mutex and calls refresh_table_list_without_table_hash_lock with force true.
 func refresh_table_list(conf *configuration) {
 	conf.table_hash_mutex.Lock()
 	refresh_table_list_without_table_hash_lock(conf, true)
 	conf.table_hash_mutex.Unlock()
 }
 
+// checksum_template compares dbt_checksum with checksum; on mismatch logs with err_templ and returns false; on match logs with info_templ and returns true.
 func checksum_template(dbt_checksum, checksum, err_templ, info_templ, message, _db, _table string) bool {
 	G_assert(checksum_mode != CHECKSUM_SKIP)
 	if dbt_checksum != checksum {
@@ -513,6 +538,7 @@ func checksum_template(dbt_checksum, checksum, err_templ, info_templ, message, _
 	return true
 }
 
+// checksum_dbt_template runs the checksum function for the table and compares result with dbt_checksum via checksum_template.
 func checksum_dbt_template(dbt *db_table, dbt_checksum string, conn *DBConnection, message string, fun check_sum) bool {
 	var checksum string
 	checksum = fun(conn, dbt.database.real_database, dbt.real_table)
@@ -521,6 +547,7 @@ func checksum_dbt_template(dbt *db_table, dbt_checksum string, conn *DBConnectio
 		"%s confirmed for %s.%s", message, dbt.database.real_database, dbt.real_table)
 }
 
+// checksum_database_template runs the checksum function for the database and compares result with dbt_checksum via checksum_template.
 func checksum_database_template(_db, dbt_checksum string, conn *DBConnection, message string, fun check_sum) bool {
 	var checksum string
 	checksum = fun(conn, _db, "")
@@ -529,6 +556,7 @@ func checksum_database_template(_db, dbt_checksum string, conn *DBConnection, me
 		"%s confirmed for %s", message, _db, "")
 }
 
+// checksum_dbt verifies schema, indexes, triggers, and data checksums for the table when checksum_mode is not SKIP.
 func checksum_dbt(dbt *db_table, conn *DBConnection) bool {
 	var checksum_ok = true
 	if checksum_mode != CHECKSUM_SKIP {
@@ -555,10 +583,12 @@ func checksum_dbt(dbt *db_table, conn *DBConnection) bool {
 	return checksum_ok
 }
 
+// has_exec_per_thread_extension returns true if the filename has the ExecPerThreadExtension suffix.
 func has_exec_per_thread_extension(filename string) bool {
 	return ExecPerThreadExtension != "" && strings.HasSuffix(filename, ExecPerThreadExtension)
 }
 
+// execute_file_per_thread opens the SQL file and wraps it in an osFile (plain, gzip, or zstd reader based on exec).
 func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osFile, error) {
 	var sql_file *os.File
 	var outfile *osFile
@@ -602,6 +632,7 @@ func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osF
 	return outfile, nil
 }
 
+// get_command_and_basename sets command and basename for decompression (exec-per-thread, zstd, or gzip) if the filename has a known extension; returns true if set.
 func get_command_and_basename(filename string, command *[]string, basename *string) bool {
 	var length int
 	if has_exec_per_thread_extension(filename) {
@@ -621,6 +652,7 @@ func get_command_and_basename(filename string, command *[]string, basename *stri
 	return false
 }
 
+// initialize_thread_data fills the thread_data with conf, status, thread_id, and optional dbt.
 func initialize_thread_data(td *thread_data, conf *configuration, status thread_states, thread_id uint, dbt *db_table) {
 	(*td).conf = conf
 	(*td).status = status
@@ -629,6 +661,7 @@ func initialize_thread_data(td *thread_data, conf *configuration, status thread_
 	(*td).dbt = dbt
 }
 
+// show_warnings_if_possible runs SHOW WARNINGS and returns concatenated messages if ShowWarnings is set; otherwise returns empty string.
 func show_warnings_if_possible(conn *DBConnection) string {
 	if !ShowWarnings {
 		return ""
@@ -645,6 +678,7 @@ func show_warnings_if_possible(conn *DBConnection) string {
 	return _error.Str.String()
 }
 
+// status2str returns the string name of the schema_status (NOT_FOUND, CREATED, etc.).
 func status2str(status schema_status) string {
 	switch status {
 	case NOT_FOUND:
