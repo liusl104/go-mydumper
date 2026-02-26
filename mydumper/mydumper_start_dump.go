@@ -523,7 +523,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 			}
 		}
 		if user_data.(*Configuration).pause_resume == nil {
-			user_data.(*Configuration).pause_resume = G_async_queue_new()
+			user_data.(*Configuration).pause_resume = G_async_queue_new("pause_resume")
 		}
 		var queue = user_data.(*Configuration).pause_resume
 		if !DaemonMode {
@@ -1171,7 +1171,7 @@ func StartDump(conf *Configuration) error {
 	conf.use_any_index = "1"
 
 	if DiskLimits != "" {
-		conf.pause_resume = G_async_queue_new()
+		conf.pause_resume = G_async_queue_new("conf.pause_resume")
 		disk_check_thread = M_thread_new("mon_disk", monitor_disk_space_thread, conf.pause_resume, "Monitor thread could not be created")
 	}
 	if Throttle_variable != "" {
@@ -1326,33 +1326,33 @@ func StartDump(conf *Configuration) error {
 	}
 	log.Tracef("Initilizing the Configuration")
 
-	conf.initial_queue = G_async_queue_new()
-	conf.initial_completed_queue = G_async_queue_new()
-	conf.schema_queue = G_async_queue_new()
-	conf.post_data_queue = G_async_queue_new()
+	conf.initial_queue = G_async_queue_new("conf.initial_queue")
+	conf.initial_completed_queue = G_async_queue_new("conf.initial_completed_queue")
+	conf.schema_queue = G_async_queue_new("conf.schema_queue")
+	conf.post_data_queue = G_async_queue_new("conf.post_data_queue")
 	if conf.transactional == nil {
 		conf.transactional = new(table_queuing)
 		conf.non_transactional = new(table_queuing)
 	}
-	conf.transactional.queue = G_async_queue_new()
-	conf.transactional.deferQueue = G_async_queue_new()
+	conf.transactional.queue = G_async_queue_new("conf.transactional.queue")
+	conf.transactional.deferQueue = G_async_queue_new("conf.transactional.deferQueue")
 	// These are initialized in the guts of initialize_start_dump() above
 	G_assert(give_me_another_transactional_chunk_step_queue != nil && give_me_another_non_transactional_chunk_step_queue != nil && transactional_table != nil && non_transactional_table != nil)
 	conf.transactional.request_chunk = give_me_another_transactional_chunk_step_queue
 	conf.transactional.table_list = transactional_table
 	conf.transactional.descr = "transactional"
-	conf.ready = G_async_queue_new()
-	conf.non_transactional.queue = G_async_queue_new()
-	conf.non_transactional.deferQueue = G_async_queue_new()
+	conf.ready = G_async_queue_new("conf.ready")
+	conf.non_transactional.queue = G_async_queue_new("conf.non_transactional.queue")
+	conf.non_transactional.deferQueue = G_async_queue_new("conf.non_transactional.deferQueue")
 	conf.non_transactional.request_chunk = give_me_another_non_transactional_chunk_step_queue
 	conf.non_transactional.table_list = non_transactional_table
 	conf.non_transactional.descr = "non-transactional"
-	conf.ready_non_transactional_queue = G_async_queue_new()
-	conf.unlock_tables = G_async_queue_new()
-	conf.gtid_pos_checked = G_async_queue_new()
-	conf.are_all_threads_in_same_pos = G_async_queue_new()
-	conf.db_ready = G_async_queue_new()
-	conf.source_and_replica_status_queue = G_async_queue_new()
+	conf.ready_non_transactional_queue = G_async_queue_new("conf.ready_non_transactional_queue")
+	conf.unlock_tables = G_async_queue_new("conf.unlock_tables")
+	conf.gtid_pos_checked = G_async_queue_new("conf.gtid_pos_checked")
+	conf.are_all_threads_in_same_pos = G_async_queue_new("conf.are_all_threads_in_same_pos")
+	conf.db_ready = G_async_queue_new("conf.db_ready")
+	conf.source_and_replica_status_queue = G_async_queue_new("conf.source_and_replica_status_queue")
 	//  ready_database_dump_mutex = g_rec_mutex_new();
 	//  g_rec_mutex_lock(ready_database_dump_mutex);
 	ready_table_dump_mutex = G_rec_mutex_new()

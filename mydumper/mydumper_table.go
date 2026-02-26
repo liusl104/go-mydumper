@@ -257,7 +257,7 @@ func new_db_table(d **db_table, conn *DBConnection, conf *Configuration, databas
 		dbt.load_data_suffix = nil
 		dbt.insert_statement = nil
 		dbt.chunks_mutex = G_mutex_new()
-		dbt.chunks_queue = G_async_queue_new()
+		dbt.chunks_queue = G_async_queue_new("dbt.chunks_queue")
 		dbt.chunks_completed = 0
 		get_primary_key(conn, dbt, conf)
 		dbt.primary_key_separated_by_comma = ""

@@ -357,8 +357,8 @@ func print_errors() {
 	log.Infof("- Constraint: %d", detailed_errors.constraints_errors)
 	log.Infof("- Post:       %d", detailed_errors.post_errors)
 	log.Infof("Warnings found:")
-	log.Infof("- Data:\t%d", detailed_errors.data_warnings)
-	log.Infof("Retries: %d", detailed_errors.retries)
+	log.Infof("- Data:       %d", detailed_errors.data_warnings)
+	log.Infof("Retries:      %d", detailed_errors.retries)
 }
 
 // StartLoad is the main entry point: parses flags, initializes directories/queues/workers, runs schema/data/post/index/checksum, then cleans up.
@@ -437,18 +437,18 @@ func StartLoad() {
 	if MaxTransactionSize == DEFAULT_MAX_TRANSACTION_SIZE {
 		detect_group_replication_transaction_size_limit(conn)
 	}
-	conf.database_queue = G_async_queue_new()
-	conf.table_queue = G_async_queue_new()
-	conf.retry_queue = G_async_queue_new()
-	conf.data_queue = G_async_queue_new()
-	conf.post_table_queue = G_async_queue_new()
-	conf.post_queue = G_async_queue_new()
-	conf.index_queue = G_async_queue_new()
-	conf.view_queue = G_async_queue_new()
-	conf.ready = G_async_queue_new()
-	conf.pause_resume = G_async_queue_new()
+	conf.database_queue = G_async_queue_new("conf.database_queue")
+	conf.table_queue = G_async_queue_new("conf.table_queue")
+	conf.retry_queue = G_async_queue_new("conf.retry_queue")
+	conf.data_queue = G_async_queue_new("conf.data_queue")
+	conf.post_table_queue = G_async_queue_new("conf.post_table_queue")
+	conf.post_queue = G_async_queue_new("conf.post_queue")
+	conf.index_queue = G_async_queue_new("conf.index_queue")
+	conf.view_queue = G_async_queue_new("conf.view_queue")
+	conf.ready = G_async_queue_new("conf.ready")
+	conf.pause_resume = G_async_queue_new("conf.pause_resume")
 	conf.table_list_mutex = G_mutex_new()
-	// conf.stream_queue = G_async_queue_new()
+	// conf.stream_queue = G_async_queue_new("conf.stream_queue")
 	conf.table_hash = make(map[string]*db_table)
 	conf.table_hash_mutex = G_mutex_new()
 	if G_file_test("resume") {

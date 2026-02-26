@@ -3,12 +3,15 @@ package mydumper
 import (
 	"sync/atomic"
 	"time"
+
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 type GAsyncQueue struct {
 	queue  chan any
 	length int64
 	state  uint
+	name   string
 }
 
 // pop removes and returns one item from the queue; decrements length. Blocks until an item is available.
@@ -29,8 +32,8 @@ func (a *GAsyncQueue) try_pop() any {
 	if a.length <= 0 {
 		return nil
 	}
-	atomic.AddInt64(&a.length, -1)
 	task := <-a.queue
+	atomic.AddInt64(&a.length, -1)
 	return task
 }
 
@@ -69,12 +72,13 @@ func (a *GAsyncQueue) unref() {
 	}
 }
 
-// G_async_queue_new creates a new async queue with capacity BufferSize.
-func G_async_queue_new() *GAsyncQueue {
+// G_async_queue_new creates a new async queue with capacity BufferSize. name is used for debug/tracing.
+func G_async_queue_new(name string) *GAsyncQueue {
 	return &GAsyncQueue{
 		queue:  make(chan any, BufferSize),
 		length: 0,
 		state:  0,
+		name:   name,
 	}
 }
 
@@ -86,19 +90,17 @@ func G_async_queue_push(a *GAsyncQueue, task any) {
 
 // G_async_queue_try_pop returns an item from the queue without blocking, or nil if empty.
 func G_async_queue_try_pop(a *GAsyncQueue) any {
+	log.Debugf("call try pop task [%s]", a.name)
 	return a.try_pop()
 }
 
 // G_async_queue_pop blocks until an item is available, then removes and returns it and decrements length.
 func G_async_queue_pop(a *GAsyncQueue) any {
-	// return a.pop()
-	for {
-		select {
-		case task := <-a.queue:
-			atomic.AddInt64(&a.length, -1)
-			return task
-		}
-	}
+	task := <-a.queue
+	atomic.AddInt64(&a.length, -1)
+	log.Debugf("call pop task [%s]", a.name)
+	return task
+
 }
 
 // G_async_queue_length returns the current number of items in the queue (may be stale due to concurrency).

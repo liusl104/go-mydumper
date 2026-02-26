@@ -68,7 +68,7 @@ type schema_restore_job struct {
 
 // initialize_restore_job creates file_list_to_do queue and mutexes for restore job processing.
 func initialize_restore_job() {
-	file_list_to_do = G_async_queue_new()
+	file_list_to_do = G_async_queue_new("file_list_to_do")
 	single_threaded_create_table = G_mutex_new()
 	progress_mutex = G_mutex_new()
 	shutdown_triggered_mutex = G_mutex_new()
@@ -412,7 +412,7 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 			}
 		}
 		if cnf.pause_resume == nil {
-			cnf.pause_resume = G_async_queue_new()
+			cnf.pause_resume = G_async_queue_new("pause_resume")
 		}
 		queue = cnf.pause_resume
 		for i = 0; i < NumThreads; i++ {

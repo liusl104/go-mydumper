@@ -449,9 +449,12 @@ func Execute_gstring(conn *DBConnection, ss *GString) {
 	if ss != nil {
 		var line []string = strings.Split(ss.Str.String(), ";\n")
 		var i int
+		if conn.Rows != nil {
+			_ = conn.Rows.Close()
+		}
 		for i = 0; i < len(line); i++ {
 			if len(line[i]) > 3 {
-				conn.Executes(line[i])
+				_, conn.Err = conn.Conn.Exec(line[i])
 				if conn.Err != nil {
 					log.Warnf("Set session failed: %s", line[i])
 				}
@@ -1059,9 +1062,12 @@ func Build_dbt_key(a, b string) string {
 	return fmt.Sprintf("%s%s%s.%s%s%s", Identifier_quote_character, a, Identifier_quote_character, Identifier_quote_character, b, Identifier_quote_character)
 }
 
-// Discard_mysql_output closes conn.Rows to release the result set.
+// Discard_mysql_output closes conn.Rows to release the result set so the connection can be reused for Exec/Query.
 func Discard_mysql_output(conn *DBConnection) {
-	conn.Rows.Close()
+	if conn != nil && conn.Rows != nil {
+		conn.Rows.Close()
+		conn.Rows = nil
+	}
 }
 
 // m_log logs msg (formatted with args) via log_fun_1 or log_fun_2 if the error is in IgnoreErrorsList.
@@ -1082,6 +1088,7 @@ func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 f
 }
 
 // m_queryv executes query on conn; on error logs via m_log and returns true. Returns false on success.
+// Must discard conn.Rows after a successful MySQLQuery so the connection is not left with an unread result set (which would block subsequent Exec).
 func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
 	conn.Query = query
 	// res, err := conn.Conn.Query(query)

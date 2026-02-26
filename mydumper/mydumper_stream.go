@@ -53,7 +53,7 @@ func get_stream_queue_length(queue *GAsyncQueue) int64 {
 
 // stream_queue_push pushes (dbt, filename) to Stream_queue and waits on done; then pushes dbt to metadata_partial_queue.
 func stream_queue_push(dbt *db_table, filename string) {
-	var done = G_async_queue_new()
+	var done = G_async_queue_new("stream.done")
 	G_async_queue_push(Stream_queue, new_stream_queue_element(dbt, filename))
 	G_async_queue_pop(done)
 	G_async_queue_unref(done)
@@ -258,10 +258,10 @@ func make_partial_filename(i uint) string {
 
 // initialize_stream creates stream queues and starts stream_thread and metadata_partial_writer_thread.
 func initialize_stream() {
-	initial_metadata_queue = G_async_queue_new()
-	initial_metadata_lock_queue = G_async_queue_new()
-	Stream_queue = G_async_queue_new()
-	metadata_partial_queue = G_async_queue_new()
+	initial_metadata_queue = G_async_queue_new("stream.initial_metadata_queue")
+	initial_metadata_lock_queue = G_async_queue_new("stream.initial_metadata_lock_queue")
+	Stream_queue = G_async_queue_new("stream.Stream_queue")
+	metadata_partial_queue = G_async_queue_new("stream.metadata_partial_queue")
 	stream_thread = M_thread_new("stream", process_stream, Stream_queue, "Stream thread could not be created")
 	metadata_partial_writer_thread = M_thread_new("metadata_writer", metadata_partial_writer, nil, "Metadata partial writer thread could not be created")
 

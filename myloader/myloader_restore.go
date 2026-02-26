@@ -3,8 +3,6 @@ package myloader
 import (
 	"bufio"
 	"fmt"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"path"
 	"slices"
@@ -12,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const (
@@ -69,7 +70,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 	}
 	cd.current_database = nil
 	cd.thread_id = Mysql_thread_id(cd.thrconn)
-	cd.ready = G_async_queue_new()
+	cd.ready = G_async_queue_new("connection_data.ready")
 	cd.queue = nil
 	cd.in_use = G_mutex_new()
 	log.Infof("Executing set session")
@@ -81,8 +82,8 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 // new_io_restore_result allocates an io_restore_result with empty result and restore queues.
 func new_io_restore_result() *io_restore_result {
 	var iors *io_restore_result = new(io_restore_result)
-	iors.result = G_async_queue_new()
-	iors.restore = G_async_queue_new()
+	iors.result = G_async_queue_new("io_restore_result.result")
+	iors.restore = G_async_queue_new("io_restore_result.restore")
 	return iors
 }
 
@@ -94,9 +95,9 @@ func initialize_connection_pool() {
 		restore_data_from_file = restore_data_from_mydumper_file
 	}
 	var n uint
-	connection_pool = G_async_queue_new()
-	restore_queues = G_async_queue_new()
-	free_results_queue = G_async_queue_new()
+	connection_pool = G_async_queue_new("connection_pool")
+	restore_queues = G_async_queue_new("restore_queues")
+	free_results_queue = G_async_queue_new("free_results_queue")
 	var iors *io_restore_result
 	restore_threads = make([]*GThread, NumThreads)
 	for n = 0; n < NumThreads; n++ {
@@ -348,6 +349,7 @@ func restore_thread(c any) {
 		}
 		for {
 			ir = G_async_queue_pop(cd.queue.restore).(*statement)
+			log.Debugf("restore_thread conn %d: got statement kind=%v", cd.connection_id, ir.kind_of_statement)
 			if ir.kind_of_statement == CLOSE {
 				log.Debugf("Releasing connection: %d", cd.thread_id)
 				if cd.transaction && query_counter > 0 {
@@ -390,7 +392,6 @@ func restore_thread(c any) {
 		log.Debugf("Returning connection to pool: %d", cd.connection_id)
 		G_async_queue_push(connection_pool, cd)
 	}
-	return
 }
 
 // load_data_mutex_locate gets or creates a mutex for the load_data filename in load_data_list; returns true if caller owns the new mutex (should lock).
@@ -704,9 +705,9 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var header *GString = G_string_sized_new(256)
-	var inBufio *bufio.Scanner = bufio.NewScanner(infile.file)
+	var inBuffon *bufio.Scanner = bufio.NewScanner(infile.file)
 	for eof == false {
-		if Read_data(inBufio, data, &eof, &line) {
+		if Read_data(inBuffon, data, &eof, &line) {
 			if strings.HasSuffix(data.Str.String(), ";\n") {
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)

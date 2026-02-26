@@ -310,8 +310,8 @@ func new_database(db_name string, filename string) *database {
 	}
 	d.filename = filename
 	d.mutex = G_mutex_new()
-	d.sequence_queue = G_async_queue_new()
-	d.queue = G_async_queue_new()
+	d.sequence_queue = G_async_queue_new("database.sequence_queue")
+	d.queue = G_async_queue_new("database.queue")
 	d.schema_state = NOT_FOUND
 	d.schema_checksum = ""
 	d.post_checksum = ""
@@ -370,14 +370,14 @@ func execute_use(cd *connection_data) bool {
 		var query = fmt.Sprintf("USE `%s`", cd.current_database.real_database)
 		// Go M_query_warning returns true on success, false on failure (opposite of C)
 		// Invert here to match C: success returns false, failure returns true
-		if !M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
-			return true // failure returns true (consistent with C)
+		if M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
+			return true
 		}
 
 	} else {
 		log.Warnf("Thread %d with connection %d: Not able to switch database", cd.thread_id, cd.connection_id)
 	}
-	return false // success returns false (consistent with C)
+	return false
 }
 
 // execute_use_if_needs_to switches to the given database if current_database is nil or different (respects -B); msg is used in error logging.

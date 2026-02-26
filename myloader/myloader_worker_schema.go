@@ -199,7 +199,7 @@ func worker_schema_thread(c any) {
 // initialize_worker_schema creates refresh_db_queue2 and allocates schema_td/schema_threads for MaxThreadsForSchemaCreation workers.
 func initialize_worker_schema(conf *configuration) {
 	var n uint
-	refresh_db_queue2 = G_async_queue_new()
+	refresh_db_queue2 = G_async_queue_new("refresh_db_queue2")
 	schema_threads = make([]*GThread, MaxThreadsForSchemaCreation)
 	schema_td = make([]*thread_data, MaxThreadsForSchemaCreation)
 	log.Infof("Initializing initialize_worker_schema")

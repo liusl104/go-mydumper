@@ -311,8 +311,8 @@ func initialize_file_handler() {
 		m_open = m_open_file
 		m_close = m_close_file
 	}
-	available_pids = G_async_queue_new()
-	close_file_queue = G_async_queue_new()
+	available_pids = G_async_queue_new("available_pids")
+	close_file_queue = G_async_queue_new("close_file_queue")
 	var i uint = 0
 	for i = 0; i < NumThreads*2; i++ {
 		release_pid()

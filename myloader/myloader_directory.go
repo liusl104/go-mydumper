@@ -14,7 +14,7 @@ var (
 
 // initialize_directory creates the metadata_sync_queue for directory processing.
 func initialize_directory() {
-	metadata_sync_queue = G_async_queue_new()
+	metadata_sync_queue = G_async_queue_new("metadata_sync_queue")
 }
 
 // wait_directory_to_process_metadata blocks until the directory thread pushes to metadata_sync_queue, then unreferences it.

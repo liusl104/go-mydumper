@@ -28,7 +28,7 @@ var (
 // initialize_intermediate_queue sets intermediate_conf, creates intermediate_queue and exec_process_id, starts intermediate_thread, and calls initialize_control_job.
 func initialize_intermediate_queue(c *configuration) {
 	intermediate_conf = c
-	intermediate_queue = G_async_queue_new()
+	intermediate_queue = G_async_queue_new("intermediate_queue")
 	exec_process_id = make(map[string]string)
 	exec_process_id_mutex = G_mutex_new()
 	start_intermediate_thread = G_mutex_new()

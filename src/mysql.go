@@ -207,11 +207,6 @@ func (f *FieldValue) AsInt64() int64 {
 	return f.Int64()
 }
 
-// Executes runs a query with Conn.Exec (no result set) and stores error in d.Err.
-func (d *DBConnection) Executes(query string) {
-	_, d.Err = d.Conn.Exec(query)
-}
-
 // QueryRows closes any previous Rows, runs the query, and stores result in d.Rows; sets d.Err on error.
 func (d *DBConnection) QueryRows(query string) {
 	err := d.Rows.Close()
@@ -318,9 +313,12 @@ func Mysql_free_result(m *MYSQL_RES) {
 }
 
 // Mysql_real_query executes a query and stores the result
-func Mysql_real_query(conn *DBConnection, query string) error {
-	conn.QueryRows(query)
-	return conn.Err
+func Mysql_real_query(conn *DBConnection, query string) (result sql.Result) {
+	if conn.Rows != nil {
+		_ = conn.Rows.Close()
+	}
+	result, conn.Err = conn.Conn.Exec(query)
+	return
 }
 
 // init_result initializes a new MYSQL_RES structure

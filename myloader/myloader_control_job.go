@@ -59,10 +59,10 @@ func cjt_resume() {
 
 // initialize_control_job creates control_job_queue, data_job_queue, data_queue, cjt mutex/cond, and starts control_job_thread.
 func initialize_control_job(conf *configuration) {
-	control_job_queue = G_async_queue_new()
-	data_job_queue = G_async_queue_new()
+	control_job_queue = G_async_queue_new("control_job_queue")
+	data_job_queue = G_async_queue_new("data_job_queue")
 	last_wait = int64(NumThreads)
-	data_queue = G_async_queue_new()
+	data_queue = G_async_queue_new("data_queue")
 	cjt_mutex = G_mutex_new()
 	cjt_cond = sync.NewCond(cjt_mutex)
 	control_job_t = M_thread_new("myloader_ctr", control_job_thread, conf, "Control job thread could not be created")

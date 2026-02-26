@@ -40,8 +40,8 @@ var (
 
 // initialize_chunk creates the transactional and non-transactional chunk request queues.
 func initialize_chunk() {
-	give_me_another_transactional_chunk_step_queue = G_async_queue_new()
-	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new()
+	give_me_another_transactional_chunk_step_queue = G_async_queue_new("chunks.transactional_step")
+	give_me_another_non_transactional_chunk_step_queue = G_async_queue_new("chunks.non_transactional_step")
 }
 
 // start_chunk_builder starts the chunk_builder_thread (unless NoData).
