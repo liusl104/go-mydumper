@@ -1004,7 +1004,7 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 		var dump = true
 		var is_view = false
 		var is_sequence = false
-		if (Is_mysql_like() || Detected_server == SERVER_TYPE_TIDB) && (row[ccol].Value() == nil || string(row[ccol].AsString()) == "VIEW") {
+		if (Is_mysql_like() || Detected_server == SERVER_TYPE_TIDB) && row[ecol].Value() == nil && (row[ccol].Value() == nil || string(row[ccol].AsString()) == "VIEW") {
 			is_view = true
 		}
 		if Detected_server == SERVER_TYPE_MARIADB && string(row[ccol].AsString()) == "SEQUENCE" {

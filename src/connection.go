@@ -217,7 +217,7 @@ func buildDSN(hostname string, username string, password string, db string, port
 		}
 		cnf.Addr = fmt.Sprintf("%s:%d", hostname, port)
 	}
-
+	cnf.Params = map[string]string{"charset": "utf8mb4"}
 	// SSL/TLS configuration
 	useSSL := Ssl || (Ssl_mode != "" && strings.ToUpper(Ssl_mode) != "DISABLED")
 	if useSSL {
