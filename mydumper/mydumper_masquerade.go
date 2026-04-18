@@ -11,7 +11,9 @@ import (
 var (
 	file_hash                 map[string]map[string][]string
 	pp                        *Function_pointer
-	identity_function_pointer *Function_pointer = &Function_pointer{identity_function, false, "", nil, nil, nil, false, 0, 0, nil, false}
+	identity_function_pointer *Function_pointer = &Function_pointer{
+		Fun_ptr: identity_function,
+	}
 )
 
 // initialize_masquerade initializes file_hash for masquerade configuration.
@@ -45,7 +47,9 @@ func load_file_content(filename string) map[string]string {
 	var eof bool
 	var line int
 	for !eof {
-		Read_data(fileBuffer, data, &eof, &line)
+		if ok := Read_data(fileBuffer, data, &eof, &line); !ok {
+			break
+		}
 	}
 	return file_content
 }

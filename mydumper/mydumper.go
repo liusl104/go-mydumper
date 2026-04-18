@@ -94,14 +94,6 @@ func CommandDump() {
 				ExecPerThreadExtension = ZSTD_EXTENSION
 			}
 		}
-		/*
-			No need for command-line compression here; use third-party built-in package.
-			exec_per_thread_cmd=g_strsplit(exec_per_thread, " ", 0);
-			gchar *tmpcmd=g_find_program_in_path(exec_per_thread_cmd[0]);
-			if (!tmpcmd)
-			  m_critical("%s was not found in PATH, use --exec-per-thread for non default locations",exec_per_thread_cmd[0]);
-			exec_per_thread_cmd[0]=tmpcmd;
-		*/
 	}
 	Initialize_set_names()
 	if Debug {
@@ -176,7 +168,7 @@ func print_help() {
 	Print_string("pmm-path", PmmPath)
 	Print_string("pmm-resolution", PmmResolution)
 	Print_uint("exec-threads", Num_exec_threads)
-	Print_string("exec", exec_command)
+	Print_string("exec", Exec_command)
 	Print_string("exec-per-thread", Exec_per_thread)
 	Print_string("exec-per-thread-extension", ExecPerThreadExtension)
 	Print_int("long-query-retries", LongqueryRetries)

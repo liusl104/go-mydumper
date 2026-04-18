@@ -75,6 +75,9 @@ func Eval_regex(_database_name string, _table_name string) bool {
 		var r bool
 		for _, l := range re_list {
 			r = check_regex(l, _database_name, _table_name)
+			if r {
+				return true
+			}
 		}
 		return r
 	}

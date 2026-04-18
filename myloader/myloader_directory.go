@@ -2,10 +2,11 @@ package myloader
 
 import (
 	"bufio"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"strings"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (

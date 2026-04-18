@@ -8,19 +8,19 @@ import (
 )
 
 var (
-	innodb_optimize_keys_all_tables_queue *GAsyncQueue
-	index_threads                         []*GThread
-	index_td                              []*thread_data
-	init_connection_mutex                 *sync.Mutex
+	optimize_keys_all_tables_queue *GAsyncQueue
+	index_threads                  []*GThread
+	index_td                       []*thread_data
+	init_connection_mutex          *sync.Mutex
 )
 
-// initialize_worker_index creates MaxThreadsForIndexCreation index worker threads (worker_index_thread) and innodb_optimize_keys_all_tables_queue.
+// initialize_worker_index creates MaxThreadsForIndexCreation index worker threads (worker_index_thread) and optimize_keys_all_tables_queue.
 func initialize_worker_index(conf *configuration) {
 	var n uint = 0
 	init_connection_mutex = G_mutex_new()
 	index_threads = make([]*GThread, MaxThreadsForIndexCreation)
 	index_td = make([]*thread_data, MaxThreadsForIndexCreation)
-	innodb_optimize_keys_all_tables_queue = G_async_queue_new("innodb_optimize_keys_all_tables_queue")
+	optimize_keys_all_tables_queue = G_async_queue_new("optimize_keys_all_tables_queue")
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
 		index_td[n] = new(thread_data)
 		initialize_thread_data(index_td[n], conf, WAITING, n+1+NumThreads+MaxThreadsForSchemaCreation, nil)
@@ -56,7 +56,7 @@ func worker_index_thread(c any) {
 	init_connection_mutex.Unlock()
 	G_async_queue_push(cnf.ready, 1)
 	if optimize_keys_all_tables {
-		G_async_queue_pop(innodb_optimize_keys_all_tables_queue)
+		G_async_queue_pop(optimize_keys_all_tables_queue)
 	}
 	log.Debugf("I-Thread %d: Starting import", td.thread_id)
 	var cont = true
@@ -85,12 +85,12 @@ func wait_index_worker_to_finish() {
 	}
 }
 
-// start_optimize_keys_all_tables pushes one item to innodb_optimize_keys_all_tables_queue per index thread (unblocks them).
+// start_optimize_keys_all_tables pushes one item to optimize_keys_all_tables_queue per index thread (unblocks them).
 func start_optimize_keys_all_tables() {
 	var n uint
 	log.Debugf("optimize_keys_all_tables_queue <- 1 (%d times)", MaxThreadsForIndexCreation)
 	for n = 0; n < MaxThreadsForIndexCreation; n++ {
-		G_async_queue_push(innodb_optimize_keys_all_tables_queue, 1)
+		G_async_queue_push(optimize_keys_all_tables_queue, 1)
 	}
 }
 

@@ -56,7 +56,6 @@ var (
 	pmmthread                          *GThread
 	ready_table_dump_mutex             *sync.Mutex
 	replica_stopped                    bool
-	exec_command                       string
 	initial_source_log                 string
 	initial_source_pos                 string
 	initial_source_gtid                string
@@ -1231,7 +1230,7 @@ func StartDump(conf *Configuration) error {
 	mdfile.Sync()
 
 	if Stream != "" {
-		if exec_command != "" {
+		if Exec_command != "" {
 			log.Errorf("--exec and --stream are not comptabile, use --exec-per-thread instead as file extension is needed to stream the out file")
 		}
 		initialize_stream()
@@ -1243,8 +1242,8 @@ func StartDump(conf *Configuration) error {
 			log.Criticalf("Couldn't create metadata file %s (%v)", metadata_partial_filename, err)
 		}
 	}
-	// Initilizing exec_command
-	if exec_command != "" {
+	// Initializing exec command
+	if Exec_command != "" {
 		initialize_exec_command()
 	}
 	// Write replica information
@@ -1568,7 +1567,7 @@ func StartDump(conf *Configuration) error {
 	}
 	if Stream != "" {
 		stream_queue_push(nil, metadata_filename)
-		if exec_command != "" {
+		if Exec_command != "" {
 			wait_exec_command_to_finish()
 		} else {
 			stream_queue_push(nil, "")

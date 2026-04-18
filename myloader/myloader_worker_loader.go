@@ -2,10 +2,11 @@ package myloader
 
 import (
 	"fmt"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 const (
@@ -61,7 +62,7 @@ func process_loader_thread(td *thread_data) {
 			cont = false
 			break
 		case IGNORED:
-			time.Sleep(1000 * time.Millisecond)
+			time.Sleep(1000 * time.Microsecond)
 			break
 		default:
 			break

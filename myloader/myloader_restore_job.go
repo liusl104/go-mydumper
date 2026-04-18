@@ -348,7 +348,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 		break
 	case JOB_RESTORE_SCHEMA_FILENAME:
 		if SourceDb == "" || strings.Compare(rj.data.srj.database.name, SourceDb) == 0 {
-			if strings.EqualFold(rj.data.srj.object, VIEW) || !NoSchemas {
+			if !strings.EqualFold(rj.data.srj.object, VIEW) || !NoSchemas {
 				get_total_done(td.conf, &total)
 				log.Infof("Thread %d: restoring %s on `%s` from %s. Tables %d of %d completed", td.thread_id, rj.data.srj.object,
 					rj.data.srj.database.real_database, rj.filename, total, len(td.conf.table_hash))

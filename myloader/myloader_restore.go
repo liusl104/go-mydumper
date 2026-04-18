@@ -449,8 +449,8 @@ func new_statement() *statement {
 	return stmt
 }
 
-// assing_statement fills the statement with buffer, preline, is_schema, kind_of_statement, dbt, and td.
-func assing_statement(ir *statement, td *thread_data, dbt *db_table, stmt string, preline uint, is_schema bool, kind_of_statement kind_of_statement) {
+// assign_statement fills the statement with buffer, preline, is_schema, kind_of_statement, dbt, and td.
+func assign_statement(ir *statement, td *thread_data, dbt *db_table, stmt string, preline uint, is_schema bool, kind_of_statement kind_of_statement) {
 	initialize_statement(ir)
 	ir.buffer = G_string_new(stmt)
 	ir.preline = preline
@@ -528,7 +528,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 								G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
 							}
 						}
-						assing_statement(ir, data.Str.String(), preline, false, INSERT)
+						assign_statement(ir, data.Str.String(), preline, false, INSERT)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_vstatement(cd.queue.restore, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -549,7 +549,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 						if is_fifo {
 							_ = new_data
 						}
-						assing_statement(ir, data.Str.String(), preline, false, OTHER)
+						assign_statement(ir, data.Str.String(), preline, false, OTHER)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -571,7 +571,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 						} else {
 							header = nil
 						}
-						assing_statement(ir, data.Str.String(), preline, false, OTHER)
+						assign_statement(ir, data.Str.String(), preline, false, OTHER)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -609,7 +609,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 	}
 */
 
-// restore_data_from_mysqldump_file opens the file, reads statements (DELIMITER-aware), and sends them to a restore thread via assing_statement and process_result_statement.
+// restore_data_from_mysqldump_file opens the file, reads statements (DELIMITER-aware), and sends them to a restore thread via assign_statement and process_result_statement.
 func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
 	var infile *osFile
 	var eof bool
@@ -644,7 +644,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)
 				}
-				assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+				assign_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
 				G_async_queue_push(cd.queue.restore, ir)
 				ir = nil
 				process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -723,7 +723,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 							G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
 						}
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -766,7 +766,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 							release_load_data_as_it_is_close(load_data_fifo_filename)
 						}
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, OTHER)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, false, OTHER)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -793,7 +793,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 					} else {
 						header = nil
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -843,7 +843,7 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 		var line []string = strings.Split(data.Str.String(), ";\n")
 		for i = 0; i < len(line); i++ {
 			if len(line[i]) > 2 {
-				assing_statement(ir, td, td.dbt, line[i], 0, is_schema, OTHER)
+				assign_statement(ir, td, td.dbt, line[i], 0, is_schema, OTHER)
 				if ir.err != "" {
 					ir.err = ""
 				}

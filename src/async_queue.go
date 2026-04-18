@@ -27,14 +27,16 @@ func (a *GAsyncQueue) push(task any) {
 	atomic.AddInt64(&a.length, 1)
 }
 
-// try_pop removes and returns one item if length > 0; otherwise returns nil without blocking.
+// try_pop removes and returns one item if the channel has a value; otherwise returns nil without blocking.
+// Do not use atomic length for emptiness (it can race with pop/push and falsely show empty or non-empty).
 func (a *GAsyncQueue) try_pop() any {
-	if a.length <= 0 {
+	select {
+	case task := <-a.queue:
+		atomic.AddInt64(&a.length, -1)
+		return task
+	default:
 		return nil
 	}
-	task := <-a.queue
-	atomic.AddInt64(&a.length, -1)
-	return task
 }
 
 // G_async_queue_timeout_pop pops an item from the queue or returns nil after timeout microseconds.
@@ -47,6 +49,7 @@ func (a *GAsyncQueue) timeout_pop(timeout uint64) any {
 	for {
 		select {
 		case task := <-a.queue:
+			atomic.AddInt64(&a.length, -1)
 			return task
 		case <-time.After(time.Duration(timeout) * time.Microsecond):
 			return nil
@@ -60,16 +63,13 @@ func G_async_queue_unref(a *GAsyncQueue) {
 	a.unref()
 }
 
-// unref drains the queue by popping until empty.
+// unref drains the queue by receiving until the channel is empty.
 func (a *GAsyncQueue) unref() {
-	for {
-		if a.length > 0 {
-			a.pop()
-		} else {
-			break
-		}
-
+	for len(a.queue) > 0 {
+		<-a.queue
+		atomic.AddInt64(&a.length, -1)
 	}
+	atomic.StoreInt64(&a.length, 0)
 }
 
 // G_async_queue_new creates a new async queue with capacity BufferSize. name is used for debug/tracing.
@@ -103,7 +103,9 @@ func G_async_queue_pop(a *GAsyncQueue) any {
 
 }
 
-// G_async_queue_length returns the current number of items in the queue (may be stale due to concurrency).
+// G_async_queue_length returns the number of buffered items in the channel (same as len(chan) for buffered queues).
+// Using the atomic length field was unsafe: G_async_queue_pop decrements length after receive, so another goroutine
+// could observe length>0 while the channel was already drained and trip false G_asserts in myloader.
 func G_async_queue_length(a *GAsyncQueue) int64 {
-	return a.length
+	return int64(len(a.queue))
 }

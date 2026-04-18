@@ -18,22 +18,47 @@ type GString struct {
 	Len int
 }
 
-// G_file_test returns true if the given path exists (file or directory).
-func G_file_test(filename string) bool {
-	_, err := os.Stat(filename)
-	if err == nil {
+type GFileTest int
+
+const (
+	G_FILE_TEST_EXISTS     GFileTest = 1 << 0
+	G_FILE_TEST_IS_REGULAR GFileTest = 1 << 1
+	G_FILE_TEST_IS_DIR     GFileTest = 1 << 2
+	G_FILE_TEST_IS_SYMLINK GFileTest = 1 << 3
+)
+
+// G_file_test returns true if the given path satisfies the test flags. Default (no flags) checks existence.
+func G_file_test(filename string, flags ...GFileTest) bool {
+	info, err := os.Lstat(filename)
+	if err != nil {
+		return false
+	}
+	if len(flags) == 0 {
+		return true
+	}
+	flag := flags[0]
+	if flag&G_FILE_TEST_IS_SYMLINK != 0 && info.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	info, err = os.Stat(filename)
+	if err != nil {
+		return false
+	}
+	if flag&G_FILE_TEST_IS_DIR != 0 && info.IsDir() {
+		return true
+	}
+	if flag&G_FILE_TEST_IS_REGULAR != 0 && info.Mode().IsRegular() {
+		return true
+	}
+	if flag&G_FILE_TEST_EXISTS != 0 {
 		return true
 	}
 	return false
 }
 
-// g_atomic_int_dec_and_test decrements *a atomically and returns true if the result is <= 0.
+// g_atomic_int_dec_and_test decrements *a atomically and returns true if the result is 0.
 func g_atomic_int_dec_and_test(a *int64) bool {
-	atomic.AddInt64(a, -1)
-	if *a <= 0 {
-		return true
-	}
-	return false
+	return atomic.AddInt64(a, -1) == 0
 }
 
 // G_string_append_printf appends a formatted string to s and updates s.Len.
@@ -62,15 +87,11 @@ func G_string_append_b(s *GString, b []byte) {
 
 // G_string_set_size resets s and optionally grows capacity to size (or clears if size is 0).
 func G_string_set_size(s *GString, size int) {
-
-	if size == 0 {
-		s.Str.Reset()
-		s.Len = 0
-		return
-	}
 	s.Str.Reset()
-	s.Str.Grow(size)
-	s.Len = size
+	if size > 0 {
+		s.Str.Grow(size)
+	}
+	s.Len = 0
 }
 
 // G_string_assign replaces s contents with str and updates s.Len.
@@ -118,9 +139,10 @@ func G_key_file_get_value(kf *ini.File, group string, key string) string {
 	return kf.Section(group).Key(key).String()
 }
 
-// G_ascii_strtoull parses s as a decimal int; returns 0 on error.
-func G_ascii_strtoull(s string) int {
-	r, err := strconv.Atoi(s)
+// G_ascii_strtoull parses s as an unsigned 64-bit decimal integer; returns 0 on error.
+func G_ascii_strtoull(s string) uint64 {
+	s = strings.TrimSpace(s)
+	r, err := strconv.ParseUint(s, 10, 64)
 	if err != nil {
 		return 0
 	}
@@ -149,9 +171,13 @@ func G_rec_mutex_new() *sync.Mutex {
 	return new(sync.Mutex)
 }
 
-// G_string_replace replaces all occurrences of old with new in str and updates str.Len.
-func G_string_replace(str *GString, old, new string) {
-	t := strings.Replace(str.Str.String(), old, new, -1)
+// G_string_replace replaces occurrences of old with new in str; limit=0 means all.
+func G_string_replace(str *GString, old, new string, limit ...int) {
+	n := -1
+	if len(limit) > 0 && limit[0] > 0 {
+		n = limit[0]
+	}
+	t := strings.Replace(str.Str.String(), old, new, n)
 	str.Str.Reset()
 	str.Str.WriteString(t)
 	str.Len = str.Str.Len()
@@ -207,12 +233,7 @@ func G_hash_table_unref(h any) {
 
 // G_atomic_int_dec_and_test decrements *a atomically and returns true if the result is 0.
 func G_atomic_int_dec_and_test(a *int64) bool {
-	atomic.AddInt64(a, -1)
-	if *a == 0 {
-		return true
-	}
-	return false
-
+	return atomic.AddInt64(a, -1) == 0
 }
 
 // G_assert panics with "Assertion failed" if r is false.
