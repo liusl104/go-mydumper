@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"bufio"
 	"os"
 
 	. "github.com/liusl104/go-mydumper/src"
@@ -41,8 +40,7 @@ func load_file_content(filename string) map[string]string {
 		log.Criticalf("Couldn't open %s (%v)", filename, err)
 		return file_content
 	}
-	var fileBuffer *bufio.Scanner
-	fileBuffer = bufio.NewScanner(file)
+	fileBuffer := NewMyDumperReader(file)
 	var data = G_string_sized_new(256)
 	var eof bool
 	var line int

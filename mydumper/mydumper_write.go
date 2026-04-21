@@ -886,6 +886,7 @@ func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job
 			update_dbt_rows(dbt, &num_rows)
 			tj.num_rows_of_last_run += num_rows
 			num_rows = 0
+			num_rows_st = 0
 			tj.st_in_file++
 			if output_format == SQL_INSERT || output_format == CLICKHOUSE {
 				G_string_append(tj.td.thread_data_buffers.statement, dbt.insert_statement.Str.String())

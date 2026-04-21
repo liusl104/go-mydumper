@@ -3,6 +3,7 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -879,18 +880,24 @@ func Filter_sequence_schemas(create_table string) string {
 	return create_table
 }
 
-// Read_data reads one line from infile into data, increments *line, sets *eof on scan error or EOF.
-func Read_data(infile *bufio.Scanner, data *GString, eof *bool, line *int) bool {
-	if !infile.Scan() {
-		*eof = true
-		return true
+// NewMyDumperReader creates a *bufio.Reader with 4KB initial buffer (matching C's 4096-byte fgets buffer).
+// bufio.Reader grows internally as needed with no upper limit, avoiding the 64KB cap of bufio.Scanner.
+func NewMyDumperReader(r io.Reader) *bufio.Reader {
+	return bufio.NewReaderSize(r, 4096)
+}
+
+// Read_data reads one line from infile into data, increments *line, sets *eof on EOF/error.
+// Mirrors C read_data() which uses fgets in a loop with dynamic GString append.
+func Read_data(infile *bufio.Reader, data *GString, eof *bool, line *int) bool {
+	lineBytes, err := infile.ReadBytes('\n')
+	if len(lineBytes) > 0 {
+		G_string_append_b(data, lineBytes)
+		if lineBytes[len(lineBytes)-1] == '\n' {
+			*line++
+		}
 	}
-	G_string_append_b(data, infile.Bytes())
-	G_string_append_c(data, '\n')
-	*line++
-	if infile.Err() != nil {
+	if err != nil {
 		*eof = true
-		return true
 	}
 	return true
 }

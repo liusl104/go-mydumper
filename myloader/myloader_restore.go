@@ -1,7 +1,6 @@
 package myloader
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path"
@@ -507,7 +506,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 		var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 		var results_added bool
 		var header *GString = G_string_new("")
-		var inBufio *bufio.Scanner = bufio.NewScanner(infile.file)
+		var inBufio = NewMyDumperReader(infile.file)
 		for eof == false {
 			if Read_data(inBufio, data, &eof, &line) {
 				var length int
@@ -632,7 +631,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var delimiter = DEFAULT_DELIMITER
-	infile_buffer := bufio.NewScanner(infile.file)
+	infile_buffer := NewMyDumperReader(infile.file)
 	for eof == false {
 		if Read_data(infile_buffer, data, &eof, &line) {
 			if strings.HasPrefix(data.Str.String(), "DELIMITER") {
@@ -705,7 +704,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var header *GString = G_string_sized_new(256)
-	var inBuffon *bufio.Scanner = bufio.NewScanner(infile.file)
+	var inBuffon = NewMyDumperReader(infile.file)
 	for eof == false {
 		if Read_data(inBuffon, data, &eof, &line) {
 			if strings.HasSuffix(data.Str.String(), ";\n") {
