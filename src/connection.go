@@ -289,6 +289,15 @@ func mysql_real_connect(conn *DBConnection, hostname string, username string, pa
 		log.Errorf("Failed to build DSN: %v", conn.Err)
 		return false
 	}
+	// Close any existing connection to prevent sql.DB leak on reconnect
+	if conn.Rows != nil {
+		_ = conn.Rows.Close()
+		conn.Rows = nil
+	}
+	if conn.Conn != nil {
+		_ = conn.Conn.Close()
+		conn.Conn = nil
+	}
 	// Open database connection
 	conn.Conn, conn.Err = sql.Open("mysql", dsn)
 	if conn.Err != nil {

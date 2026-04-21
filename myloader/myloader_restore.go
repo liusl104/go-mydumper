@@ -69,7 +69,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 		M_connect(cd.thrconn)
 	}
 	cd.current_database = nil
-	cd.thread_id = Mysql_thread_id(cd.thrconn)
+	cd.connection_id = int(Mysql_thread_id(cd.thrconn))
 	cd.ready = G_async_queue_new("connection_data.ready")
 	cd.queue = nil
 	cd.in_use = G_mutex_new()
@@ -303,7 +303,7 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 			}
 			transaction_size += uint64(new_insert.Len)
 			tr = restore_data_in_gstring_by_statement(cd, new_insert, false, query_counter)
-			time.Sleep(time.Duration(Throttle_time) * time.Millisecond)
+			time.Sleep(time.Duration(Throttle_time) * time.Microsecond)
 			dbt.mutex.Lock()
 			dbt.rows_inserted += current_rows
 			dbt.mutex.Unlock()
@@ -640,7 +640,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 				delimiter = data.Str.String()[10:]
 				preline = uint(line) + 1
 				G_string_set_size(data, 0)
-			} else if strings.HasPrefix(data.Str.String(), delimiter) {
+			} else if strings.HasSuffix(data.Str.String(), delimiter) {
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)
 				}

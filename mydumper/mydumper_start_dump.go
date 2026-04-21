@@ -557,15 +557,19 @@ func sig_triggered(user_data any, signal os.Signal) bool {
 	return false
 }
 
-// signal_thread runs the signal handler; waits for SIGINT/SIGTERM then calls sig_triggered.
+// signal_thread loops waiting for SIGINT/SIGTERM, calling sig_triggered on each
+// delivery. Like the C version, if the user answers "N" at the prompt,
+// sig_triggered returns true and we re-arm for the next signal.
 func signal_thread(c any) {
 	conf := c.(*Configuration)
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, os.Kill)
-	sig := <-signalChan
-	sig_triggered(conf, sig)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	for sig := range signalChan {
+		if !sig_triggered(conf, sig) {
+			break
+		}
+	}
 	log.Infof("Ending signal thread")
-	return
 }
 
 // initialize_sql_mode normalizes Sql_mode (removes ORACLE) and stores it in set_session_hash["SQL_MODE"].
@@ -854,14 +858,13 @@ try_FLUSH_TABLES_WITH_READ_LOCK:
 
 // initialize_tidb_snapshot sets TidbSnapshot from binary log status if not set, then sets @@tidb_snapshot on the connection.
 func initialize_tidb_snapshot(conn *DBConnection) {
-	if TidbSnapshot != "" {
-		// Generate a @@tidb_snapshot to use for the worker threads since
-		// the tidb-snapshot argument was not specified when starting mydumper
+	if TidbSnapshot == "" {
 		var mr *M_ROW = M_store_result_row(conn, Show_binary_log_status, M_critical, M_warning, "Couldn't generate @@tidb_snapshot")
-		TidbSnapshot = string(mr.Row[1].AsString())
+		if mr.Res != nil && mr.Row != nil {
+			TidbSnapshot = string(mr.Row[1].AsString())
+		}
 		M_store_result_row_free(mr)
 	}
-	// Need to set the @@tidb_snapshot for the master thread
 	set_tidb_snapshot(conn)
 	log.Infof("Set to tidb_snapshot '%s'", TidbSnapshot)
 }
@@ -1146,6 +1149,7 @@ func StartDump(conf *Configuration) error {
 		clear_dump_directory(dump_directory)
 	} else if !(DirtyDumpDir || MergeDumpDir) && !is_empty_dir(dump_directory) {
 		log.Errorf("Directory is not empty (use --clear, --dirty or --merge): %s", dump_directory)
+		return fmt.Errorf("Directory is not empty (use --clear, --dirty or --merge): %s", dump_directory)
 	}
 
 	Check_num_threads()

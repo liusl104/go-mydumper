@@ -368,16 +368,14 @@ func eval_table(db_name string, table_name string, mutex *sync.Mutex) bool {
 	return Eval_regex(db_name, table_name)
 }
 
-// execute_use runs USE `current_database` on the connection; returns true on failure (C convention).
+// execute_use runs USE `current_database` on the connection; returns true on failure.
+// M_query_warning returns true on error (same convention as C m_query_warning).
 func execute_use(cd *connection_data) bool {
 	if cd.current_database != nil {
 		var query = fmt.Sprintf("USE `%s`", cd.current_database.real_database)
-		// Go M_query_warning returns true on success, false on failure (opposite of C)
-		// Invert here to match C: success returns false, failure returns true
 		if M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
 			return true
 		}
-
 	} else {
 		log.Warnf("Thread %d with connection %d: Not able to switch database", cd.thread_id, cd.connection_id)
 	}

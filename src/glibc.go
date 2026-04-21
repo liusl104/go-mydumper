@@ -27,7 +27,8 @@ const (
 	G_FILE_TEST_IS_SYMLINK GFileTest = 1 << 3
 )
 
-// G_file_test returns true if the given path satisfies the test flags. Default (no flags) checks existence.
+// G_file_test returns true if the given path satisfies any of the test flags
+// (like C g_file_test which ORs all flags). Default (no flags) checks existence.
 func G_file_test(filename string, flags ...GFileTest) bool {
 	info, err := os.Lstat(filename)
 	if err != nil {
@@ -36,7 +37,10 @@ func G_file_test(filename string, flags ...GFileTest) bool {
 	if len(flags) == 0 {
 		return true
 	}
-	flag := flags[0]
+	var flag GFileTest
+	for _, f := range flags {
+		flag |= f
+	}
 	if flag&G_FILE_TEST_IS_SYMLINK != 0 && info.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
@@ -166,7 +170,9 @@ func g_get_num_processors() uint {
 	return uint(runtime.NumCPU())
 }
 
-// G_rec_mutex_new creates a new mutex (used as recursive mutex in this codebase).
+// G_rec_mutex_new creates a new mutex. NOTE: unlike C GRecMutex, Go sync.Mutex
+// is NOT recursive — re-locking from the same goroutine will deadlock.
+// Current usage (ready_table_dump_mutex) does not re-enter, so this is safe.
 func G_rec_mutex_new() *sync.Mutex {
 	return new(sync.Mutex)
 }

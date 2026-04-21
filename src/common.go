@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1114,6 +1115,7 @@ func Discard_mysql_output(conn *DBConnection) {
 }
 
 // m_log logs msg (formatted with args) via log_fun_1 or log_fun_2 if the error is in IgnoreErrorsList.
+// Like C, does not increment Errors when log_fun_1 is M_message (info-only logging).
 func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) {
 	if msg != "" && log_fun_1 != nil {
 		var c = fmt.Sprintf(msg, args...)
@@ -1122,7 +1124,9 @@ func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 f
 		} else {
 			if Mysql_errno(conn) != 0 {
 				log_fun_1("%s - ERROR %d: %s", c, Mysql_errno(conn), Mysql_error(conn))
-				Errors++
+				if reflect.ValueOf(log_fun_1).Pointer() != reflect.ValueOf(M_message).Pointer() {
+					Errors++
+				}
 			} else {
 				log_fun_1("%s", c)
 			}

@@ -2,13 +2,14 @@ package mydumper
 
 import (
 	"fmt"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
-	"github.com/spf13/pflag"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -115,20 +116,20 @@ func CommandDump() {
 		dump_directory = output_directory
 		var conf = Configuration{}
 		Start_pmm_thread(&conf)
-		StartDump(&conf)
+		err := StartDump(&conf)
+		if err != nil {
+			os.Exit(EXIT_FAILURE)
+		}
 	}
 
-	defer func() {
-		if LogFile != "" {
-			_ = Log_output.Close()
-		}
-	}()
-	if Errors == 0 {
-		log.Debugf("dump completed successfully")
-	} else {
-		log.Debugf("dump completed with %d Errors", Errors)
+	if LogFile != "" {
+		_ = Log_output.Close()
 	}
-	return
+	if Errors > 0 {
+		log.Debugf("dump completed with %d Errors", Errors)
+		os.Exit(EXIT_FAILURE)
+	}
+	log.Debugf("dump completed successfully")
 }
 
 // print_help prints mydumper usage, pflag defaults, and all option values then exits successfully.
