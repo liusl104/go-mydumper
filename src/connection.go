@@ -130,7 +130,7 @@ func configure_connection(conn *DBConnection) {
 		Hostname = os.Getenv("MYSQL_HOST")
 	}
 	if Port == 0 {
-		Port, _ = strconv.Atoi(os.Getenv("MYSQL_PORT"))
+		Port, _ = strconv.Atoi(os.Getenv("MYSQL_TCP_PORT"))
 	}
 }
 
@@ -217,7 +217,7 @@ func buildDSN(hostname string, username string, password string, db string, port
 		}
 		cnf.Addr = fmt.Sprintf("%s:%d", hostname, port)
 	}
-
+	cnf.Params = map[string]string{"charset": "utf8mb4"}
 	// SSL/TLS configuration
 	useSSL := Ssl || (Ssl_mode != "" && strings.ToUpper(Ssl_mode) != "DISABLED")
 	if useSSL {
@@ -288,6 +288,15 @@ func mysql_real_connect(conn *DBConnection, hostname string, username string, pa
 	if conn.Err != nil {
 		log.Errorf("Failed to build DSN: %v", conn.Err)
 		return false
+	}
+	// Close any existing connection to prevent sql.DB leak on reconnect
+	if conn.Rows != nil {
+		_ = conn.Rows.Close()
+		conn.Rows = nil
+	}
+	if conn.Conn != nil {
+		_ = conn.Conn.Close()
+		conn.Conn = nil
 	}
 	// Open database connection
 	conn.Conn, conn.Err = sql.Open("mysql", dsn)

@@ -716,7 +716,11 @@ func process_queue(queue *GAsyncQueue, td *thread_data, do_builder bool, chunk_s
 		if chunk_step_queue != nil {
 			G_async_queue_push(chunk_step_queue, 1)
 		}
-		j = G_async_queue_pop(queue).(*job)
+		val := G_async_queue_pop(queue)
+		if val == nil {
+			return
+		}
+		j = val.(*job)
 		if shutdown_triggered && j.types != JOB_SHUTDOWN {
 			log.Infof("Thread %d: Process has been cacelled", td.thread_id)
 			return
@@ -1004,7 +1008,7 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 		var dump = true
 		var is_view = false
 		var is_sequence = false
-		if (Is_mysql_like() || Detected_server == SERVER_TYPE_TIDB) && (row[ccol].Value() == nil || string(row[ccol].AsString()) == "VIEW") {
+		if (Is_mysql_like() || Detected_server == SERVER_TYPE_TIDB) && row[ecol].Value() == nil && (row[ccol].Value() == nil || string(row[ccol].AsString()) == "VIEW") {
 			is_view = true
 		}
 		if Detected_server == SERVER_TYPE_MARIADB && string(row[ccol].AsString()) == "SEQUENCE" {
@@ -1019,7 +1023,7 @@ func dump_database_thread(conn *DBConnection, conf *Configuration, database *dat
 		}
 		if dump && len(ignore_engines) > 0 && !is_view && !is_sequence {
 			for i = 0; i < len(ignore_engines); i++ {
-				if strings.Compare(ignore_engines[i], string(row[ecol].AsString())) == 0 {
+				if strings.EqualFold(ignore_engines[i], string(row[ecol].AsString())) {
 					dump = false
 					break
 				}

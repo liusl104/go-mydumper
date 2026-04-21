@@ -79,7 +79,7 @@ func process_schema(td *thread_data) bool {
 		break
 	case CJT_RESUME:
 		cjt_resume()
-		fallthrough // Fall through to SCHEMA_TABLE to pop JOB_SHUTDOWN from table_queue and exit (consistent with C)
+		fallthrough
 	case SCHEMA_TABLE, SCHEMA_SEQUENCE:
 		var qname string
 		job = G_async_queue_pop(td.conf.table_queue).(*control_job)

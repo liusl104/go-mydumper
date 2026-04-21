@@ -331,6 +331,9 @@ func show_dbt(key any, dbt any, total any) {
 func create_database(td *thread_data, database string) {
 	var filename = fmt.Sprintf("%s-schema-create.sql%s", database, ExecPerThreadExtension)
 	var filepath = fmt.Sprintf("%s/%s-schema-create.sql%s", directory, database, ExecPerThreadExtension)
+	if DropDatabase {
+		execute_drop_database(td, database)
+	}
 	if G_file_test(filepath) {
 		atomic.AddUint64(&detailed_errors.schema_errors, uint64(restore_data_from_file(td, filename, true, nil)))
 	} else {
@@ -346,19 +349,42 @@ func create_database(td *thread_data, database string) {
 
 // print_errors logs a summary of detailed_errors (tablespace, schema, data, view, sequence, index, trigger, constraint, post, warnings, retries).
 func print_errors() {
-	log.Infof("Errors found:")
-	log.Infof("- Tablespace: %d", detailed_errors.tablespace_errors)
-	log.Infof("- Schema:     %d", detailed_errors.schema_errors)
-	log.Infof("- Data:       %d", detailed_errors.data_errors)
-	log.Infof("- View:       %d", detailed_errors.view_errors)
-	log.Infof("- Sequence:   %d", detailed_errors.sequence_errors)
-	log.Infof("- Index:      %d", detailed_errors.index_errors)
-	log.Infof("- Trigger:    %d", detailed_errors.trigger_errors)
-	log.Infof("- Constraint: %d", detailed_errors.constraints_errors)
-	log.Infof("- Post:       %d", detailed_errors.post_errors)
-	log.Infof("Warnings found:")
-	log.Infof("- Data:       %d", detailed_errors.data_warnings)
-	log.Infof("Retries:      %d", detailed_errors.retries)
+	if detailed_errors.tablespace_errors == 0 &&
+		detailed_errors.schema_errors == 0 &&
+		detailed_errors.data_errors == 0 &&
+		detailed_errors.view_errors == 0 &&
+		detailed_errors.sequence_errors == 0 &&
+		detailed_errors.index_errors == 0 &&
+		detailed_errors.trigger_errors == 0 &&
+		detailed_errors.constraints_errors == 0 &&
+		detailed_errors.post_errors == 0 &&
+		detailed_errors.retries == 0 {
+		return
+	}
+	log.Infof("Errors found:\n"+
+		"- Tablespace:\t%d\n"+
+		"- Schema:    \t%d\n"+
+		"- Data:      \t%d\n"+
+		"- View:      \t%d\n"+
+		"- Sequence:  \t%d\n"+
+		"- Index:     \t%d\n"+
+		"- Trigger:   \t%d\n"+
+		"- Constraint:\t%d\n"+
+		"- Post:      \t%d\n"+
+		"Warnings found:\n"+
+		"- Data:\t%d\n"+
+		"Retries:\t%d",
+		detailed_errors.tablespace_errors,
+		detailed_errors.schema_errors,
+		detailed_errors.data_errors,
+		detailed_errors.view_errors,
+		detailed_errors.sequence_errors,
+		detailed_errors.index_errors,
+		detailed_errors.trigger_errors,
+		detailed_errors.constraints_errors,
+		detailed_errors.post_errors,
+		detailed_errors.data_warnings,
+		detailed_errors.retries)
 }
 
 // StartLoad is the main entry point: parses flags, initializes directories/queues/workers, runs schema/data/post/index/checksum, then cleans up.
@@ -430,7 +456,7 @@ func StartLoad() {
 	set_global_hash = make(map[string]string)
 	if Key_file != nil {
 		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_global_hash, "myloader_global_variables")
-		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_global_hash, "myloader_session_variables")
+		Load_hash_of_all_variables_perproduct_from_key_file(Key_file, set_session_hash, "myloader_session_variables")
 	}
 	Initialize_conf_per_table(conf_per_table)
 	Load_per_table_info_from_key_file(Key_file, conf_per_table, nil)
@@ -546,19 +572,19 @@ func StartLoad() {
 	var checksum_ok bool = true
 	tl = conf.table_list
 	for _, dbt := range tl {
-		checksum_ok = checksum_dbt(dbt, conn)
+		checksum_ok = checksum_ok && checksum_dbt(dbt, conn)
 	}
 	if checksum_mode != CHECKSUM_SKIP {
 		var d *database
 		for _, d = range db_hash {
 			if d.schema_checksum != "" && !NoSchemas {
-				checksum_ok = checksum_database_template(d.real_database, d.schema_checksum, conn, "Schema create checksum", Checksum_database_defaults)
+				checksum_ok = checksum_ok && checksum_database_template(d.real_database, d.schema_checksum, conn, "Schema create checksum", Checksum_database_defaults)
 			}
 			if d.post_checksum != "" && !SkipPost {
-				checksum_ok = checksum_database_template(d.real_database, d.post_checksum, conn, "Post checksum", Checksum_process_structure)
+				checksum_ok = checksum_ok && checksum_database_template(d.real_database, d.post_checksum, conn, "Post checksum", Checksum_process_structure)
 			}
 			if d.triggers_checksum != "" && !SkipTriggers {
-				checksum_ok = checksum_database_template(d.real_database, d.triggers_checksum, conn, "Triggers checksum", Checksum_trigger_structure_from_database)
+				checksum_ok = checksum_ok && checksum_database_template(d.real_database, d.triggers_checksum, conn, "Triggers checksum", Checksum_trigger_structure_from_database)
 			}
 		}
 	}

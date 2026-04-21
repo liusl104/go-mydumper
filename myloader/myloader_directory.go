@@ -1,11 +1,11 @@
 package myloader
 
 import (
-	"bufio"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
 	"os"
 	"strings"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
@@ -49,7 +49,7 @@ func process_directory(c any) {
 		var data *GString = G_string_sized_new(256)
 		var eof bool
 		var line int
-		reader := bufio.NewScanner(file)
+		reader := NewMyDumperReader(file)
 		Read_data(reader, data, &eof, &line)
 		var split []string
 		for !eof {

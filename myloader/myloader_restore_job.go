@@ -21,7 +21,6 @@ var (
 	progress                     int
 	purge_mode                   purgeMode = FAIL
 	total_data_sql_files         int
-	signal_threads               *sync.WaitGroup
 	pause_mutex_per_thread       []*sync.Mutex
 )
 
@@ -348,7 +347,7 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 		break
 	case JOB_RESTORE_SCHEMA_FILENAME:
 		if SourceDb == "" || strings.Compare(rj.data.srj.database.name, SourceDb) == 0 {
-			if strings.EqualFold(rj.data.srj.object, VIEW) || !NoSchemas {
+			if !strings.EqualFold(rj.data.srj.object, VIEW) || !NoSchemas {
 				get_total_done(td.conf, &total)
 				log.Infof("Thread %d: restoring %s on `%s` from %s. Tables %d of %d completed", td.thread_id, rj.data.srj.object,
 					rj.data.srj.database.real_database, rj.filename, total, len(td.conf.table_hash))
@@ -385,14 +384,17 @@ func process_restore_job(td *thread_data, rj *restore_job) bool {
 	return false
 }
 
-// signal_thread waits for SIGINT/SIGTERM, calls sig_triggered, then signals completion via signal_threads.Done().
+// signal_thread loops waiting for SIGINT/SIGTERM, calling sig_triggered on each
+// delivery. Like the C version, if the user answers "N" at the prompt,
+// the handler returns true and we re-arm for the next signal.
 func signal_thread(data any) {
-	defer signal_threads.Done()
-
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM, os.Kill)
-	sig := <-signalChan
-	sig_triggered(data, sig)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	for sig := range signalChan {
+		if !sig_triggered(data, sig) {
+			break
+		}
+	}
 	log.Infof("Ending signal thread")
 }
 

@@ -1,7 +1,6 @@
 package myloader
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path"
@@ -69,7 +68,7 @@ func new_connection_data(thrconn *DBConnection) *connection_data {
 		M_connect(cd.thrconn)
 	}
 	cd.current_database = nil
-	cd.thread_id = Mysql_thread_id(cd.thrconn)
+	cd.connection_id = int(Mysql_thread_id(cd.thrconn))
 	cd.ready = G_async_queue_new("connection_data.ready")
 	cd.queue = nil
 	cd.in_use = G_mutex_new()
@@ -303,7 +302,7 @@ func restore_insert(cd *connection_data, td *thread_data, data *GString, query_c
 			}
 			transaction_size += uint64(new_insert.Len)
 			tr = restore_data_in_gstring_by_statement(cd, new_insert, false, query_counter)
-			time.Sleep(time.Duration(Throttle_time) * time.Millisecond)
+			time.Sleep(time.Duration(Throttle_time) * time.Microsecond)
 			dbt.mutex.Lock()
 			dbt.rows_inserted += current_rows
 			dbt.mutex.Unlock()
@@ -449,8 +448,8 @@ func new_statement() *statement {
 	return stmt
 }
 
-// assing_statement fills the statement with buffer, preline, is_schema, kind_of_statement, dbt, and td.
-func assing_statement(ir *statement, td *thread_data, dbt *db_table, stmt string, preline uint, is_schema bool, kind_of_statement kind_of_statement) {
+// assign_statement fills the statement with buffer, preline, is_schema, kind_of_statement, dbt, and td.
+func assign_statement(ir *statement, td *thread_data, dbt *db_table, stmt string, preline uint, is_schema bool, kind_of_statement kind_of_statement) {
 	initialize_statement(ir)
 	ir.buffer = G_string_new(stmt)
 	ir.preline = preline
@@ -507,7 +506,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 		var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 		var results_added bool
 		var header *GString = G_string_new("")
-		var inBufio *bufio.Scanner = bufio.NewScanner(infile.file)
+		var inBufio = NewMyDumperReader(infile.file)
 		for eof == false {
 			if Read_data(inBufio, data, &eof, &line) {
 				var length int
@@ -528,7 +527,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 								G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
 							}
 						}
-						assing_statement(ir, data.Str.String(), preline, false, INSERT)
+						assign_statement(ir, data.Str.String(), preline, false, INSERT)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_vstatement(cd.queue.restore, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -549,7 +548,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 						if is_fifo {
 							_ = new_data
 						}
-						assing_statement(ir, data.Str.String(), preline, false, OTHER)
+						assign_statement(ir, data.Str.String(), preline, false, OTHER)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -571,7 +570,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 						} else {
 							header = nil
 						}
-						assing_statement(ir, data.Str.String(), preline, false, OTHER)
+						assign_statement(ir, data.Str.String(), preline, false, OTHER)
 						G_async_queue_push(cd.queue.restore, ir)
 						ir = nil
 						process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -609,7 +608,7 @@ func process_result_statement(get_insert_result_queue *GAsyncQueue, ir **stateme
 	}
 */
 
-// restore_data_from_mysqldump_file opens the file, reads statements (DELIMITER-aware), and sends them to a restore thread via assing_statement and process_result_statement.
+// restore_data_from_mysqldump_file opens the file, reads statements (DELIMITER-aware), and sends them to a restore thread via assign_statement and process_result_statement.
 func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schema bool, use_database *database) int {
 	var infile *osFile
 	var eof bool
@@ -632,7 +631,7 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var delimiter = DEFAULT_DELIMITER
-	infile_buffer := bufio.NewScanner(infile.file)
+	infile_buffer := NewMyDumperReader(infile.file)
 	for eof == false {
 		if Read_data(infile_buffer, data, &eof, &line) {
 			if strings.HasPrefix(data.Str.String(), "DELIMITER") {
@@ -640,11 +639,11 @@ func restore_data_from_mysqldump_file(td *thread_data, filename string, is_schem
 				delimiter = data.Str.String()[10:]
 				preline = uint(line) + 1
 				G_string_set_size(data, 0)
-			} else if strings.HasPrefix(data.Str.String(), delimiter) {
+			} else if strings.HasSuffix(data.Str.String(), delimiter) {
 				if SkipDefiner && strings.HasPrefix(data.Str.String(), "CREATE") {
 					Remove_definer(data)
 				}
-				assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+				assign_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
 				G_async_queue_push(cd.queue.restore, ir)
 				ir = nil
 				process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -705,7 +704,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 	var ir *statement = G_async_queue_pop(free_results_queue).(*statement)
 	var results_added bool
 	var header *GString = G_string_sized_new(256)
-	var inBuffon *bufio.Scanner = bufio.NewScanner(infile.file)
+	var inBuffon = NewMyDumperReader(infile.file)
 	for eof == false {
 		if Read_data(inBuffon, data, &eof, &line) {
 			if strings.HasSuffix(data.Str.String(), ";\n") {
@@ -723,7 +722,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 							G_async_queue_push(cd.queue.result, initialize_statement(other_ir))
 						}
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, false, INSERT)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -766,7 +765,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 							release_load_data_as_it_is_close(load_data_fifo_filename)
 						}
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, false, OTHER)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, false, OTHER)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -793,7 +792,7 @@ func restore_data_from_mydumper_file(td *thread_data, filename string, is_schema
 					} else {
 						header = nil
 					}
-					assing_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
+					assign_statement(ir, td, td.dbt, data.Str.String(), preline, is_schema, OTHER)
 					G_async_queue_push(cd.queue.restore, ir)
 					ir = nil
 					process_result_statement(cd.queue.result, &ir, M_critical, "(2)Error occurs processing file %s", filename)
@@ -843,7 +842,7 @@ func restore_data_in_gstring_extended(td *thread_data, data *GString, is_schema 
 		var line []string = strings.Split(data.Str.String(), ";\n")
 		for i = 0; i < len(line); i++ {
 			if len(line[i]) > 2 {
-				assing_statement(ir, td, td.dbt, line[i], 0, is_schema, OTHER)
+				assign_statement(ir, td, td.dbt, line[i], 0, is_schema, OTHER)
 				if ir.err != "" {
 					ir.err = ""
 				}

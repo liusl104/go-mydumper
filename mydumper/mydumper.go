@@ -2,13 +2,14 @@ package mydumper
 
 import (
 	"fmt"
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
-	"github.com/spf13/pflag"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -94,14 +95,6 @@ func CommandDump() {
 				ExecPerThreadExtension = ZSTD_EXTENSION
 			}
 		}
-		/*
-			No need for command-line compression here; use third-party built-in package.
-			exec_per_thread_cmd=g_strsplit(exec_per_thread, " ", 0);
-			gchar *tmpcmd=g_find_program_in_path(exec_per_thread_cmd[0]);
-			if (!tmpcmd)
-			  m_critical("%s was not found in PATH, use --exec-per-thread for non default locations",exec_per_thread_cmd[0]);
-			exec_per_thread_cmd[0]=tmpcmd;
-		*/
 	}
 	Initialize_set_names()
 	if Debug {
@@ -123,20 +116,20 @@ func CommandDump() {
 		dump_directory = output_directory
 		var conf = Configuration{}
 		Start_pmm_thread(&conf)
-		StartDump(&conf)
+		err := StartDump(&conf)
+		if err != nil {
+			os.Exit(EXIT_FAILURE)
+		}
 	}
 
-	defer func() {
-		if LogFile != "" {
-			_ = Log_output.Close()
-		}
-	}()
-	if Errors == 0 {
-		log.Debugf("dump completed successfully")
-	} else {
-		log.Debugf("dump completed with %d Errors", Errors)
+	if LogFile != "" {
+		_ = Log_output.Close()
 	}
-	return
+	if Errors > 0 {
+		log.Debugf("dump completed with %d Errors", Errors)
+		os.Exit(EXIT_FAILURE)
+	}
+	log.Debugf("dump completed successfully")
 }
 
 // print_help prints mydumper usage, pflag defaults, and all option values then exits successfully.
@@ -176,7 +169,7 @@ func print_help() {
 	Print_string("pmm-path", PmmPath)
 	Print_string("pmm-resolution", PmmResolution)
 	Print_uint("exec-threads", Num_exec_threads)
-	Print_string("exec", exec_command)
+	Print_string("exec", Exec_command)
 	Print_string("exec-per-thread", Exec_per_thread)
 	Print_string("exec-per-thread-extension", ExecPerThreadExtension)
 	Print_int("long-query-retries", LongqueryRetries)

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"path"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -187,7 +186,7 @@ func initialize_write() {
 	if FieldsEscapedBy == "" && len(FieldsEscapedBy) > 1 {
 		M_critical("--fields-enclosed-by must be a single character")
 	}
-	max_statement_size_mutex = G_rec_mutex_new()
+	max_statement_size_mutex = G_mutex_new()
 	switch output_format {
 	case CLICKHOUSE, SQL_INSERT:
 		if FieldsEnclosedByLd != "" {
@@ -666,8 +665,15 @@ func write_sql_column_into_string(conn *DBConnection, column FieldValue, field *
 	_ = conn
 	if column.Value() == nil {
 		G_string_append(buffers.column, "NULL")
-	} else if IsNumber(field.DatabaseTypeName()) {
-		G_string_append(buffers.column, strconv.FormatInt(column.AsInt64(), 10))
+	} else if IsNumber(field.DatabaseTypeName()) && IsUnsigned(field.DatabaseTypeName()) {
+		// G_string_append(buffers.column, strconv.FormatUint(column.AsUint64(), 10))
+		G_string_append_b(buffers.column, column.AsString())
+	} else if IsNumber(field.DatabaseTypeName()) && !IsUnsigned(field.DatabaseTypeName()) {
+		// G_string_append(buffers.column, strconv.FormatInt(column.AsInt64(), 10))
+		G_string_append_b(buffers.column, column.AsString())
+	} else if IsFloat(field.DatabaseTypeName()) {
+		G_string_append_b(buffers.column, column.AsString())
+		// G_string_append(buffers.column, strconv.FormatFloat(column.AsFloat64(), 'f', -1, 64))
 	} else if length == 0 {
 		G_string_append(buffers.column, fields_enclosed_by)
 		G_string_append(buffers.column, fields_enclosed_by)
@@ -723,6 +729,7 @@ func write_row_into_string(conn *DBConnection, dbt *db_table, row []FieldValue, 
 	G_string_append(buffers.row, lines_starting_by)
 	var f = dbt.anonymized_function
 	for i = 0; i < num_fields-1; i++ {
+		lengths = uint64(row[i].Length())
 		if f == nil {
 			write_column_into_string_with_terminated_by(conn, row[i], fields[i], lengths, buffers, write_column_into_string, nil, fields_terminated_by)
 		} else {
@@ -879,6 +886,7 @@ func write_result_into_file(conn *DBConnection, result *MYSQL_RES, tj *table_job
 			update_dbt_rows(dbt, &num_rows)
 			tj.num_rows_of_last_run += num_rows
 			num_rows = 0
+			num_rows_st = 0
 			tj.st_in_file++
 			if output_format == SQL_INSERT || output_format == CLICKHOUSE {
 				G_string_append(tj.td.thread_data_buffers.statement, dbt.insert_statement.Str.String())

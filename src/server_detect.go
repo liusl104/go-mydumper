@@ -48,7 +48,7 @@ func Get_product_name() string {
 	case SERVER_TYPE_TIDB:
 		return "TiDB"
 	case SERVER_TYPE_CLICKHOUSE:
-		return "ClickHouse"
+		return "Clickhouse"
 	case SERVER_TYPE_DOLT:
 		return "Dolt"
 	case SERVER_TYPE_UNKNOWN:

@@ -15,15 +15,16 @@ import (
 )
 
 var (
-	Compact         bool
-	Compress        bool
-	headers         *GString
-	ref_table_mutex *sync.Mutex
-	ref_table       map[string]string
-	table_number    uint
-	nroutines       uint = 4
-	server_version  uint
-	routine_type    []string = []string{"FUNCTION", "PROCEDURE", "PACKAGE", "PACKAGE BODY"}
+	Compact             bool
+	Compress            bool
+	UseInternalCompress bool = true
+	headers             *GString
+	ref_table_mutex     *sync.Mutex
+	ref_table           map[string]string
+	table_number        uint
+	nroutines           uint = 4
+	server_version      uint
+	routine_type        []string = []string{"FUNCTION", "PROCEDURE", "PACKAGE", "PACKAGE BODY"}
 )
 
 // file_write wraps a writable file (or pipe) with write, close, and flush callbacks.

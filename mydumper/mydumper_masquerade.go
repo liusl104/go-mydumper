@@ -1,7 +1,6 @@
 package mydumper
 
 import (
-	"bufio"
 	"os"
 
 	. "github.com/liusl104/go-mydumper/src"
@@ -11,7 +10,9 @@ import (
 var (
 	file_hash                 map[string]map[string][]string
 	pp                        *Function_pointer
-	identity_function_pointer *Function_pointer = &Function_pointer{identity_function, false, "", nil, nil, nil, false, 0, 0, nil, false}
+	identity_function_pointer *Function_pointer = &Function_pointer{
+		Fun_ptr: identity_function,
+	}
 )
 
 // initialize_masquerade initializes file_hash for masquerade configuration.
@@ -39,13 +40,14 @@ func load_file_content(filename string) map[string]string {
 		log.Criticalf("Couldn't open %s (%v)", filename, err)
 		return file_content
 	}
-	var fileBuffer *bufio.Scanner
-	fileBuffer = bufio.NewScanner(file)
+	fileBuffer := NewMyDumperReader(file)
 	var data = G_string_sized_new(256)
 	var eof bool
 	var line int
 	for !eof {
-		Read_data(fileBuffer, data, &eof, &line)
+		if ok := Read_data(fileBuffer, data, &eof, &line); !ok {
+			break
+		}
 	}
 	return file_content
 }

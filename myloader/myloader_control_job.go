@@ -1,10 +1,12 @@
 package myloader
 
 import (
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
+	"os"
 	"sync"
 	"sync/atomic"
+
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 type control_job_type int
@@ -314,6 +316,7 @@ func process_job(td *thread_data, job *control_job, retry *bool) bool {
 		return false
 	default:
 		log.Criticalf("Something very bad happened!(1)")
+		os.Exit(1)
 	}
 	return true
 }

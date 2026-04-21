@@ -12,7 +12,8 @@ import (
 	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
-var Number []string = []string{"TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT"}
+var Number []string = []string{"TINYINT", "SMALLINT", "MEDIUMINT", "INT", "INTEGER", "BIGINT", "BOOL"}
+var Float []string = []string{"FLOAT", "DOUBLE", "DECIMAL"}
 
 // MySQLTypeAliasMap maps MySQL type names to standard type names
 var MySQLTypeAliasMap map[string]string = map[string]string{
@@ -78,6 +79,16 @@ func IsNumber(str string) bool {
 	}
 	return false
 }
+func IsUnsigned(str string) bool {
+	if strings.Contains(str, "UNSIGNED") {
+		return true
+	}
+	return false
+}
+
+func IsFloat(str string) bool {
+	return slices.Contains(Float, str)
+}
 
 // IsMySQLType checks if the input string matches the specified MySQL type
 func IsMySQLType(typeStr string, mysqlType string) bool {
@@ -108,8 +119,7 @@ type Result struct {
 
 // FieldValue represents a MySQL field value that can be either numeric or string
 type FieldValue struct {
-	value uint64 // Also for int64 and float64
-	str   []byte
+	value any
 }
 
 // Resultset represents a MySQL result set with rows, fields, and values
@@ -121,23 +131,12 @@ type Resultset struct {
 	Values     [][]FieldValue
 }
 
+func (f *FieldValue) Length() int {
+	return len(f.AsString())
+}
+
 // Value returns the raw value, returns nil if the value is NULL (both fields are empty)
 func (f *FieldValue) Value() any {
-	if f == nil {
-		return nil
-	}
-	// If str is not empty, return string
-	if len(f.str) > 0 {
-		return string(f.str)
-	}
-	// If value is not 0, return numeric value
-	if f.value != 0 {
-		return f.value
-	}
-	// Check if it's really NULL (both fields are empty)
-	if len(f.str) == 0 && f.value == 0 {
-		return nil
-	}
 	return f.value
 }
 
@@ -146,30 +145,33 @@ func (f *FieldValue) String() string {
 	if f == nil {
 		return ""
 	}
-	if len(f.str) > 0 {
-		return string(f.str)
+	switch f.value.(type) {
+	case []uint8:
+		return string(f.value.([]uint8))
+	default:
+		return fmt.Sprintf("%s", f.value)
 	}
-	if f.value != 0 {
-		return fmt.Sprintf("%d", f.value)
-	}
-	return ""
 }
 
 // AsUint64 returns uint64 value
 // If str is not empty, attempts to parse string as uint64; otherwise returns value
 func (f *FieldValue) AsUint64() uint64 {
-	if f == nil {
-		return 0
+	switch f.value.(type) {
+	case uint64:
+		return f.value.(uint64)
+	case uint:
+		return uint64(f.value.(uint))
+	case uint8:
+		return uint64(f.value.(uint8))
+	case uint16:
+		return uint64(f.value.(uint16))
+	case uint32:
+		return uint64(f.value.(uint32))
+	case []byte:
+		number, _ := strconv.ParseUint(string(f.value.([]byte)), 10, 64)
+		return number
 	}
-	if len(f.str) > 0 {
-		// Attempt to parse string as uint64
-		val, err := strconv.ParseUint(string(f.str), 10, 64)
-		if err != nil {
-			return 0
-		}
-		return val
-	}
-	return f.value
+	return 0
 }
 
 // AsString returns byte array representation
@@ -178,33 +180,59 @@ func (f *FieldValue) AsString() []byte {
 	if f == nil {
 		return nil
 	}
-	if len(f.str) > 0 {
-		return f.str
+	switch f.value.(type) {
+	case []uint8:
+		return f.value.([]uint8)
 	}
-	return []byte(fmt.Sprintf("%d", f.value))
+	return nil
 }
 
 // Int64 returns int64 value
 // If str is not empty, attempts to parse string as int64; otherwise converts value to int64 (note sign extension)
 func (f *FieldValue) Int64() int64 {
-	if f == nil {
-		return 0
+	switch f.value.(type) {
+	case int64:
+		return f.value.(int64)
+	case int:
+		return int64(f.value.(int))
+	case int8:
+		return int64(f.value.(int8))
+	case int16:
+		return int64(f.value.(int16))
+	case int32:
+		return int64(f.value.(int32))
+	case []byte:
+		number, _ := strconv.ParseInt(string(f.value.([]byte)), 10, 64)
+		return number
+
 	}
-	if len(f.str) > 0 {
-		// Attempt to parse string as int64
-		val, err := strconv.ParseInt(string(f.str), 10, 64)
-		if err != nil {
-			return 0
-		}
-		return val
-	}
-	// Convert uint64 to int64 (direct conversion, as value may store signed integer)
-	return int64(f.value)
+	return 0
 }
 
 // AsInt64 returns int64 value (same as Int64)
 func (f *FieldValue) AsInt64() int64 {
 	return f.Int64()
+}
+
+// AsFloat64 returns the value as float64. float32 is rounded to 6 decimal places to strip
+// spurious mantissa bits from the cast (e.g. 12345.67 as float32 → 12345.669921875 → 12345.669922).
+// Uses math only (no string alloc) for performance in hot paths.
+func (f *FieldValue) AsFloat64() float64 {
+	if f == nil {
+		return 0
+	}
+	switch f.value.(type) {
+	case float64:
+		return f.value.(float64)
+	case float32:
+		return float64(f.value.(float32))
+	case []byte:
+		v, e := strconv.ParseFloat(string(f.value.([]byte)), 64)
+		if e == nil {
+			return v
+		}
+	}
+	return 0
 }
 
 // QueryRows closes any previous Rows, runs the query, and stores result in d.Rows; sets d.Err on error.
@@ -234,6 +262,8 @@ type MYSQL_RES struct {
 	CurrentRow  int64
 	Result      chan []FieldValue
 	Fields      []*sql.ColumnType
+	conn        *DBConnection // back-reference for use_result cleanup
+	done        chan struct{} // signals use_result goroutine to stop
 }
 
 // M_ROW represents a MySQL row with its result set
@@ -284,13 +314,22 @@ func Mysql_error(conn *DBConnection) string {
 	return conn.Err.Error()
 }
 
-// Mysql_errno returns the MySQL error number from the connection
+// Mysql_errno returns the MySQL error number for the most recent operation.
+// Like C mysql_errno, returns 0 after a successful operation.
 func Mysql_errno(conn *DBConnection) uint16 {
-	if conn.Code == 0 && conn.Err != nil {
+	if conn.Err == nil {
+		conn.Code = 0
+		return 0
+	}
+	if conn.Code == 0 {
 		var myErr *mysql.MySQLError
-		errors.As(conn.Err, &myErr)
-		conn.Code = myErr.Number
-		conn.Message = myErr.Message
+		if errors.As(conn.Err, &myErr) {
+			conn.Code = myErr.Number
+			conn.Message = myErr.Message
+		} else {
+			conn.Code = 2000 // CR_UNKNOWN_ERROR
+			conn.Message = conn.Err.Error()
+		}
 	}
 	return conn.Code
 }
@@ -304,139 +343,133 @@ func Mysql_ping(conn *DBConnection) bool {
 	return true
 }
 
-// Mysql_free_result frees the result set
+// Mysql_free_result frees the result set. For use_result, it signals the
+// producer goroutine to stop, drains the channel, and releases conn.Rows.
+// For store_result, conn.Rows is already closed by Mysql_store_result so
+// this only clears the in-memory data.
 func Mysql_free_result(m *MYSQL_RES) {
 	if m == nil {
 		return
 	}
-
+	// use_result path: stop the producer goroutine
+	if m.done != nil {
+		select {
+		case <-m.done:
+			// already closed
+		default:
+			close(m.done)
+		}
+		// drain any pending values so the goroutine can exit
+		if m.Result != nil {
+			for range m.Result {
+			}
+		}
+		if m.conn != nil && m.conn.Rows != nil {
+			m.conn.Rows.Close()
+			m.conn.Rows = nil
+		}
+	}
+	m.FieldValues = nil
+	m.Result = nil
+	m.conn = nil
 }
 
-// Mysql_real_query executes a query and stores the result
+// Mysql_real_query executes a query via Exec (no result set).
 func Mysql_real_query(conn *DBConnection, query string) (result sql.Result) {
 	if conn.Rows != nil {
 		_ = conn.Rows.Close()
+		conn.Rows = nil
 	}
 	result, conn.Err = conn.Conn.Exec(query)
+	conn.RealError()
 	return
 }
 
-// init_result initializes a new MYSQL_RES structure
-func init_result(tp *sql.Rows) *MYSQL_RES {
+// init_result initializes a new MYSQL_RES structure.
+func init_result() *MYSQL_RES {
 	return &MYSQL_RES{
 		Result: make(chan []FieldValue),
 	}
 }
 
-// convertToFieldValue converts any type value to FieldValue
-func convertToFieldValue(val any) FieldValue {
-	if val == nil {
-		return FieldValue{}
-	}
-	switch v := val.(type) {
-	case []byte:
-		return FieldValue{str: v}
-	case string:
-		return FieldValue{str: []byte(v)}
-	case int64:
-		return FieldValue{value: uint64(v)}
-	case int32:
-		return FieldValue{value: uint64(v)}
-	case int16:
-		return FieldValue{value: uint64(v)}
-	case int8:
-		return FieldValue{value: uint64(v)}
-	case int:
-		return FieldValue{value: uint64(v)}
-	case uint64:
-		return FieldValue{value: v}
-	case uint32:
-		return FieldValue{value: uint64(v)}
-	case uint16:
-		return FieldValue{value: uint64(v)}
-	case uint8:
-		return FieldValue{value: uint64(v)}
-	case uint:
-		return FieldValue{value: uint64(v)}
-	case float64:
-		return FieldValue{value: uint64(v)}
-	case float32:
-		return FieldValue{value: uint64(v)}
-	default:
-		// For other types, convert to string
-		return FieldValue{str: []byte(fmt.Sprintf("%v", v))}
-	}
-}
-
-// Mysql_store_result loads all results into client memory at once
-// Suitable for small result sets, subsequent operations don't need server interaction,
-// fast but may have higher memory usage
+// Mysql_store_result loads all results into client memory at once.
+// conn.Rows is always closed (both on success and error) so the single
+// pool connection (MaxOpenConns=1) is available for the next query.
 func Mysql_store_result(conn *DBConnection) *MYSQL_RES {
-	// Check if conn and Rows are nil
 	if conn == nil || conn.Rows == nil {
 		return nil
 	}
 
-	var r *MYSQL_RES = init_result(conn.Rows)
+	// Ensure conn.Rows is closed on every exit path.
+	var success bool
+	defer func() {
+		if !success && conn.Rows != nil {
+			conn.Rows.Close()
+			conn.Rows = nil
+		}
+	}()
 
-	// Get column type information
+	var r *MYSQL_RES = init_result()
+
 	columnTypes, err := conn.Rows.ColumnTypes()
 	if err != nil {
 		conn.Err = err
 		return nil
 	}
 
-	// Initialize Fields and Lengths
 	r.Fields = columnTypes
 	r.Lengths = int64(len(columnTypes))
 	r.FieldValues = make([][]FieldValue, 0)
 
-	// Pre-allocate scan buffer
-	row := make([]any, r.Lengths)
-	scanArgs := make([]any, r.Lengths)
+	n := int(r.Lengths)
+	row := make([]any, n)
+	scanArgs := make([]any, n)
 	for i := range row {
 		scanArgs[i] = &row[i]
 	}
 
-	// Iterate through all rows
 	for conn.Rows.Next() {
-		// Scan current row
 		conn.Err = conn.Rows.Scan(scanArgs...)
 		if conn.Err != nil {
 			return nil
 		}
 
-		// Convert scan results to FieldValue slice
-		fieldValues := make([]FieldValue, r.Lengths)
+		fieldValues := make([]FieldValue, n)
 		for i, val := range row {
-			fieldValues[i] = convertToFieldValue(val)
+			fieldValues[i] = FieldValue{value: val}
 		}
 
-		// Add to result set
 		r.FieldValues = append(r.FieldValues, fieldValues)
 		r.RowCount++
 	}
 
-	// Check for errors during iteration
 	if conn.Err = conn.Rows.Err(); conn.Err != nil {
 		return nil
 	}
 
-	// Store result mode uses FieldValues only; nil the channel to avoid blocking in Mysql_fetch_row
+	// Normal completion: close Rows and mark success so defer skips.
+	conn.Rows.Close()
+	conn.Rows = nil
+	success = true
+
 	r.Result = nil
 	return r
 }
 
 // Mysql_use_result streams results (reads row by row from server)
 // Low memory usage, but requires maintaining connection and must be processed quickly
-// (otherwise blocks server), suitable for large result sets
+// (otherwise blocks server), suitable for large result sets.
+// The caller MUST call Mysql_free_result when done to stop the producer goroutine
+// and release conn.Rows.
 func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 	if conn == nil || conn.Rows == nil {
 		return nil
 	}
 
-	var r *MYSQL_RES = init_result(conn.Rows)
+	var r *MYSQL_RES = init_result()
 	r.Result = make(chan []FieldValue)
+	r.conn = conn
+	r.done = make(chan struct{})
 
 	// Get column type information
 	columnTypes, err := conn.Rows.ColumnTypes()
@@ -450,45 +483,58 @@ func Mysql_use_result(conn *DBConnection) *MYSQL_RES {
 	r.Lengths = int64(len(columnTypes))
 	r.FieldValues = make([][]FieldValue, 0)
 	go func() {
-		// Pre-allocate scan buffer
-		row := make([]any, r.Lengths)
-		scanArgs := make([]any, r.Lengths)
+		// Pre-allocate scan buffer; scan into [][]byte so all columns come back as []byte (or nil for NULL).
+		n := int(r.Lengths)
+		row := make([]any, n)
+		scanArgs := make([]any, n)
 		for i := range row {
 			scanArgs[i] = &row[i]
 		}
-		// Iterate through all rows
 		defer close(r.Result)
+		defer func() {
+			if conn.Rows != nil {
+				conn.Rows.Close()
+				conn.Rows = nil
+			}
+		}()
 		for conn.Rows.Next() {
 			conn.Err = conn.Rows.Scan(scanArgs...)
 			if conn.Err != nil {
 				return
 			}
-			// Convert scan results to FieldValue slice
-			fieldValues := make([]FieldValue, r.Lengths)
+			fieldValues := make([]FieldValue, n)
 			for i, val := range row {
-				fieldValues[i] = convertToFieldValue(val)
+				fieldValues[i] = FieldValue{value: val}
 			}
 			r.RowCount++
-			r.Result <- fieldValues
+			select {
+			case r.Result <- fieldValues:
+			case <-r.done:
+				return
+			}
 		}
-
 	}()
 
 	return r
 }
 
-// Mysql_warning_count returns the number of warnings from the last query
+// Mysql_warning_count returns the number of warnings from the last query.
+// Closes any existing conn.Rows before running SHOW WARNINGS, and cleans up after.
 func Mysql_warning_count(conn *DBConnection) int {
+	if conn.Rows != nil {
+		_ = conn.Rows.Close()
+		conn.Rows = nil
+	}
 	conn.Rows, conn.Err = conn.Conn.Query("SHOW WARNINGS")
 	if conn.Err != nil {
 		return 0
 	}
-	defer conn.Rows.Close()
-
 	count := 0
 	for conn.Rows.Next() {
 		count++
 	}
+	conn.Rows.Close()
+	conn.Rows = nil
 	return count
 }
 
@@ -499,6 +545,7 @@ func (d *DBConnection) MySQLQuery(sql string) bool {
 		if err != nil {
 			log.Warnf("MySQLQuery: Error closing connection: %s", err.Error())
 		}
+		d.Rows = nil
 	}
 
 	d.Rows, d.Err = d.Conn.Query(sql)
@@ -511,6 +558,10 @@ func (d *DBConnection) MySQLQuery(sql string) bool {
 
 // Ping checks the database connection
 func (d *DBConnection) Ping() error {
+	if d.Rows != nil {
+		_ = d.Rows.Close()
+		d.Rows = nil
+	}
 	d.Err = d.Conn.Ping()
 	if d.Err != nil {
 		d.RealError()
@@ -536,6 +587,7 @@ func Mysql_num_rows(r *MYSQL_RES) uint64 {
 }
 
 // RealError extracts MySQL error number and message from d.Err into d.Code and d.Message.
+// Safe for non-MySQL errors (e.g. net.OpError) — uses CR_UNKNOWN_ERROR (2000).
 func (d *DBConnection) RealError() {
 	if d.Err == nil {
 		d.Code = 0
@@ -543,16 +595,24 @@ func (d *DBConnection) RealError() {
 		return
 	}
 	var mysqlErr *mysql.MySQLError
-	errors.As(d.Err, &mysqlErr)
-	d.Code = mysqlErr.Number
-	d.Message = mysqlErr.Message
+	if errors.As(d.Err, &mysqlErr) {
+		d.Code = mysqlErr.Number
+		d.Message = mysqlErr.Message
+	} else {
+		d.Code = 2000 // CR_UNKNOWN_ERROR
+		d.Message = d.Err.Error()
+	}
 }
 
 // UseDB executes USE dbName and returns false on error.
 func (d *DBConnection) UseDB(dbName string) bool {
+	if d.Rows != nil {
+		_ = d.Rows.Close()
+		d.Rows = nil
+	}
 	_, d.Err = d.Conn.Exec("USE " + dbName)
+	d.RealError()
 	if d.Err != nil {
-		d.RealError()
 		return false
 	}
 	return true
@@ -603,8 +663,10 @@ func Mysql_get_server_version() uint {
 	return uint(Get_major()*10000 + Get_secondary()*100 + Get_revision())
 }
 
-// M_store_result_row_free frees the memory associated with M_ROW
+// M_store_result_row_free frees the result set and clears the M_ROW.
+// Matches C: mysql_free_result(mr->res); g_free(mr);
 func M_store_result_row_free(mr *M_ROW) {
+	Mysql_free_result(mr.Res)
 	mr.Res = nil
 	mr.Row = nil
 }

@@ -3,9 +3,11 @@ package mydumper
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -129,14 +131,6 @@ type flush_fun func() error
 
 // Initialize_share_common performs one-time shared common initialization. Currently a no-op.
 func Initialize_share_common() {
-}
-
-// get_zstd_cmd initializes or returns the zstd compression command. Currently a no-op.
-func get_zstd_cmd() {
-}
-
-// get_gzip_cmd initializes or returns the gzip compression command. Currently a no-op.
-func get_gzip_cmd() {
 }
 
 // Initialize_hash_of_session_variables returns a map of session variable names to values (e.g. WAIT_TIMEOUT for MySQL-like).
@@ -296,7 +290,6 @@ func load_hash_from_key_file(kf *ini.File, set_session_hash map[string]string, g
 // Load_per_table_info_from_key_file loads per-table config from ini: where, limit, num_threads, columns, partition_regex, anonymized functions, etc.
 func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_table, init_function_pointer func(str string) *Function_pointer) {
 	if kf == nil {
-		log.Errorf("assertion 'key_file != NULL' failed")
 		return
 	}
 	var groups = kf.SectionStrings()
@@ -312,7 +305,8 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 					if init_function_pointer != nil {
 						value = G_key_file_get_value(kf, groups[i], key.Name())
 						var fp *Function_pointer = init_function_pointer(value)
-						ht[key.Name()] = fp
+						strippedKey := key.Name()[1 : len(key.Name())-1]
+						ht[strippedKey] = fp
 					}
 				} else {
 					if strings.Compare(key.Name(), "where") == 0 {
@@ -332,7 +326,7 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 					if strings.Compare(key.Name(), "columns_on_insert") == 0 {
 						cpt.All_columns_on_insert_per_table[groups[i]] = key.Value()
 					}
-					if strings.Compare(key.Name(), "Object_to_export") == 0 {
+					if strings.Compare(key.Name(), "object_to_export") == 0 {
 						cpt.All_object_to_export[groups[i]] = key.Value()
 					}
 					if strings.Compare(key.Name(), "partition_regex") == 0 {
@@ -340,7 +334,7 @@ func Load_per_table_info_from_key_file(kf *ini.File, cpt *Configuration_per_tabl
 						init_regex(&r, key.Value())
 						cpt.All_partition_regex_per_table[groups[i]] = r
 					}
-					if strings.Compare(key.Name(), "Rows") == 0 {
+					if strings.Compare(key.Name(), "rows") == 0 {
 						cpt.All_rows_per_table[groups[i]] = key.Value()
 					}
 				}
@@ -359,7 +353,7 @@ func Load_hash_of_all_variables_perproduct_from_key_file(kf *ini.File, set_sessi
 	var s *GString = G_string_new(str)
 	load_hash_from_key_file(kf, set_session_hash, s.Str.String())
 	G_string_append(s, "_")
-	G_string_append(s, Get_product_name())
+	G_string_append(s, strings.ToLower(Get_product_name()))
 	load_hash_from_key_file(kf, set_session_hash, s.Str.String())
 	G_string_append_printf(s, "_%d", Get_major())
 	load_hash_from_key_file(kf, set_session_hash, s.Str.String())
@@ -395,7 +389,7 @@ func refresh_set_from_hash(ss *GString, kind string, set_hash map[string]string)
 
 // set_session_hash_insert inserts or overwrites a key in the session hash.
 func set_session_hash_insert(set_session_hash map[string]string, _key string, value string) {
-	set_session_hash[_key] = value
+	set_session_hash[strings.ToUpper(_key)] = value
 }
 
 // Refresh_set_session_from_hash builds SET SESSION statements from set_session_hash into ss (ensures FOREIGN_KEY_CHECKS=0).
@@ -446,18 +440,20 @@ func free_hash(set_session_hash map[string]string) {
 
 // Execute_gstring splits ss by ";\n" and executes each non-empty statement on conn (e.g. SET session).
 func Execute_gstring(conn *DBConnection, ss *GString) {
-	if ss != nil {
-		var line []string = strings.Split(ss.Str.String(), ";\n")
-		var i int
-		if conn.Rows != nil {
-			_ = conn.Rows.Close()
-		}
-		for i = 0; i < len(line); i++ {
-			if len(line[i]) > 3 {
-				_, conn.Err = conn.Conn.Exec(line[i])
-				if conn.Err != nil {
-					log.Warnf("Set session failed: %s", line[i])
-				}
+	if conn == nil || ss == nil {
+		return
+	}
+	var line []string = strings.Split(ss.Str.String(), ";\n")
+	var i int
+	if conn.Rows != nil {
+		_ = conn.Rows.Close()
+		conn.Rows = nil
+	}
+	for i = 0; i < len(line); i++ {
+		if len(line[i]) > 3 {
+			_, conn.Err = conn.Conn.Exec(line[i])
+			if conn.Err != nil {
+				log.Warnf("Set session failed: %s", line[i])
 			}
 		}
 	}
@@ -474,22 +470,18 @@ func Replace_escaped_strings(b string) string {
 }
 
 // escape_tab_with copies bytes from to into itself, escaping tab as \t in place (buffer must be large enough).
-func escape_tab_with(to []byte) {
-	var from []byte = make([]byte, 0)
+func escape_tab_with(to []byte) []byte {
+	from := make([]byte, len(to))
 	copy(from, to)
-	var i, j int
-	for i, _ = range from {
-		if from[i] == '\t' {
-			to[j] = '\\'
-			j++
-			to[j] = 't'
+	result := make([]byte, 0, len(from)*2)
+	for _, c := range from {
+		if c == '\t' {
+			result = append(result, '\\', 't')
 		} else {
-			to[j] = from[i]
+			result = append(result, c)
 		}
-		j++
 	}
-	to[j] = from[i]
-	from = nil
+	return result
 }
 
 // Create_dir creates the given directory with mode 0750. Returns false if it already exists or on error.
@@ -549,14 +541,14 @@ func Create_backup_dir(new_directory, new_fifo_directory string) {
 
 // strcount returns the number of newline-separated lines in text.
 func strcount(text string) int {
-	count := 0
+	count := 1
 	t := text
+	if len(t) > 0 {
+		t = t[1:]
+	}
 	for {
 		index := strings.Index(t, "\n")
 		if index == -1 {
-			if len(t) > 0 {
-				count++
-			}
 			break
 		}
 		count++
@@ -590,12 +582,39 @@ func M_remove(directory, filename string) bool {
 
 // matchText returns true if a and b are equal ignoring case.
 func matchText(a string, b string) bool {
-	return strings.EqualFold(a, b)
+	ai, bi := 0, 0
+	for ai < len(a) && a[ai] != '%' && bi < len(b) {
+		if a[ai] == '_' || a[ai] == b[bi] {
+			ai++
+			bi++
+		} else if a[ai] == '\\' && ai+1 < len(a) && a[ai+1] == '_' && b[bi] == '_' {
+			ai += 2
+			bi++
+		} else {
+			return false
+		}
+	}
+	if ai >= len(a) {
+		return bi >= len(b)
+	}
+	for ai < len(a) && a[ai] == '%' {
+		ai++
+	}
+	if ai >= len(a) {
+		return true
+	}
+	for bi < len(b) {
+		if matchText(a[ai:], b[bi:]) {
+			return true
+		}
+		bi++
+	}
+	return false
 }
 
 // Is_table_in_list returns true if database.table is in tl (supports % and _ wildcards).
 func Is_table_in_list(database string, table string, tl []string) bool {
-	var table_name_lower = fmt.Sprintf("%s.%s", database, table)
+	var table_name_lower = strings.ToLower(fmt.Sprintf("%s.%s", database, table))
 	var tb_lower string
 	var match bool
 	for i := 0; i < len(tl); i++ {
@@ -779,9 +798,31 @@ func Stream_arguments_callback() bool {
 	if Stream != "" {
 		stream = true
 		UseDefer = false
-		if strings.EqualFold(Stream, "TRADITIONAL") {
+		if strings.EqualFold(Stream, "TRADITIONAL") || Stream == "0" {
 			return true
 		}
+
+		val, err := strconv.ParseUint(Stream, 10, 64)
+		if err == nil {
+			if val > 7 {
+				log.Errorf("Value out of range on --stream")
+				return false
+			}
+			if val == 0 {
+				return false
+			}
+			if val&(1<<2) != 0 {
+				No_stream = true
+			}
+			if val&(1<<1) != 0 {
+				No_delete = true
+			}
+			if val&(1<<0) != 0 {
+				No_sync = true
+			}
+			return true
+		}
+
 		if strings.EqualFold(Stream, "NO_DELETE") {
 			No_delete = true
 			return true
@@ -801,14 +842,12 @@ func Stream_arguments_callback() bool {
 
 // Check_num_threads ensures NumThreads is valid: if <= 0 sets it to CPU count; warns if below MIN_THREAD_COUNT.
 func Check_num_threads() {
-	// If configured thread count is <= 0, set it to the number of system processors
 	if NumThreads <= 0 {
 		NumThreads = g_get_num_processors()
 	}
-	// If thread count is less than minimum, log warning and set to minimum
 	if NumThreads < MIN_THREAD_COUNT {
 		log.Warnf("Invalid number of threads %d, setting to %d", NumThreads, MIN_THREAD_COUNT)
-		// NumThreads = MIN_THREAD_COUNT
+		NumThreads = MIN_THREAD_COUNT
 	}
 }
 
@@ -837,26 +876,28 @@ func M_warning(msg string, args ...any) {
 
 // Filter_sequence_schemas replaces quoted schema.table references in create_table with the first match from a regex.
 func Filter_sequence_schemas(create_table string) string {
-	re, err := regexp.Compile(fmt.Sprintf("%s\\w+%s\\.(%s\\w+%s)", Identifier_quote_character, Identifier_quote_character, Identifier_quote_character, Identifier_quote_character))
-	if err != nil {
-		log.Criticalf("filter table schema fail:%v", err)
-	}
-	fss := re.FindAllStringSubmatch(create_table, -1)
-	return re.ReplaceAllString(create_table, fss[0][1])
+	// C version has the replacement body commented out; effectively a no-op.
+	return create_table
 }
 
-// Read_data reads one line from infile into data, increments *line, sets *eof on scan error or EOF.
-func Read_data(infile *bufio.Scanner, data *GString, eof *bool, line *int) bool {
-	if !infile.Scan() {
-		*eof = true
-		return true
+// NewMyDumperReader creates a *bufio.Reader with 4KB initial buffer (matching C's 4096-byte fgets buffer).
+// bufio.Reader grows internally as needed with no upper limit, avoiding the 64KB cap of bufio.Scanner.
+func NewMyDumperReader(r io.Reader) *bufio.Reader {
+	return bufio.NewReaderSize(r, 4096)
+}
+
+// Read_data reads one line from infile into data, increments *line, sets *eof on EOF/error.
+// Mirrors C read_data() which uses fgets in a loop with dynamic GString append.
+func Read_data(infile *bufio.Reader, data *GString, eof *bool, line *int) bool {
+	lineBytes, err := infile.ReadBytes('\n')
+	if len(lineBytes) > 0 {
+		G_string_append_b(data, lineBytes)
+		if lineBytes[len(lineBytes)-1] == '\n' {
+			*line++
+		}
 	}
-	G_string_append_b(data, infile.Bytes())
-	G_string_append_c(data, '\n')
-	*line++
-	if infile.Err() != nil {
+	if err != nil {
 		*eof = true
-		return true
 	}
 	return true
 }
@@ -943,11 +984,13 @@ func append_alter_table(alter_table_statement *GString, table string) {
 
 // finish_alter_table removes a trailing comma if present and appends ";\n".
 func finish_alter_table(alter_table_statement *GString) {
-
-	lastCommaIndex := strings.LastIndex(alter_table_statement.Str.String(), ",")
-	if lastCommaIndex > alter_table_statement.Len-5 {
-		alter_table_statement = G_string_new(alter_table_statement.Str.String()[:lastCommaIndex])
-		G_string_append(alter_table_statement, ";\n")
+	s := alter_table_statement.Str.String()
+	lastCommaIndex := strings.LastIndex(s, ",")
+	if lastCommaIndex >= 0 && lastCommaIndex > alter_table_statement.Len-5 {
+		alter_table_statement.Str.Reset()
+		alter_table_statement.Str.WriteString(s[:lastCommaIndex])
+		alter_table_statement.Str.WriteString(";\n")
+		alter_table_statement.Len = alter_table_statement.Str.Len()
 	} else {
 		G_string_append(alter_table_statement, ";\n")
 	}
@@ -1001,9 +1044,10 @@ func Global_process_create_table_statement(statement *GString, create_table_stat
 				G_string_append(create_table_statement, "\n")
 			}
 		}
-		if strings.Contains(split_file[i], "ENGINE=") {
+		if idx := strings.Index(split_file[i], "ENGINE="); idx >= 0 {
+			engineName := split_file[i][idx+7:]
 			for j := 0; j < len(OptimizeKeyEngines); j++ {
-				if strings.Contains(split_file[i], OptimizeKeyEngines[j]) {
+				if strings.HasPrefix(engineName, OptimizeKeyEngines[j]) {
 					flag |= IS_TRX_TABLE
 				}
 			}
@@ -1064,13 +1108,21 @@ func Build_dbt_key(a, b string) string {
 
 // Discard_mysql_output closes conn.Rows to release the result set so the connection can be reused for Exec/Query.
 func Discard_mysql_output(conn *DBConnection) {
-	if conn != nil && conn.Rows != nil {
-		conn.Rows.Close()
-		conn.Rows = nil
+	if conn == nil || conn.Rows == nil {
+		return
 	}
+	for conn.Rows.Next() {
+	}
+	for conn.Rows.NextResultSet() {
+		for conn.Rows.Next() {
+		}
+	}
+	conn.Rows.Close()
+	conn.Rows = nil
 }
 
 // m_log logs msg (formatted with args) via log_fun_1 or log_fun_2 if the error is in IgnoreErrorsList.
+// Like C, does not increment Errors when log_fun_1 is M_message (info-only logging).
 func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) {
 	if msg != "" && log_fun_1 != nil {
 		var c = fmt.Sprintf(msg, args...)
@@ -1079,7 +1131,9 @@ func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 f
 		} else {
 			if Mysql_errno(conn) != 0 {
 				log_fun_1("%s - ERROR %d: %s", c, Mysql_errno(conn), Mysql_error(conn))
-				Errors++
+				if reflect.ValueOf(log_fun_1).Pointer() != reflect.ValueOf(M_message).Pointer() {
+					Errors++
+				}
 			} else {
 				log_fun_1("%s", c)
 			}
@@ -1088,10 +1142,10 @@ func m_log(conn *DBConnection, log_fun_1 func(fmt string, a ...any), log_fun_2 f
 }
 
 // m_queryv executes query on conn; on error logs via m_log and returns true. Returns false on success.
-// Must discard conn.Rows after a successful MySQLQuery so the connection is not left with an unread result set (which would block subsequent Exec).
+// NOTE: leaves conn.Rows open so that m_resultv callers can consume the result set.
+// Command-style wrappers (M_query_warning, etc.) close Rows after calling this.
 func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), msg string, args ...any) bool {
 	conn.Query = query
-	// res, err := conn.Conn.Query(query)
 	if conn.MySQLQuery(query) {
 		m_log(conn, log_fun_1, log_fun_2, msg, args...)
 		return true
@@ -1099,31 +1153,58 @@ func m_queryv(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...
 	return false
 }
 
+// closeRows releases conn.Rows so the underlying pool connection is returned.
+// With MaxOpenConns(1), an unclosed *sql.Rows holds the sole pool connection
+// and blocks any subsequent Ping/Query/Exec on the same *sql.DB.
+func closeRows(conn *DBConnection) {
+	if conn != nil && conn.Rows != nil {
+		conn.Rows.Close()
+		conn.Rows = nil
+	}
+}
+
 // m_query executes query and logs on error; wrapper around m_queryv with single log function.
 func m_query(conn *DBConnection, query string, log_fun func(fmt string, a ...any), msg string, args ...any) bool {
 	conn.Query = query
-	return m_queryv(conn, query, log_fun, nil, msg, args...)
+	res := m_queryv(conn, query, log_fun, nil, msg, args...)
+	if !res {
+		closeRows(conn)
+	}
+	return res
 }
 
 // M_query_warning executes the query; on error logs warning (or critical if not ignored). Returns true on error.
 func M_query_warning(conn *DBConnection, query string, fmt string, args ...any) bool {
-	return m_queryv(conn, query, M_warning, nil, fmt, args...)
+	res := m_queryv(conn, query, M_warning, nil, fmt, args...)
+	if !res {
+		closeRows(conn)
+	}
+	return res
 }
 
 // M_query_critical executes the query; on error logs critical (or warning if ignored). Returns true on error.
 func M_query_critical(conn *DBConnection, query string, fmt string, args ...any) bool {
-	return m_queryv(conn, query, M_critical, M_warning, fmt, args...)
+	res := m_queryv(conn, query, M_critical, M_warning, fmt, args...)
+	if !res {
+		closeRows(conn)
+	}
+	return res
 }
 
 // m_query_ext executes query with two log functions (primary and fallback for ignored errors).
 func m_query_ext(conn *DBConnection, query string, log_fun_1 func(fmt string, a ...any), log_fun_2 func(fmt string, a ...any), fmt string, args ...any) bool {
-	return m_queryv(conn, query, log_fun_1, log_fun_2, fmt, args...)
+	res := m_queryv(conn, query, log_fun_1, log_fun_2, fmt, args...)
+	if !res {
+		closeRows(conn)
+	}
+	return res
 }
 
 // M_query_verbose executes the query and logs "query: OK" on success; returns true on error.
 func M_query_verbose(conn *DBConnection, q string, log_fun func(fmt string, a ...any), fmt string, args ...any) bool {
 	var res bool = m_queryv(conn, q, log_fun, nil, fmt, args...)
 	if !res {
+		closeRows(conn)
 		log.Infof("%s: OK", q)
 	}
 	return res
@@ -1146,9 +1227,9 @@ func M_store_result_critical(conn *DBConnection, query string, fmt string, args 
 	return m_resultv(Mysql_store_result, conn, query, M_critical, M_warning, fmt, args...)
 }
 
-// M_store_result executes query and streams result with Mysql_use_result; returns nil on error.
+// M_store_result executes query and buffers full result with Mysql_store_result; returns nil on error.
 func M_store_result(conn *DBConnection, query string, log_fun func(fmt string, a ...any), fmt string, args ...any) *MYSQL_RES {
-	return m_resultv(Mysql_use_result, conn, query, log_fun, nil, fmt, args...)
+	return m_resultv(Mysql_store_result, conn, query, log_fun, nil, fmt, args...)
 }
 
 // M_store_result_row executes query, fetches full result, and returns the first row as M_ROW (or nil).
@@ -1198,9 +1279,37 @@ func M_thread_new(title string, f func(any), data any, error_text string) *GThre
 
 // Monitor_throttling_thread is the throttling monitor goroutine entry; currently a no-op (c is queue).
 func Monitor_throttling_thread(c any) {
-	if c == nil {
-		return
+	_ = c
+	var query = fmt.Sprintf("SHOW GLOBAL STATUS LIKE '%s'", Throttle_variable)
+	log.Infof("Query %s", query)
+	var conn *DBConnection
+	conn = Mysql_init()
+	if Throttle_value == 0 {
+		Throttle_value = int(NumThreads)
 	}
-	queue := c.(*GAsyncQueue)
-	_ = queue
+	M_connect(conn)
+	for {
+		var mr = M_store_result_single_row(conn, query, "We were not able to check: '%s'", Throttle_variable)
+		if mr.Res != nil && len(mr.Row) > 1 {
+			currentValue, _ := strconv.Atoi(mr.Row[1].String())
+			if currentValue > Throttle_value {
+				if Throttle_time == 0 {
+					Throttle_time = 10000
+				} else {
+					Throttle_time += Throttle_time
+				}
+				if Throttle_max_usleep_limit < Throttle_time/1000000 {
+					Throttle_time = Throttle_max_usleep_limit * 1000000
+				}
+				log.Debugf("Increasing throttle_time to: %d", Throttle_time)
+			} else if currentValue < Throttle_value && Throttle_time > 0 {
+				Throttle_time = Throttle_time / 2
+				log.Debugf("Decreasing throttle_time to: %d", Throttle_time)
+			}
+		} else {
+			log.Debugf("Invalid query: %s", query)
+		}
+		M_store_result_row_free(mr)
+		time.Sleep(2 * time.Second)
+	}
 }

@@ -1,7 +1,6 @@
 package myloader
 
 import (
-	"bufio"
 	"container/list"
 	"fmt"
 	"io"
@@ -201,7 +200,7 @@ func load_schema(dbt *db_table, filename string) *control_job {
 		errors++
 		return nil
 	}
-	var reader = bufio.NewScanner(infile.file)
+	var reader = NewMyDumperReader(infile.file)
 	for eof == false {
 		if Read_data(reader, data, &eof, &line) {
 			var length int
@@ -356,7 +355,7 @@ func get_database_name_from_content(filename string) string {
 	var data *GString = G_string_sized_new(512)
 	var line int
 	var real_database string
-	var reader = bufio.NewScanner(infile.file)
+	var reader = NewMyDumperReader(infile.file)
 
 	for eof == false {
 		if Read_data(reader, data, &eof, &line) {

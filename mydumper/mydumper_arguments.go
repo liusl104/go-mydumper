@@ -110,6 +110,7 @@ func exec_entries() {
 	pflag.StringVar(&Exec_command, "exec", "", "Command to execute using the file as parameter")
 	pflag.StringVar(&Exec_per_thread, "exec-per-thread", "", "Set the command that will receive by STDIN and write in the STDOUT into the output file")
 	pflag.StringVar(&ExecPerThreadExtension, "exec-per-thread-extension", "", "Set the extension for the STDOUT file when --exec-per-thread is used")
+	pflag.BoolVar(&UseInternalCompress, "use-internal-compress", true, "Use internal Go libraries for gzip/zstd compression instead of external commands")
 }
 
 // pmm_entries registers PMM collector path and resolution flags.

@@ -26,6 +26,8 @@ var (
 	db_hash                                 map[string]*database
 	database_db                             *database
 	max_number_tables_to_sort_in_table_list int = 100000
+	zstd_decompress_marker                      = []string{ZSTD_EXTENSION}
+	gzip_decompress_marker                      = []string{GZIP_EXTENSION}
 	zstd_decompress_cmd                     []string
 	gzip_decompress_cmd                     []string
 )
@@ -41,7 +43,7 @@ type replication_statements struct {
 
 type check_sum func(conn *DBConnection, database, table string) string
 
-// initialize_common sets up refresh_table_list_counter, db_hash, tbl_hash, database_db, and decompress commands (gzip/zstd, exec-per-thread).
+// initialize_common sets up refresh_table_list_counter, db_hash, tbl_hash, database_db, and decompress commands.
 func initialize_common() {
 	refresh_table_list_counter = RefreshTableListInterval
 	db_hash_mutex = G_mutex_new()
@@ -50,27 +52,29 @@ func initialize_common() {
 	if DB != "" {
 		database_db = get_db_hash(DB, DB)
 	}
-	var err error
-	var tmpcmd string
 	if ExecPerThread != "" {
 		exec_per_thread_cmd = strings.Split(ExecPerThread, " ")
-		tmpcmd, err = exec.LookPath(exec_per_thread_cmd[0])
-		if err != nil {
-			log.Criticalf("%s was not found in PATH, use --exec-per-thread for non default locations", exec_per_thread_cmd[0])
+		if !UseInternalCompress {
+			tmpcmd, err := exec.LookPath(exec_per_thread_cmd[0])
+			if err != nil {
+				log.Criticalf("%s was not found in PATH, use --exec-per-thread for non default locations", exec_per_thread_cmd[0])
+			}
+			exec_per_thread_cmd[0] = tmpcmd
 		}
-		exec_per_thread_cmd[0] = tmpcmd
 	}
-	tmpcmd, err = exec.LookPath(ZSTD)
-	if err != nil {
-		log.Warnf("%s was not found in PATH, use --exec-per-thread for non default locations", ZSTD)
-	} else {
-		zstd_decompress_cmd = strings.Split(fmt.Sprintf("%s -c -d", tmpcmd), " ")
-	}
-	tmpcmd, err = exec.LookPath(GZIP)
-	if err != nil {
-		log.Warnf("%s was not found in PATH, use --exec-per-thread for non default locations", GZIP)
-	} else {
-		gzip_decompress_cmd = strings.Split(fmt.Sprintf("%s -c -d", tmpcmd), " ")
+	if !UseInternalCompress {
+		tmpcmd, err := exec.LookPath(ZSTD)
+		if err != nil {
+			log.Warnf("%s was not found in PATH, use --exec-per-thread for non default locations", ZSTD)
+		} else {
+			zstd_decompress_cmd = strings.Split(fmt.Sprintf("%s -c -d", tmpcmd), " ")
+		}
+		tmpcmd, err = exec.LookPath(GZIP)
+		if err != nil {
+			log.Warnf("%s was not found in PATH, use --exec-per-thread for non default locations", GZIP)
+		} else {
+			gzip_decompress_cmd = strings.Split(fmt.Sprintf("%s -c -d", tmpcmd), " ")
+		}
 	}
 }
 
@@ -364,16 +368,14 @@ func eval_table(db_name string, table_name string, mutex *sync.Mutex) bool {
 	return Eval_regex(db_name, table_name)
 }
 
-// execute_use runs USE `current_database` on the connection; returns true on failure (C convention).
+// execute_use runs USE `current_database` on the connection; returns true on failure.
+// M_query_warning returns true on error (same convention as C m_query_warning).
 func execute_use(cd *connection_data) bool {
 	if cd.current_database != nil {
 		var query = fmt.Sprintf("USE `%s`", cd.current_database.real_database)
-		// Go M_query_warning returns true on success, false on failure (opposite of C)
-		// Invert here to match C: success returns false, failure returns true
 		if M_query_warning(cd.thrconn, query, "Thread %d: Error switching to database `%s`", cd.thread_id, cd.current_database.real_database) {
 			return true
 		}
-
 	} else {
 		log.Warnf("Thread %d with connection %d: Not able to switch database", cd.thread_id, cd.connection_id)
 	}
@@ -563,21 +565,20 @@ func checksum_dbt(dbt *db_table, conn *DBConnection) bool {
 		if !NoSchemas {
 			if dbt.schema_checksum != "" {
 				if dbt.is_view {
-					// TODO checksum_ok&=checksum_dbt_template
-					checksum_ok = checksum_dbt_template(dbt, dbt.schema_checksum, conn, "View checksum", Checksum_view_structure)
+					checksum_ok = checksum_ok && checksum_dbt_template(dbt, dbt.schema_checksum, conn, "View checksum", Checksum_view_structure)
 				} else {
-					checksum_ok = checksum_dbt_template(dbt, dbt.schema_checksum, conn, "Structure checksum", Checksum_table_structure)
+					checksum_ok = checksum_ok && checksum_dbt_template(dbt, dbt.schema_checksum, conn, "Structure checksum", Checksum_table_structure)
 				}
 			}
 			if dbt.indexes_checksum != "" {
-				checksum_ok = checksum_dbt_template(dbt, dbt.indexes_checksum, conn, "Schema index checksum", Checksum_table_indexes)
+				checksum_ok = checksum_ok && checksum_dbt_template(dbt, dbt.indexes_checksum, conn, "Schema index checksum", Checksum_table_indexes)
 			}
 		}
 		if dbt.triggers_checksum != "" && !SkipTriggers {
-			checksum_ok = checksum_dbt_template(dbt, dbt.triggers_checksum, conn, "Trigger checksum", Checksum_trigger_structure)
+			checksum_ok = checksum_ok && checksum_dbt_template(dbt, dbt.triggers_checksum, conn, "Trigger checksum", Checksum_trigger_structure)
 		}
 		if dbt.data_checksum != "" && !NoData {
-			checksum_ok = checksum_dbt_template(dbt, dbt.data_checksum, conn, "Data checksum", Checksum_table)
+			checksum_ok = checksum_ok && checksum_dbt_template(dbt, dbt.data_checksum, conn, "Data checksum", Checksum_table)
 		}
 	}
 	return checksum_ok
@@ -588,8 +589,10 @@ func has_exec_per_thread_extension(filename string) bool {
 	return ExecPerThreadExtension != "" && strings.HasSuffix(filename, ExecPerThreadExtension)
 }
 
-// execute_file_per_thread opens the SQL file and wraps it in an osFile (plain, gzip, or zstd reader based on exec).
-func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osFile, error) {
+// execute_file_per_thread opens the SQL file and wraps it in an osFile.
+// When UseInternalCompress is true (default), uses internal gzip/zstd libraries.
+// When UseInternalCompress is false, pipes through external decompression commands.
+func execute_file_per_thread(sql_fn string, sql_fn3 string, e []string) (*osFile, error) {
 	var sql_file *os.File
 	var outfile *osFile
 	var err error
@@ -601,7 +604,7 @@ func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osF
 	outfile = new(osFile)
 	outfile.file = sql_file
 	switch {
-	case slices.Contains(exec, GZIP_EXTENSION):
+	case slices.Contains(e, GZIP_EXTENSION):
 		var out *gzip.Reader
 		out, err = gzip.NewReader(sql_file)
 
@@ -610,7 +613,7 @@ func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osF
 		outfile.metadata = out.Name
 		outfile.read = out.Read
 
-	case slices.Contains(exec, ZSTD_EXTENSION):
+	case slices.Contains(e, ZSTD_EXTENSION):
 		var out *zstd.Decoder
 		out, err = zstd.NewReader(sql_file)
 		outfile.close = func() error {
@@ -620,29 +623,66 @@ func execute_file_per_thread(sql_fn string, sql_fn3 string, exec []string) (*osF
 		outfile.writerTo = out.WriteTo
 		outfile.metadata = ""
 		outfile.read = out.Read
+	case len(e) > 0:
+		cmd := exec.Command(e[0], e[1:]...)
+		cmd.Stdin = sql_file
+		stdout, perr := cmd.StdoutPipe()
+		if perr != nil {
+			sql_file.Close()
+			return nil, perr
+		}
+		if serr := cmd.Start(); serr != nil {
+			sql_file.Close()
+			return nil, serr
+		}
+		outfile.read = stdout.Read
+		outfile.close = func() error {
+			stdout.Close()
+			werr := cmd.Wait()
+			sql_file.Close()
+			return werr
+		}
+		outfile.metadata = sql_fn
 	default:
 		outfile.close = sql_file.Close
 		outfile.write = sql_file.Write
 		outfile.writerTo = sql_file.WriteTo
 		outfile.metadata = sql_file.Name()
 		outfile.read = sql_file.Read
-		// outfile.sync = sql_file.Sync()
 	}
 
 	return outfile, nil
 }
 
-// get_command_and_basename sets command and basename for decompression (exec-per-thread, zstd, or gzip) if the filename has a known extension; returns true if set.
+// get_command_and_basename detects compression by file extension and sets a sentinel marker (internal) or external command for decompression; returns true if a known extension was found.
 func get_command_and_basename(filename string, command *[]string, basename *string) bool {
 	var length int
 	if has_exec_per_thread_extension(filename) {
-		*command = exec_per_thread_cmd
+		if UseInternalCompress {
+			if strings.EqualFold(ExecPerThreadExtension, GZIP_EXTENSION) {
+				*command = gzip_decompress_marker
+			} else if strings.EqualFold(ExecPerThreadExtension, ZSTD_EXTENSION) {
+				*command = zstd_decompress_marker
+			} else {
+				*command = exec_per_thread_cmd
+			}
+		} else {
+			*command = exec_per_thread_cmd
+		}
 		length = len(ExecPerThreadExtension)
 	} else if strings.HasSuffix(filename, ZSTD_EXTENSION) {
-		*command = zstd_decompress_cmd
+		if UseInternalCompress {
+			*command = zstd_decompress_marker
+		} else {
+			*command = zstd_decompress_cmd
+		}
 		length = len(ZSTD_EXTENSION)
 	} else if strings.HasSuffix(filename, GZIP_EXTENSION) {
-		*command = gzip_decompress_cmd
+		if UseInternalCompress {
+			*command = gzip_decompress_marker
+		} else {
+			*command = gzip_decompress_cmd
+		}
 		length = len(GZIP_EXTENSION)
 	}
 	if length != 0 {

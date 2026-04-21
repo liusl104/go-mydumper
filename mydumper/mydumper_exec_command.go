@@ -1,17 +1,23 @@
 package mydumper
 
 import (
-	. "github.com/liusl104/go-mydumper/src"
-	log "github.com/liusl104/go-mydumper/src/logrus"
+	"io"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
+
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
+	. "github.com/liusl104/go-mydumper/src"
+	log "github.com/liusl104/go-mydumper/src/logrus"
 )
 
 var (
 	Num_exec_threads    uint = 4
 	exec_command_thread []*GThread
 	pid_file_table      map[*command]string
+	exec_queue          *GAsyncQueue
 )
 
 type command struct {
@@ -19,7 +25,53 @@ type command struct {
 	cmd *exec.Cmd
 }
 
-// exec_this_command starts the given command with args (with FILENAME replaced) or waits for an existing command for that filename to finish.
+func compress_file_gzip(filename string) {
+	src, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("Failed to open %s for gzip compression: %v", filename, err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(filename + GZIP_EXTENSION)
+	if err != nil {
+		log.Fatalf("Failed to create %s: %v", filename+GZIP_EXTENSION, err)
+	}
+	defer dst.Close()
+
+	w := gzip.NewWriter(dst)
+	if _, err = io.Copy(w, src); err != nil {
+		log.Fatalf("Failed to gzip compress %s: %v", filename, err)
+	}
+	if err = w.Close(); err != nil {
+		log.Fatalf("Failed to finalize gzip for %s: %v", filename, err)
+	}
+}
+
+func compress_file_zstd(filename string) {
+	src, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("Failed to open %s for zstd compression: %v", filename, err)
+	}
+	defer src.Close()
+
+	dst, err := os.Create(filename + ZSTD_EXTENSION)
+	if err != nil {
+		log.Fatalf("Failed to create %s: %v", filename+ZSTD_EXTENSION, err)
+	}
+	defer dst.Close()
+
+	w, err := zstd.NewWriter(dst)
+	if err != nil {
+		log.Fatalf("Failed to create zstd writer for %s: %v", filename, err)
+	}
+	if _, err = io.Copy(w, src); err != nil {
+		log.Fatalf("Failed to zstd compress %s: %v", filename, err)
+	}
+	if err = w.Close(); err != nil {
+		log.Fatalf("Failed to finalize zstd for %s: %v", filename, err)
+	}
+}
+
 func exec_this_command(bin string, c_arg []string, filename string) {
 	var found bool
 	var this *command
@@ -46,47 +98,60 @@ func exec_this_command(bin string, c_arg []string, filename string) {
 		}
 		delete(pid_file_table, this)
 	}
-
 }
 
-// process_exec_command pops filenames from Stream_queue, replaces FILENAME in exec_command args, and runs exec_this_command; exits on empty filename.
 func process_exec_command(a any) {
 	_ = a
-	var arguments = strings.Split(exec_command, " ")
-	var bin = arguments[0]
+	cmdLower := strings.ToLower(strings.TrimSpace(Exec_command))
+	isBuiltinGzip := UseInternalCompress && strings.HasPrefix(cmdLower, GZIP)
+	isBuiltinZstd := UseInternalCompress && strings.HasPrefix(cmdLower, ZSTD)
+
+	var bin string
 	var c_arg []string
-	c_arg = arguments[1:]
-	c := slices.Index(c_arg, "FILENAME")
+	var filenameIdx int
+
+	if !isBuiltinGzip && !isBuiltinZstd {
+		arguments := strings.Split(Exec_command, " ")
+		bin = arguments[0]
+		c_arg = arguments[1:]
+		filenameIdx = slices.Index(c_arg, "FILENAME")
+	}
+
 	for {
-		task := G_async_queue_pop(Stream_queue)
+		task := G_async_queue_pop(exec_queue)
 		filename := task.(string)
-		log.Debugf("get exec command : %s %s %s", bin, strings.Join(c_arg, " "), filename)
 		if len(filename) == 0 {
 			break
 		}
-		c_arg[c] = filename
-		exec_this_command(bin, c_arg, filename)
+		log.Debugf("exec command on file: %s", filename)
+		if isBuiltinGzip {
+			compress_file_gzip(filename)
+		} else if isBuiltinZstd {
+			compress_file_zstd(filename)
+		} else {
+			if filenameIdx >= 0 {
+				c_arg[filenameIdx] = filename
+			}
+			exec_this_command(bin, c_arg, filename)
+		}
 	}
-
 }
 
-// initialize_exec_command creates Stream_queue and Num_exec_threads worker threads running process_exec_command.
 func initialize_exec_command() {
 	log.Warnf("initialize_exec_command: Started")
-	Stream_queue = G_async_queue_new("exec_command.Stream_queue")
+	exec_queue = G_async_queue_new("exec_queue")
 	exec_command_thread = make([]*GThread, Num_exec_threads)
 	var i uint
 	pid_file_table = make(map[*command]string)
 	for i = 0; i < Num_exec_threads; i++ {
-		exec_command_thread[i] = M_thread_new("exec_command", process_exec_command, Stream_queue, "Exec command thread could not be created")
+		exec_command_thread[i] = M_thread_new("exec_command", process_exec_command, exec_queue, "Exec command thread could not be created")
 	}
 }
 
-// wait_exec_command_to_finish pushes empty filenames to Stream_queue to signal shutdown, then joins all exec threads.
 func wait_exec_command_to_finish() {
 	var i uint
 	for i = 0; i < Num_exec_threads; i++ {
-		G_async_queue_push(Stream_queue, "")
+		G_async_queue_push(exec_queue, "")
 	}
 	for i = 0; i < Num_exec_threads; i++ {
 		exec_command_thread[i].Thread.Wait()

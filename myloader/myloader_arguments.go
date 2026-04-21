@@ -53,6 +53,7 @@ var (
 	MaxThreadsForSchemaCreation uint = 4
 	ExecPerThread               string
 	ExecPerThreadExtension      string
+	UseInternalCompress         bool = true
 	SourceDb                    string
 	SkipTriggers                bool
 	SkipPost                    bool
@@ -97,10 +98,10 @@ func arguments_callback() bool {
 	if QuoteCharacter != "" {
 		if strings.EqualFold(QuoteCharacter, "BACKTICK") || strings.EqualFold(QuoteCharacter, "BT") || strings.EqualFold(QuoteCharacter, "`") {
 			Identifier_quote_character = BACKTICK
-		} else if strings.EqualFold(QuoteCharacter, "DOUBLE_QUOTE") || strings.EqualFold(QuoteCharacter, "DT") || strings.EqualFold(QuoteCharacter, "\"") {
+		} else if strings.EqualFold(QuoteCharacter, "DOUBLE_QUOTE") || strings.EqualFold(QuoteCharacter, "DQ") || strings.EqualFold(QuoteCharacter, "\"") {
 			Identifier_quote_character = DOUBLE_QUOTE
 		} else {
-			log.Criticalf("--quote-character accepts: backtick, bt, `, double_quote, dt, \"")
+			log.Criticalf("--quote-character accepts: backtick, bt, `, double_quote, dq, \"")
 		}
 	}
 	if CheckSum != "" {
@@ -183,7 +184,7 @@ func threads_entries() {
 	pflag.UintVar(&MaxThreadsForSchemaCreation, "max-threads-for-schema-creation", 4, "Maximum number of threads for schema creation. When this is set to 1, is the same than --serialized-table-creation, default 4")
 	pflag.StringVar(&ExecPerThread, "exec-per-thread", "", "Set the command that will receive by STDIN from the input file and write in the STDOUT")
 	pflag.StringVar(&ExecPerThreadExtension, "exec-per-thread-extension", "", "Set the input file extension when --exec-per-thread is used. Otherwise it will be ignored")
-
+	pflag.BoolVar(&UseInternalCompress, "use-internal-compress", true, "Use internal Go libraries for gzip/zstd decompression instead of external commands")
 }
 
 // execution_entries registers enable-binlog, optimize-keys, no-schema, stream, drop-table, checksum, etc.
@@ -229,7 +230,7 @@ func statement_entries() {
 	pflag.Uint64Var(&MaxTransactionSize, "max-transaction-size", DEFAULT_MAX_TRANSACTION_SIZE, "Set the max size of the transaction in megabytes, default 1000")
 	pflag.BoolVar(&AppendIfNotExist, "append-if-not-exist", false, "Appends IF NOT EXISTS to the create table statements. This will be removed when https://bugs.mysql.com/bug.php?id=103791 has been implemented")
 	pflag.StringVar(&Set_names_in_conn_by_default, "set-names", "", "Sets the names, use it at your own risk, default binary")
-	pflag.BoolVar(&SkipDefiner, "skip-define", false, "Removes DEFINER from the CREATE statement. By default, statements are not modified")
+	pflag.BoolVar(&SkipDefiner, "skip-definer", false, "Removes DEFINER from the CREATE statement. By default, statements are not modified")
 	pflag.StringVar(&IgnoreSet, "ignore-set", "", "List of variables that will be ignored from the header of SET")
 }
 

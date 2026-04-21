@@ -74,8 +74,8 @@ func read_stream_line(buffer []byte, c_to_read int) int {
 	return n
 }
 
-// flush_stream writes buffer[from:to+1] to file and adds the length to total_size.
-func flush_stream(buffer []byte, from int, to int, file *os.File, total_size *uint) {
+// flush writes buffer[from:to+1] to file and adds the length to total_size.
+func flush(buffer []byte, from int, to int, file *os.File, total_size *uint) {
 	if file != nil {
 		data := buffer[from : to+1]
 		written, err := file.Write(data)
@@ -134,7 +134,7 @@ func process_stream(c any) {
 		if buffer_len == diff {
 			// This means that there is nothing else to read from stdin
 			// so, we need to flush and EXIT.
-			flush_stream(buffer, 0, int(buffer_len-1), file, &total_size)
+			flush(buffer, 0, int(buffer_len-1), file, &total_size)
 			break
 		}
 
@@ -180,15 +180,15 @@ func process_stream(c any) {
 									table_name = ""
 									kind = ""
 
-									flush_stream([]byte(set_buffer.Str.String()), 0, set_buffer.Len-1, file, &total_size)
-									flush_stream(buffer, int(initial_pos), int(line_end-1), file, &total_size)
+									flush([]byte(set_buffer.Str.String()), 0, set_buffer.Len-1, file, &total_size)
+									flush(buffer, int(initial_pos), int(line_end-1), file, &total_size)
 								}
 							}
 						} else {
 							// File content was being written, we might need to flush from initial_pos to line_from
 							if initial_pos < line_from {
 								// flushing from initial_pos to line_from - 1
-								flush_stream(buffer, int(initial_pos), int(line_from-1), file, &total_size)
+								flush(buffer, int(initial_pos), int(line_from-1), file, &total_size)
 							}
 							m_close_stream(file)
 							file = nil
@@ -259,10 +259,10 @@ func process_stream(c any) {
 					}
 
 					if buffer[line_end] == '\n' {
-						flush_stream(buffer, int(initial_pos), int(line_end), file, &total_size)
+						flush(buffer, int(initial_pos), int(line_end), file, &total_size)
 						pos++
 					} else {
-						flush_stream(buffer, int(initial_pos), int(line_end-1), file, &total_size)
+						flush(buffer, int(initial_pos), int(line_end-1), file, &total_size)
 					}
 					continue
 				} else {
@@ -325,7 +325,7 @@ func process_stream(c any) {
 							// Another file was being written, we might need to flush from initial_pos to line_from
 							if initial_pos < line_from {
 								// flushing from initial_pos to line_from - 1
-								flush_stream(buffer, int(initial_pos), int(line_from-1), file, &total_size)
+								flush(buffer, int(initial_pos), int(line_from-1), file, &total_size)
 							}
 							if !No_stream {
 								// Content of the file are coming from stdin, it is not sharing the backup dir
@@ -333,7 +333,7 @@ func process_stream(c any) {
 									// The file size reported in the header is not the same that the amount of data written
 									// this means that the content of the file has the header tag
 									// we need to flush and continue
-									flush_stream(buffer, int(line_from), int(line_end-1), file, &total_size)
+									flush(buffer, int(line_from), int(line_end-1), file, &total_size)
 									log.Infof("Different file size in %s. Should be: %d | Written: %d. But continuing", filename, file_size_from_stream, total_size)
 									continue
 								} else if total_size > file_size_from_stream {
@@ -402,7 +402,7 @@ func process_stream(c any) {
 						continue
 					}
 					// this was a common line, flushing to disk
-					flush_stream(buffer, int(initial_pos), int(line_end-1), file, &total_size)
+					flush(buffer, int(initial_pos), int(line_end-1), file, &total_size)
 					continue
 				} else {
 					// It reached end of buffer
@@ -419,7 +419,7 @@ func process_stream(c any) {
 							// diff remains set to do not overwrite the buffer
 						} else {
 							// it is safe to flush it all the content of the buffer
-							flush_stream(buffer, int(initial_pos), int(line_end-1), file, &total_size)
+							flush(buffer, int(initial_pos), int(line_end-1), file, &total_size)
 							diff = 0
 							// the buffer will start empty
 						}
@@ -434,7 +434,7 @@ func process_stream(c any) {
 							diff = buffer_len - initial_pos
 							copy(buffer, buffer[initial_pos:initial_pos+diff+1])
 						} else {
-							flush_stream(buffer, int(initial_pos), int(line_end-1), file, &total_size)
+							flush(buffer, int(initial_pos), int(line_end-1), file, &total_size)
 							diff = 0
 						}
 					}
